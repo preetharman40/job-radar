@@ -182,17 +182,73 @@ NORTH_AMERICA = re.compile(
 US_ONLY = re.compile(
     r"united\s+states|\busa?\b|u\.s\.|us[\s-]+(only|based|remote)", re.I)
 MULTI_HINT = re.compile(r"\b\d+\s+locations?\b|\bmultiple locations\b", re.I)
+
+# Province detection, so results can be filtered to where you actually live.
+# Word boundaries, for the same reason everything else here uses them.
+PROVINCES = {
+    "AB": ["alberta", "calgary", "edmonton", "red deer", "lethbridge",
+           "fort mcmurray", "grande prairie", "medicine hat", "airdrie",
+           "sherwood park", "st. albert", "banff", "canmore", "leduc",
+           "spruce grove"],
+    "ON": ["ontario", "toronto", "ottawa", "mississauga", "brampton", "markham",
+           "vaughan", "scarborough", "north york", "etobicoke", "oakville",
+           "kitchener", "waterloo", "guelph", "hamilton", "london", "windsor",
+           "kingston", "barrie", "oshawa", "burlington", "cambridge", "milton"],
+    "BC": ["british columbia", "vancouver", "burnaby", "surrey", "richmond",
+           "victoria", "kelowna", "coquitlam", "langley", "abbotsford"],
+    "QC": ["quebec", "qu\u00e9bec", "montreal", "montr\u00e9al", "laval",
+           "gatineau", "sherbrooke", "longueuil", "brossard"],
+    "MB": ["manitoba", "winnipeg"],
+    "SK": ["saskatchewan", "saskatoon", "regina"],
+    "NS": ["nova scotia", "halifax"],
+    "NB": ["new brunswick", "moncton", "fredericton"],
+    "NL": ["newfoundland", "st. john's"],
+    "PE": ["prince edward island", "charlottetown"],
+}
+PROV_RE = {k: _word_re(v) for k, v in PROVINCES.items()}
+PROV_CODE = re.compile(r"[,(/]\s*(AB|ON|BC|QC|MB|SK|NS|NB|NL|PE)\b")
+
+
+def provinces_of(loc):
+    """Every Canadian province a posting names. Empty = remote or unclear."""
+    if not loc:
+        return set()
+    out = {k for k, rx in PROV_RE.items() if rx.search(loc)}
+    out |= set(PROV_CODE.findall(loc.upper()))
+    return out
+
+
+REMOTE_RE = re.compile(r"\bremote\b|work from home|\bwfh\b", re.I)
+HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
+ONSITE_RE = re.compile(r"\bon[\s-]?site\b|\bin[\s-]?office\b", re.I)
+
+
+def arrangement(loc, blob=""):
+    """remote / hybrid / onsite where the posting actually says so."""
+    hay = f"{loc} {blob[:600]}"
+    if HYBRID_RE.search(hay):
+        return "hybrid"
+    if ONSITE_RE.search(hay):
+        return "onsite"
+    if REMOTE_RE.search(loc):
+        return "remote"
+    return ""
 # Country/state markers that disqualify an ambiguous city outright.
 NOT_CANADA = re.compile(
     r"\b(australia|united kingdom|u\.k\.|england|scotland|ireland|"
     r"new zealand|india|singapore|germany|france|netherlands|spain|japan|"
-    r"brazil|mexico|philippines|poland|israel|victoria,\s*australia)\b"
-    # ", CA" is deliberately absent: SuccessFactors writes Canadian locations as
-    # "Toronto, ON, CA". A US city with ", CA" is caught by having no Canadian
-    # city or region marker at all.
-    r"|,\s*(ma|va|wa|or|ny|tx|il|ga|nc|pa|oh|mi|az|co|ut|nj|md|mn|mo|"
-    r"in|tn|wi|sc|al|ky|la|ok|ct|ia|ar|ms|ks|nv|nm|ne|id|nh|me|ri|mt|de|"
-    r"sd|nd|ak|vt|wy|hi|wv)\b", re.I)
+    r"brazil|mexico|philippines|poland|israel|victoria,\s*australia)\b", re.I)
+# US state codes are matched CASE-SENSITIVELY against the original string.
+# Folding them to lowercase made "or" match the English word in
+# "Remote (ON, AB, BC, or NS Only)", which silently dropped 53 Canadian
+# postings - every one of them Alberta-eligible.
+# ", CA" is deliberately absent: SuccessFactors writes Canadian locations as
+# "Toronto, ON, CA". A US city with ", CA" is caught by having no Canadian
+# city or region marker at all.
+US_STATE_CODE = re.compile(
+    r"[,(]\s*(MA|VA|WA|OR|NY|TX|IL|GA|NC|PA|OH|MI|AZ|CO|UT|NJ|MD|MN|MO|"
+    r"IN|TN|WI|SC|AL|KY|LA|OK|CT|IA|AR|MS|KS|NV|NM|NE|ID|NH|ME|RI|MT|DE|"
+    r"SD|ND|AK|VT|WY|HI|WV|FL)\b")
 
 
 def classify_location(loc):
@@ -200,7 +256,9 @@ def classify_location(loc):
     if not loc:
         return "OTHER", False
     l = loc.lower()
-    foreign = bool(NOT_CANADA.search(l))
+    # Country names on the lowercased string; state codes on the original, so
+    # an uppercase "OR" is Oregon but a lowercase "or" is just the word.
+    foreign = bool(NOT_CANADA.search(l)) or bool(US_STATE_CODE.search(loc))
     has_region = bool(CA_REGION_RE.search(l)) or bool(CA_PROVINCE_CODE.search(l))
     if (CA_SAFE_RE.search(l) or has_region) and not foreign:
         return "CA", True
@@ -998,6 +1056,9 @@ def main():
                     help="comma list of devops,adjacent,vendor")
     ap.add_argument("--bucket", default="CA,NA-REMOTE,MULTI",
                     help="comma list of CA,NA-REMOTE,MULTI")
+    ap.add_argument("--province", default="",
+                    help="comma list of province codes e.g. AB,BC. Postings that "
+                         "name no province (remote) are always kept")
     ap.add_argument("--md", help="also write a markdown digest here")
     ap.add_argument("--track", action="store_true",
                     help="append shown postings to the application tracker")
@@ -1011,6 +1072,7 @@ def main():
     levels = {x.strip() for x in a.level.split(",") if x.strip()}
     fams = {x.strip() for x in a.family.split(",") if x.strip()}
     buckets = {x.strip() for x in a.bucket.split(",") if x.strip()}
+    provs = {x.strip().upper() for x in a.province.split(",") if x.strip()}
 
     tg = json.load(open(a.targets))
     VENDORS.update(x.lower() for x in tg.get("devops_vendors", []))
@@ -1057,12 +1119,20 @@ def main():
             continue
         if j["age"] is not None and j["age"] > a.max_age:
             continue
-        j.update(bucket=bucket, tier=tier, family=fam)
+        j.update(bucket=bucket, tier=tier, family=fam,
+                 provinces=sorted(provinces_of(j["location"])),
+                 arrangement=arrangement(j["location"], j.get("blob", "")))
         shortlist.append(j)
 
     # Pass 2: fetch descriptions for the shortlist, then score properly.
     with cf.ThreadPoolExecutor(a.workers) as ex:
         shortlist = list(ex.map(hydrate, shortlist))
+
+    if provs:
+        # Keep the wanted provinces, plus anything naming no province at all -
+        # those are remote or unclear, never "definitely somewhere else".
+        shortlist = [j for j in shortlist
+                     if not j["provinces"] or (set(j["provinces"]) & provs)]
 
     hits = []
     for j in shortlist:
@@ -1134,9 +1204,15 @@ def main():
             else:
                 age = "**TODAY**" if j["age"] == 0 else f"{j['age']}d"
             loc = j["location"] if len(j["location"]) <= 80 else j["location"][:77] + "..."
+            tags = [j["bucket"], j["level"]]
+            if j.get("provinces"):
+                tags.append("/".join(j["provinces"]))
+            if j.get("arrangement"):
+                tags.append(j["arrangement"])
+            tagstr = " · ".join("`%s`" % t for t in tags)
             L += [f"### [{j['score']}] {j['title']}",
                   f"- **{j['company']}** · {loc}",
-                  f"- `{j['bucket']}` · `{j['level']}` · posted {age}",
+                  f"- {tagstr} · posted {age}",
                   f"- {j['url']}",
                   f"- matched: {', '.join(j['kw']) or '—'}"]
             warn = office_mismatch(j)

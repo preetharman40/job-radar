@@ -505,6 +505,48 @@
       "cluster": "wd5",
       "site": "Workday",
       "country_facet": null
+    },
+    {
+      "name": "NAIT",
+      "tenant": "nait",
+      "cluster": "wd10",
+      "site": "NAIT_Careers",
+      "country_facet": null
+    },
+    {
+      "name": "ENMAX",
+      "tenant": "enmax",
+      "cluster": "wd3",
+      "site": "ENMAXCareers",
+      "country_facet": null
+    },
+    {
+      "name": "Ledcor",
+      "tenant": "ledcor",
+      "cluster": "wd3",
+      "site": "Ledcor_External",
+      "country_facet": null
+    },
+    {
+      "name": "Ovintiv",
+      "tenant": "ovintiv",
+      "cluster": "wd3",
+      "site": "ovintivcareers",
+      "country_facet": null
+    },
+    {
+      "name": "TC Energy",
+      "tenant": "tcenergy",
+      "cluster": "wd3",
+      "site": "CAREER_SITE_TC",
+      "country_facet": "Country"
+    },
+    {
+      "name": "Strathcona Resources",
+      "tenant": "strathconaresources",
+      "cluster": "wd10",
+      "site": "Careers",
+      "country_facet": null
     }
   ],
   "phenom": [
@@ -568,6 +610,19 @@
     {
       "name": "Softchoice",
       "base": "https://careers.softchoice.com"
+    },
+    {
+      "name": "Imperial Oil",
+      "base": "https://jobs.exxonmobil.com/Imperial"
+    },
+    {
+      "name": "Pembina Pipeline",
+      "base": "https://careers.pembina.com"
+    },
+    {
+      "name": "Government of Alberta",
+      "base": "https://jobpostings.alberta.ca",
+      "default_location": "Alberta, Canada"
     }
   ],
   "devops_vendors": [

@@ -88,7 +88,10 @@ def try_sf_url(url):
     if BOT.search(final):
         return None
     if jr.SF_ROW.search(html) or jr.SF_TILE.search(html):
-        return {"base": re.sub(r"/search/.*$", "", final).rstrip("/")}
+        # Redirects often land on /go/<saved-search>/<id> or /search/... - the
+        # adapter needs the bare site root, not whatever view we arrived at.
+        base = re.sub(r"/(search|go)/.*$", "", final).rstrip("/")
+        return {"base": base}
     return None
 
 
