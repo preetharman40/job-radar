@@ -28,8 +28,10 @@ import concurrent.futures as cf
 import json
 import os
 import re
+import fcntl
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -304,10 +306,14 @@ def days_ago(iso):
         return None
 
 
-def job(src, company, title, loc, url, posted=None, age=None, blob="", hyd=None):
+def job(src, company, title, loc, url, posted=None, age=None, blob="", hyd=None,
+        updated=None):
+    """`posted` is true publication. `updated` is last-modified where the
+    platform exposes it - an old req edited recently often means the recruiter
+    is actively working it, which a publication date alone does not show."""
     return dict(source=src, company=company, title=title, location=loc or "",
                 url=url, posted=posted or "", age=age, blob=blob, hyd=hyd,
-                offices=[])
+                updated=updated or "", offices=[])
 
 
 def office_mismatch(j):
@@ -338,10 +344,17 @@ def fetch_greenhouse(tok):
     out = []
     for j in d.get("jobs", []):
         loc = (j.get("location") or {}).get("name", "")
+        # `updated_at` is last-modified, not publication. Measured across 13,528
+        # postings it understates true age by a median of 36 days and is correct
+        # only 17% of the time - a recruiter editing an old req makes it look
+        # posted today. `first_published` is the real date; fall back only if a
+        # board omits it.
+        posted = j.get("first_published") or j.get("updated_at", "")
         out.append(job("greenhouse", tok, j.get("title", ""), loc,
-                       j.get("absolute_url", ""), j.get("updated_at", ""),
-                       days_ago(j.get("updated_at")), f"{j.get('title','')} {loc}",
-                       hyd=("greenhouse", tok, j.get("id"))))
+                       j.get("absolute_url", ""), posted,
+                       days_ago(posted), f"{j.get('title','')} {loc}",
+                       hyd=("greenhouse", tok, j.get("id")),
+                       updated=j.get("updated_at", "")))
     return out
 
 
@@ -365,10 +378,14 @@ def fetch_lever(tok):
     return out
 
 
+# The board-level type (JobPostingBriefsWithIdsAndTeamId) exposes NO date field
+# at all - publishedDate lives only on the single-posting type. Asking for it
+# here makes the whole query error and the adapter return an empty list, which
+# silently zeroed every Ashby board. Dates come from the hydrate call instead.
 ASHBY_LIST = ("query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!)"
               " { jobBoard: jobBoardWithTeams("
               "organizationHostedJobsPageName: $organizationHostedJobsPageName)"
-              " { jobPostings { id title locationName publishedDate "
+              " { jobPostings { id title locationName "
               "secondaryLocations { locationName } } } }")
 
 
@@ -383,10 +400,9 @@ def fetch_ashby(tok):
         locs = [j.get("locationName") or ""] + [
             (s or {}).get("locationName", "") for s in (j.get("secondaryLocations") or [])]
         loc = " / ".join(x for x in locs if x)
-        pub = j.get("publishedDate") or ""
         out.append(job("ashby", tok, j.get("title", ""), loc,
                        f"https://jobs.ashbyhq.com/{tok}/{j.get('id')}",
-                       pub, days_ago(pub), f"{j.get('title','')} {loc}",
+                       "", None, f"{j.get('title','')} {loc}",
                        hyd=("ashby", tok, j.get("id"))))
     return out
 
@@ -548,13 +564,20 @@ def fetch_phenom(t):
             locs = j.get("multi_location") or []
             loc = " / ".join(locs) if locs else (
                 j.get("location") or j.get("cityState") or j.get("country") or "")
-            posted = str(j.get("postedDate") or "")[:10]
+            # Same trap as Greenhouse: `postedDate` is a refresh/repost date
+            # and can sit months after `dateCreated`, which is the true origin.
+            # One Bell req showed postedDate 2026-09-03 vs dateCreated
+            # 2026-06-26. Report the origin, carry the refresh separately.
+            created = str(j.get("dateCreated") or "")[:10]
+            reposted = str(j.get("postedDate") or "")[:10]
+            posted = created or reposted
             jid = j.get("jobId") or j.get("reqId") or ""
             out.append(job("phenom", name, j.get("title", ""), loc,
                            f"{base}/job/{jid}/", posted, days_ago(posted),
                            " ".join([j.get("title", ""), loc,
                                      j.get("category", "") or "",
-                                     (j.get("descriptionTeaser") or "")[:1500]])))
+                                     (j.get("descriptionTeaser") or "")[:1500]]),
+                           updated=reposted if reposted != created else ""))
         frm += 10
         if total and frm >= total:
             break
@@ -641,11 +664,20 @@ def fetch_successfactors(t):
                 loc = _sf_text(loc_m.group(1)) if loc_m else ""
                 d = SF_DATE.search(r)
                 raw = _sf_text(d.group(1)) if d else ""
-            posted = _sf_date(raw)
+            # The date SuccessFactors shows is the RMK "Reference Date", NOT a
+            # posting date. SAP's own docs say it is set on import then cycled
+            # every 28 days to keep content fresh for SEO, and that the real
+            # RCM posting date is not exposed on the career site. Verified: on
+            # four of five tenants NOTHING on the whole board is older than
+            # 28-29 days. Treat it as unknown age and carry the reference date
+            # separately rather than reporting a number that means nothing.
+            refdate = _sf_date(raw)
+            posted = ""
             full = href if href.startswith("http") else base + href
             out.append(job("successfactors", name, title, loc, full,
-                           posted, days_ago(posted), f"{title} {loc}",
-                           hyd=("successfactors", full)))
+                           posted, None, f"{title} {loc}",
+                           hyd=("successfactors", full),
+                           updated=refdate))
         if len(rows) < 25:
             break
         start += 25
@@ -662,10 +694,13 @@ ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
 # Pulling full descriptions for ~12,000 jobs would move ~80MB. We pull them only
 # for the few hundred that already passed the title + location filter.
 
+# On JobPostingDetails the description field is descriptionHtml (not
+# descriptionPlainText) and publishedDate IS available - this is where Ashby
+# dates come from.
 ASHBY_ONE = ("query ApiJobPosting($organizationHostedJobsPageName: String!, "
              "$jobPostingId: String!) { jobPosting("
              "organizationHostedJobsPageName: $organizationHostedJobsPageName, "
-             "jobPostingId: $jobPostingId) { descriptionPlainText } }")
+             "jobPostingId: $jobPostingId) { descriptionHtml publishedDate } }")
 
 
 def hydrate(j):
@@ -702,10 +737,58 @@ def hydrate(j):
                                     "jobPostingId": jid},
                       "query": ASHBY_ONE})
             jp = (d.get("data") or {}).get("jobPosting") or {}
-            j["blob"] += " " + (jp.get("descriptionPlainText") or "")[:8000]
+            j["blob"] += " " + strip_html(jp.get("descriptionHtml") or "")[:8000]
+            if jp.get("publishedDate"):
+                j["posted"] = jp["publishedDate"]
+                j["age"] = days_ago(jp["publishedDate"])
     except Exception:
         pass
     return j
+
+
+# --------------------------------------------------------- shared file lock --
+# cron appends to the tracker while the web app edits statuses in it. Both take
+# this lock and write atomically, or one silently clobbers the other.
+
+TRACKER_LOCK = os.path.join(HERE, ".applications.lock")
+
+
+class FileLock:
+    def __init__(self, path=TRACKER_LOCK, timeout=15):
+        self.path, self.timeout, self.fh = path, timeout, None
+
+    def __enter__(self):
+        self.fh = open(self.path, "w")
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.time() > deadline:
+                    self.fh.close()
+                    raise TimeoutError(f"could not lock {self.path}")
+                time.sleep(0.15)
+
+    def __exit__(self, *a):
+        fcntl.flock(self.fh, fcntl.LOCK_UN)
+        self.fh.close()
+
+
+def atomic_write(path, text):
+    """Write via temp file + rename so a reader never sees a half-written file."""
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tracker-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ------------------------------------------------------------------ tracker --
@@ -714,10 +797,10 @@ TRACKER = os.path.abspath(os.path.join(HERE, "..", "applications.md"))
 
 TRACKER_HEADER = """# Application Tracker
 
-Statuses: `todo` -> `applied` -> `outreach-sent` -> `screen` -> `interview` -> `offer` / `rejected` / `closed`
+Statuses: `toapply` -> `applied` -> `interviewing` -> `rejected`  (set them in the web app or here)
 
-| # | Company | Role | Location | Posted | Score | Applied | Status | Next action |
-|---|---------|------|----------|--------|-------|---------|--------|-------------|
+| # | Company | Role | Location | Posted | Updated | Score | Applied | Status | Next action |
+|---|---------|------|----------|--------|---------|-------|---------|--------|-------------|
 
 ---
 """
@@ -791,6 +874,12 @@ def append_to_tracker(jobs, path, min_score):
         body = open(path).read()
 
     seen_urls = set(re.findall(r"https?://[^\s)\]]+", body))
+    try:
+        conn = db()
+        seen_urls |= {r[0] for r in conn.execute("SELECT url FROM dismissed")}
+        conn.close()
+    except Exception:
+        pass
     nums = [int(n) for n in re.findall(r"(?m)^\|\s*(\d+)\s*\|", body)]
     nxt = max(nums) + 1 if nums else 1
 
@@ -811,8 +900,9 @@ def append_to_tracker(jobs, path, min_score):
         pdate = posted_date(j)
         nxt_action = ("Apply, then find the hiring manager on LinkedIn"
                       if j["score"] >= 25 else "Read the JD, then decide")
+        udate = str(j.get("updated") or "")[:10] or "—"
         rows.append(f"| {nxt} | {company} | {title} | {loc_short} | {pdate} | "
-                    f"{j['score']} | | `todo` | {nxt_action} |")
+                    f"{udate} | {j['score']} | | `toapply` | {nxt_action} |")
 
         age = "unknown age" if j["age"] is None else (
             "posted today" if j["age"] == 0 else f"{j['age']}d old when found")
@@ -822,7 +912,8 @@ def append_to_tracker(jobs, path, min_score):
 - **Apply:** {j['url']}
 - **Location:** {loc} - bucket `{j['bucket']}`
 - **Level:** {j['level']} · **Score:** {j['score']} · **ATS:** {j['source']}
-- **Posted:** {pdate} ({age}) · **Found:** {today}
+- **Posted:** {pdate} ({age}) · **Last updated by recruiter:** {udate}
+- **Found:** {today}
 - **Resume keywords matched:** {', '.join(j['kw']) or '-'}
 
 **Why this fits:** {FAMILY_WHY.get(j['family'], '')}
@@ -853,7 +944,7 @@ def append_to_tracker(jobs, path, min_score):
     body = (body[:anchor] + detail.lstrip("\n") + "\n" + body[anchor:]
             if anchor != -1 else body.rstrip() + "\n" + detail)
 
-    open(path, "w").write(body)
+    atomic_write(path, body)
     return len(todo), nxt
 
 
@@ -863,6 +954,16 @@ def db():
     c = sqlite3.connect(DB)
     c.execute("CREATE TABLE IF NOT EXISTS seen("
               "url TEXT PRIMARY KEY, title TEXT, company TEXT, first_seen TEXT)")
+    # Every URL returned by any board this run - not just the ones that matched.
+    # A tracked job whose URL stops appearing here has been taken down, which is
+    # how the web app knows to stop showing it.
+    c.execute("CREATE TABLE IF NOT EXISTS live("
+              "url TEXT PRIMARY KEY, last_seen TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS sweeps(ts TEXT)")
+    # Jobs the user deleted from the tracker. Without this the next sweep just
+    # re-adds them, because dedupe only looks at URLs currently in the file.
+    c.execute("CREATE TABLE IF NOT EXISTS dismissed("
+              "url TEXT PRIMARY KEY, at TEXT)")
     return c
 
 
@@ -974,6 +1075,15 @@ def main():
     conn = db()
     known = {r[0] for r in conn.execute("SELECT url FROM seen")}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Record liveness for everything scanned, and stamp the sweep. Only a full
+    # sweep (no --targets override) is authoritative about what is still up.
+    if a.targets == TARGETS:
+        conn.executemany("INSERT INTO live(url,last_seen) VALUES(?,?) "
+                         "ON CONFLICT(url) DO UPDATE SET last_seen=excluded.last_seen",
+                         [(j["url"], now) for j in jobs])
+        conn.execute("INSERT INTO sweeps(ts) VALUES(?)", (now,))
+        conn.execute("DELETE FROM sweeps WHERE ts NOT IN "
+                     "(SELECT ts FROM sweeps ORDER BY ts DESC LIMIT 50)")
     fresh = [j for j in hits if j["url"] not in known]
     conn.executemany("INSERT OR IGNORE INTO seen VALUES(?,?,?,?)",
                      [(j["url"], j["title"], j["company"], now) for j in hits])
@@ -1016,8 +1126,13 @@ def main():
             if b != current_band:
                 current_band = b
                 L += [f"**— {b} —**", ""]
-            age = "?" if j["age"] is None else ("**TODAY**" if j["age"] == 0
-                                                else f"{j['age']}d")
+            if j["age"] is None:
+                # SuccessFactors does not expose a real posting date; show the
+                # SEO reference date for what it is instead of inventing an age.
+                age = (f"age unknown (ref {j['updated']})" if j.get("updated")
+                       else "age unknown")
+            else:
+                age = "**TODAY**" if j["age"] == 0 else f"{j['age']}d"
             loc = j["location"] if len(j["location"]) <= 80 else j["location"][:77] + "..."
             L += [f"### [{j['score']}] {j['title']}",
                   f"- **{j['company']}** · {loc}",
@@ -1041,7 +1156,8 @@ def main():
         open(a.md, "w").write(out + "\n")
 
     if a.track:
-        n, _ = append_to_tracker(show, a.track_file, a.track_min_score)
+        with FileLock():
+            n, _ = append_to_tracker(show, a.track_file, a.track_min_score)
         rel = os.path.relpath(a.track_file, os.getcwd())
         if rel.count("..") > 1:
             rel = a.track_file

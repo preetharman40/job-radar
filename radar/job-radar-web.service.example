@@ -1,0 +1,56 @@
+# Job Radar web view — systemd user service
+#
+# Keeps the web app running across logout, reboot and crashes.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp job-radar-web.service.example ~/.config/systemd/user/job-radar-web.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now job-radar-web
+#
+#   # REQUIRED for it to start at boot without you logging in:
+#   loginctl enable-linger "$USER"
+#
+# Without lingering a user service only runs while you are logged in, so the
+# app would be down after an unattended reboot — which defeats the point.
+#
+#   systemctl --user status job-radar-web      # is it up
+#   systemctl --user restart job-radar-web     # after editing serve.py
+#   tail -f ~/devops/jobs/radar/web.log        # output
+#
+# %h expands to your home directory, so this file needs no editing unless the
+# repo lives somewhere other than ~/devops/jobs.
+
+[Unit]
+Description=Job Radar web view (reads applications.md)
+Documentation=file:///%h/devops/jobs/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/devops/jobs/radar
+
+# /usr/bin/python3 rather than a pyenv/asdf shim: systemd does not load your
+# shell profile, so a shim may not resolve at boot. The tool is standard-library
+# only, so the system interpreter is fine. Change this if your distro puts
+# python3 elsewhere.
+ExecStart=/usr/bin/python3 -u %h/devops/jobs/radar/serve.py --port 8737
+
+Restart=always
+RestartSec=3
+# Never stop retrying — a burst limit would leave the app down after a bad patch
+StartLimitBurst=0
+
+StandardOutput=append:%h/devops/jobs/radar/web.log
+StandardError=append:%h/devops/jobs/radar/web.log
+
+# The app binds to your LAN and has no authentication. These limit the blast
+# radius if it is ever reached by something unexpected.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-write
+ReadWritePaths=%h/devops/jobs
+
+[Install]
+WantedBy=default.target

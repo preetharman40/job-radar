@@ -227,6 +227,90 @@ employers**. Most large Canadian employers run custom SPAs with no readable ATS.
 
 ---
 
+## Web view — `serve.py`
+
+Read `applications.md` in a browser instead of a text editor, from any device on
+your home network. Updates itself the moment cron files a new job.
+
+```bash
+cd ~/devops/jobs/radar
+python3 serve.py
+```
+
+It prints both URLs:
+
+```
+  this machine : http://localhost:8737/
+  on your LAN  : http://10.0.0.41:8737/
+```
+
+| Flag | Default | |
+|---|---|---|
+| `--port` | `8737` | |
+| `--host` | `0.0.0.0` | reachable on your LAN. Use `127.0.0.1` for this machine only |
+| `--file` | `../applications.md` | |
+
+**What it does**
+
+- Sortable table — click any column header
+- Filters: all · to apply · 25+ · vendor · devops · done
+- Text search — press `/` to focus, `esc` to clear
+- Click a row to expand: matched keywords, next action, notes, checklist, and a
+  direct link to the posting
+- **Live updates.** The server watches the file's mtime and pushes over
+  Server-Sent Events, so a job filed by cron appears without a refresh and
+  flashes briefly. The dot next to the header shows connection state.
+
+**It writes to `applications.md`** — status changes and deletes edit the file in
+place, under an `flock` shared with the radar so cron appending at the same
+moment cannot clobber your edits. Writes are atomic (temp file + rename).
+
+**Status:** `toapply` → `applied` → `interviewing` → `rejected`. Marking a job
+applied stamps today's date automatically. Deleting takes two clicks and is
+remembered, so the next sweep does not re-add it.
+
+**Expired jobs are hidden.** Every sweep records each URL it sees on any board;
+a tracked job whose URL stops appearing has been taken down. Those drop out of
+all views except the **expired** filter — hidden rather than deleted, so your
+applied history survives.
+
+**No authentication.** It binds to your LAN because that is what you asked for,
+but it contains your application notes and hiring-manager contacts. Do not
+port-forward it or expose it through a tunnel.
+
+### Run it at boot
+
+Installed as a systemd user service, so it survives logout, reboot and crashes:
+
+```bash
+systemctl --user status job-radar-web     # is it up
+systemctl --user restart job-radar-web    # after editing serve.py
+journalctl --user -u job-radar-web -n 30  # or: tail radar/web.log
+```
+
+The unit is in the repo as `radar/job-radar-web.service.example` — it uses `%h`
+for your home directory, so it needs no editing:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp radar/job-radar-web.service.example ~/.config/systemd/user/job-radar-web.service
+systemctl --user daemon-reload
+systemctl --user enable --now job-radar-web
+loginctl enable-linger "$USER"      # required to start at BOOT
+```
+
+Three pieces make it durable:
+
+- `systemctl --user enable` — starts with your session
+- `loginctl enable-linger` — starts at **boot**, without you logging in. Skip
+  this and a user service only runs while you are logged in, which defeats the
+  point after an unattended reboot
+- `Restart=always` — back within 3 seconds if the process dies
+
+The unit is sandboxed (`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`)
+with write access limited to `~/devops/jobs`, since the app binds to your LAN
+and has no authentication.
+
 ## Cadence
 
 | When | Command | Why |
@@ -282,7 +366,7 @@ catches a break — that is the argument for running it weekly.
 ## Honest note on priorities
 
 Discovery is not usually the bottleneck. Most matches sit open for a median of
-**13 days** and are still accepting applications — so being applicant #5 rather
+**15 days** — and long-lived reqs are common — while still accepting applications — so being applicant #5 rather
 than #50 is a real but modest edge.
 
 Ranked by what actually lands a DevOps job in Canada:

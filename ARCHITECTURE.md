@@ -30,9 +30,12 @@ Measured lag, from posting timestamps across ~16,000 requisitions:
 
 So the tool reads the source. Everything else is plumbing.
 
-**The honest caveat, measured:** the median matched posting is **13 days old and
-still open**. Speed is a real edge on maybe four reqs a week, not a general one.
-Anyone building this should know that before optimising latency.
+**The honest caveat, measured:** using true publication dates, the median
+matched posting is **15 days old and still open**, and long-lived requisitions
+are common — one had been open 713 days. Speed is a real edge on a handful of
+reqs a week, not a general one. Anyone building this should know that before
+optimising latency, and should verify that the "posted" field they are reading
+means publication rather than last-modified.
 
 ---
 
@@ -61,9 +64,25 @@ State is a SQLite table of seen URLs, so a run reports only what is new.
 ## Per-platform notes
 
 ### Greenhouse
-`boards-api.greenhouse.io/v1/boards/{token}/jobs`. Clean JSON, `updated_at` is
-ISO-8601. `content=true` returns the full description but inflates the payload —
-fetch descriptions per-job in the hydrate pass instead.
+`boards-api.greenhouse.io/v1/boards/{token}/jobs`. Clean JSON. `content=true`
+returns the full description but inflates the payload — fetch descriptions
+per-job in the hydrate pass instead.
+
+**Use `first_published`, not `updated_at`.** This one cost real credibility.
+`updated_at` is last-modified: a recruiter editing a six-month-old requisition
+makes it look posted today. Measured across 13,528 postings:
+
+| | |
+|---|---|
+| Median true age (`first_published`) | **49 days** |
+| Median age implied by `updated_at` | **6 days** |
+| Median understatement | **36 days** |
+| Correct (0 days off) | only **17%** of postings |
+| Off by 90+ days | **28%** of postings |
+
+The worst case reported a job as one day old when it was first published 2,709
+days earlier. A tool whose entire premise is freshness was reading the wrong
+field — worth checking what a timestamp actually means before building on it.
 
 `boards.greenhouse.io` now 301s to `job-boards.greenhouse.io`. Anything matching
 on the old domain silently misses.
@@ -76,7 +95,17 @@ full description in the list call, so no hydrate pass needed.
 
 ### Ashby
 GraphQL at `jobs.ashbyhq.com/api/non-user-graphql`. Where most recent scale-ups
-are. Descriptions need a second query per posting.
+are.
+
+**The board-level type exposes no date field at all.** Asking for
+`publishedDate` there fails validation, and because the endpoint answers HTTP
+200 with `{"errors": [...], "data": null}`, the adapter read an empty board and
+returned zero jobs — **silently, across every Ashby tenant**. A GraphQL API that
+returns 200 on a schema error is a good argument for asserting on payload shape,
+not status code.
+
+Dates and descriptions both come from the single-posting query, where the
+fields are `publishedDate` and `descriptionHtml` (not `descriptionPlainText`).
 
 ### Workday — four traps
 
@@ -129,13 +158,41 @@ the location is only in the URL slug
 `<a class="jobTitle-link" … href=…>`. A regex requiring href first matches
 nothing on half the tenants and fails silently.
 
-**3. Query handling is hostile.** Multi-word `q=` values are OR'd into noise —
+**3. The date it shows is not a posting date.** The only sortable date field is
+`referencedate`, and SAP's own documentation is explicit: the Reference Date
+*"is not the date when the job was posted in RCM"* — it is set when the job is
+first imported into RMK and then **cycled every 28 days automatically** to keep
+content fresh for SEO. The real posting date (the RCM Start Date) is *"not
+viewable on the RMK career site"* at all.
+
+Verified empirically by sorting each board ascending — the oldest date on the
+entire board:
+
+| Tenant | Oldest date anywhere on the board |
+|---|---|
+| Scotiabank | 28 days ago |
+| Rogers | 29 days ago |
+| Telus | 28 days ago |
+| Canada Life | 28 days ago |
+
+Across boards of several hundred requisitions, **nothing is older than the
+cycle length**. Any age computed from this field is meaningless. The adapter
+reports SuccessFactors postings as *age unknown* and carries the reference date
+labelled as what it is, rather than inventing a freshness number.
+
+**4. Query handling is hostile.** Multi-word `q=` values are OR'd into noise —
 `q=site reliability` returns anything matching *"site"*. Use single tokens. And
 adding `sortColumn` makes the endpoint **ignore `q=` entirely** and return
 everything by date, which looks like a working search returning irrelevant
 results.
 
-### Phenom — often just a skin
+### Phenom — often just a skin, and `postedDate` lies
+
+Same trap as Greenhouse: `postedDate` is a repost/refresh stamp and `dateCreated`
+is the origin. One requisition showed `postedDate` 2026-09-03 against
+`dateCreated` 2026-06-26 — 69 days understated. Report the origin; carry the
+repost date separately, since a recently refreshed old req is a signal the
+recruiter is actively working it.
 
 Ships its jobs inline in a `phApp.ddo` script block; paginate with
 `?from=N&s=1`. But check a job's `applyUrl` first: for two major banks it
