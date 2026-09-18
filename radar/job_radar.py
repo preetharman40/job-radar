@@ -619,9 +619,16 @@ def fetch_phenom(t):
         if total is None:
             total = els.get("totalHits") or 0
         for j in posts:
-            locs = j.get("multi_location") or []
-            loc = " / ".join(locs) if locs else (
-                j.get("location") or j.get("cityState") or j.get("country") or "")
+            # Prefer the clean city/state fields. Some tenants (City of
+            # Edmonton) put a street address in `location` and `multi_location`,
+            # which no location classifier can read as a city.
+            loc = (j.get("cityStateCountry") or j.get("cityState") or "").strip()
+            if not loc:
+                locs = [x for x in (j.get("multi_location") or []) if x]
+                loc = " / ".join(locs) if locs else (
+                    j.get("location") or j.get("country") or "")
+            if not loc:
+                loc = t.get("default_location", "")
             # Same trap as Greenhouse: `postedDate` is a refresh/repost date
             # and can sit months after `dateCreated`, which is the true origin.
             # One Bell req showed postedDate 2026-09-03 vs dateCreated
@@ -742,10 +749,156 @@ def fetch_successfactors(t):
     return out
 
 
+# --- Oracle Recruiting Cloud (ORC) -------------------------------------------
+# Used by universities, utilities and energy companies. A proper JSON REST API
+# with real posted dates - far better than the HTML-parsing adapters. The
+# careers URL looks like:
+#   https://<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs
+# and the site number (usually CX_1) is in that page's markup.
+
+ORC_QUERIES = ["devops", "cloud", "infrastructure", "systems", "network",
+               "engineer", "analyst", "linux", "security", "platform"]
+
+
+def fetch_oracle(t):
+    host = t["host"].rstrip("/")
+    site = t.get("site_number", "CX_1")
+    name = t.get("name", host)
+    q = t.get("_query", "")
+    api = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+           f"?onlyData=true&expand=requisitionList"
+           f"&finder=findReqs;siteNumber={site},limit=50,sortBy=POSTING_DATES_DESC")
+    if q:
+        api += f",keyword={urllib.parse.quote(q)}"
+    d = _req(api)
+    items = d.get("items") or []
+    reqs = items[0].get("requisitionList", []) if items else []
+    out = []
+    for r in reqs:
+        loc = r.get("PrimaryLocation") or r.get("PrimaryLocationCountry") or ""
+        posted = str(r.get("PostedDate") or "")[:10]
+        rid = r.get("Id")
+        out.append(job("oracle", name, r.get("Title", ""), loc,
+                       f"https://{host}/hcmUI/CandidateExperience/en/sites/"
+                       f"{t.get('site', 'CX_1')}/job/{rid}",
+                       posted, days_ago(posted),
+                       " ".join(filter(None, [r.get("Title", ""), loc,
+                                              r.get("JobFamily") or "",
+                                              r.get("JobFunction") or "",
+                                              r.get("WorkplaceTypeCode") or ""]))))
+    return out
+
+
+# --- Jobvite -----------------------------------------------------------------
+# Server-rendered HTML, no JSON API, but the markup is stable and simple:
+#   <td class="jv-job-list-name"><a href="/<tenant>/job/<id>">Title</a></td>
+#   <td class="jv-job-list-location">City, Province</td>
+# The list carries no date; each job page has schema.org "datePosted", so dates
+# come from the hydrate pass.
+
+JV_ROW = re.compile(
+    r'class="jv-job-list-name">\s*<a href="([^"]+)">(.*?)</a>'
+    r'.*?class="jv-job-list-location">\s*(.*?)\s*</td>', re.S)
+JV_DATE = re.compile(r'"datePosted"\s*:\s*"(\d{4}-\d{2}-\d{2})')
+
+JV_QUERIES = ["devops", "cloud", "infrastructure", "systems", "engineer",
+              "linux", "network", "analyst", "security", "support"]
+
+
+def fetch_jobvite(t):
+    base = t["base"].rstrip("/")
+    name = t.get("name", base)
+    q = t.get("_query", "")
+    url = f"{base}/search" + (f"?q={urllib.parse.quote(q)}" if q else "")
+    try:
+        h = _get_text(url)
+    except Exception:
+        return []
+    out = []
+    for href, title, loc in JV_ROW.findall(h):
+        title = re.sub(r"\s+", " ", strip_html(title)).strip()
+        # Jobvite wraps locations across lines: "Round Rock,\n   Texas"
+        loc = re.sub(r"\s+", " ", strip_html(loc)).strip()
+        if not title:
+            continue
+        full = href if href.startswith("http") else \
+            "https://jobs.jobvite.com" + href
+        out.append(job("jobvite", name, title, loc or t.get("default_location", ""),
+                       full, "", None, f"{title} {loc}",
+                       hyd=("jobvite", full)))
+    return out
+
+
+# --- Generic HTML scrape -----------------------------------------------------
+# Last resort for careers sites that render their job list server-side but run
+# no recognisable ATS. Rather than a bespoke parser per employer, this pulls
+# every anchor that looks like a job posting and takes surrounding table cells
+# as location/date. Configured entirely in targets.json:
+#
+#   {"name": "City of Calgary",
+#    "url": "https://www.calgary.ca/careers.html",
+#    "link_re": "recruiting\\.calgary\\.ca",      # hrefs that are real postings
+#    "default_location": "Calgary, AB"}
+#
+# Fragile by nature - a redesign breaks it. discover.py --verify catches that.
+
+GEN_ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.I)
+GEN_CELL = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.S | re.I)
+GEN_LINK = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.S | re.I)
+GEN_DATE = re.compile(r"(\d{4})[/-](\d{2})[/-](\d{2})")
+
+
+def fetch_html(t):
+    url = t["url"]
+    name = t.get("name", url)
+    keep = re.compile(t["link_re"], re.I) if t.get("link_re") else None
+    default_loc = t.get("default_location", "")
+    try:
+        h = _get_text(url)
+    except Exception:
+        return []
+
+    out, seen = [], set()
+    for row in GEN_ROW.findall(h):
+        link = GEN_LINK.search(row)
+        if not link:
+            continue
+        href, anchor = html_unescape(link.group(1)), strip_html(link.group(2)).strip()
+        if keep and not keep.search(href):
+            continue
+        if not anchor or len(anchor) < 4 or len(anchor) > 140:
+            continue
+        full = href if href.startswith("http") else urllib.parse.urljoin(url, href)
+        if full in seen:
+            continue
+        seen.add(full)
+        cells = [strip_html(c).strip() for c in GEN_CELL.findall(row)]
+        # A closing date is not a posting date - only take a date if the cell
+        # says so, otherwise leave age unknown rather than inventing one.
+        posted = ""
+        for c in cells:
+            if re.search(r"post(ed|ing date)", c, re.I):
+                m = GEN_DATE.search(c)
+                if m:
+                    posted = "-".join(m.groups())
+        loc = default_loc
+        for c in cells:
+            if re.search(r"\b(AB|ON|BC|QC)\b|alberta|ontario|calgary|edmonton", c, re.I) \
+                    and len(c) < 60 and "date" not in c.lower():
+                loc = c
+                break
+        out.append(job("html", name, anchor, loc, full, posted,
+                       days_ago(posted) if posted else None,
+                       f"{anchor} {loc} {' '.join(cells)[:400]}"))
+    return out
+
+
 ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "ashby": fetch_ashby, "recruitee": fetch_recruitee,
             "rippling": fetch_rippling, "workday": fetch_workday,
-            "phenom": fetch_phenom, "successfactors": fetch_successfactors}
+            "phenom": fetch_phenom, "successfactors": fetch_successfactors,
+            "oracle": fetch_oracle, "jobvite": fetch_jobvite,
+            "html": fetch_html}
 
 
 # ---------------------------------------- pass 2: hydrate only the finalists --
@@ -780,6 +933,14 @@ def hydrate(j):
                 exact = days_ago(ji["startDate"])
                 if exact is not None:
                     j["age"] = exact
+        elif kind[0] == "jobvite":
+            h = _get_text(kind[1])
+            m = JV_DATE.search(h)
+            if m:
+                j["posted"] = m.group(1)
+                j["age"] = days_ago(m.group(1))
+            body = re.search(r'class="jv-job-detail-description".*?</div>', h, re.S)
+            j["blob"] += " " + strip_html(body.group(0) if body else h)[:8000]
         elif kind[0] == "successfactors":
             h = _get_text(kind[1])
             m = re.search(r'<div[^>]*class="[^"]*jobdescription[^"]*"[^>]*>(.*?)'
@@ -1006,10 +1167,74 @@ def append_to_tracker(jobs, path, min_score):
     return len(todo), nxt
 
 
+# ------------------------------------------------------------------- notify --
+# Push new matches to a phone via ntfy.sh. The topic is effectively a password:
+# anyone who knows it can read your job alerts, so it is generated random and
+# kept in a gitignored file.
+
+NTFY_FILE = os.path.join(HERE, ".ntfy_topic")
+
+
+def ntfy_topic():
+    t = os.environ.get("RADAR_NTFY_TOPIC")
+    if t:
+        return t.strip()
+    if os.path.exists(NTFY_FILE):
+        return open(NTFY_FILE).read().strip()
+    return ""
+
+
+def notify(jobs, topic, limit=6):
+    """One push per strong match, then a single roll-up for the rest."""
+    if not topic or not jobs:
+        return 0
+    jobs = sorted(jobs, key=lambda j: -j["score"])
+    sent = 0
+    for j in jobs[:limit]:
+        prio = "urgent" if j["score"] >= 35 else "high" if j["score"] >= 25 else "default"
+        tag = {"vendor": "handshake", "devops": "rocket"}.get(j["family"], "wrench")
+        age = "" if j["age"] is None else (
+            " · posted today" if j["age"] == 0 else f" · {j['age']}d old")
+        body = (f"{j['company']} · {j['location'][:60]}{age}\n"
+                f"matched: {', '.join(j['kw'][:6]) or '—'}")
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{topic}",
+            data=body.encode("utf-8"),
+            headers={"Title": f"[{j['score']}] {j['title'][:80]}",
+                     "Priority": prio,
+                     "Tags": tag,
+                     "Click": j["url"],
+                     "User-Agent": UA["User-Agent"]},
+            method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=12)
+            sent += 1
+        except Exception:
+            pass
+    rest = jobs[limit:]
+    if rest:
+        body = "\n".join(f"[{j['score']}] {j['title'][:52]} — {j['company']}"
+                          for j in rest[:14])
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                f"https://ntfy.sh/{topic}", data=body.encode("utf-8"),
+                headers={"Title": f"+{len(rest)} more matches",
+                         "Priority": "low", "Tags": "mag",
+                         "User-Agent": UA["User-Agent"]}, method="POST"), timeout=12)
+            sent += 1
+        except Exception:
+            pass
+    return sent
+
+
 # -------------------------------------------------------------------- state --
 
 def db():
-    c = sqlite3.connect(DB)
+    # The fast lane and the full sweep can overlap, and the web app reads this
+    # too. Wait for the writer instead of throwing "database is locked".
+    c = sqlite3.connect(DB, timeout=30)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=30000")
     c.execute("CREATE TABLE IF NOT EXISTS seen("
               "url TEXT PRIMARY KEY, title TEXT, company TEXT, first_seen TEXT)")
     # Every URL returned by any board this run - not just the ones that matched.
@@ -1060,6 +1285,9 @@ def main():
                     help="comma list of province codes e.g. AB,BC. Postings that "
                          "name no province (remote) are always kept")
     ap.add_argument("--md", help="also write a markdown digest here")
+    ap.add_argument("--notify", action="store_true",
+                    help="push new matches to your phone via ntfy")
+    ap.add_argument("--notify-min-score", type=int, default=15)
     ap.add_argument("--track", action="store_true",
                     help="append shown postings to the application tracker")
     ap.add_argument("--track-file", default=TRACKER)
@@ -1085,6 +1313,12 @@ def main():
                     tasks.append((src, {**tok, "_query": q}, fn))
             elif src == "successfactors":
                 for q in SF_QUERIES:
+                    tasks.append((src, {**tok, "_query": q}, fn))
+            elif src == "oracle":
+                for q in ORC_QUERIES:
+                    tasks.append((src, {**tok, "_query": q}, fn))
+            elif src == "jobvite":
+                for q in JV_QUERIES:
                     tasks.append((src, {**tok, "_query": q}, fn))
             else:
                 tasks.append((src, tok, fn))
@@ -1143,7 +1377,6 @@ def main():
         hits.append(j)
 
     conn = db()
-    known = {r[0] for r in conn.execute("SELECT url FROM seen")}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Record liveness for everything scanned, and stamp the sweep. Only a full
     # sweep (no --targets override) is authoritative about what is still up.
@@ -1154,9 +1387,17 @@ def main():
         conn.execute("INSERT INTO sweeps(ts) VALUES(?)", (now,))
         conn.execute("DELETE FROM sweeps WHERE ts NOT IN "
                      "(SELECT ts FROM sweeps ORDER BY ts DESC LIMIT 50)")
-    fresh = [j for j in hits if j["url"] not in known]
-    conn.executemany("INSERT OR IGNORE INTO seen VALUES(?,?,?,?)",
-                     [(j["url"], j["title"], j["company"], now) for j in hits])
+    # Claiming a posting must be atomic. The fast lane and the full sweep can
+    # run in the same minute; when both read `seen` before either wrote, they
+    # each decided the same job was new and both pushed a notification. Insert
+    # first and let the row count decide - only the writer that actually
+    # inserted owns it.
+    fresh = []
+    for j in hits:
+        cur = conn.execute("INSERT OR IGNORE INTO seen VALUES(?,?,?,?)",
+                           (j["url"], j["title"], j["company"], now))
+        if cur.rowcount:
+            fresh.append(j)
     conn.commit()
 
     if a.seed:
@@ -1230,6 +1471,17 @@ def main():
     print(out)
     if a.md:
         open(a.md, "w").write(out + "\n")
+
+    if a.notify:
+        topic = ntfy_topic()
+        if not topic:
+            print("\n>> --notify needs a topic: write one to radar/.ntfy_topic "
+                  "or set RADAR_NTFY_TOPIC")
+        else:
+            worth = [j for j in show if j["score"] >= a.notify_min_score]
+            n = notify(worth, topic)
+            if n:
+                print(f"\n>> pushed {n} notification(s) to ntfy topic {topic[:6]}…")
 
     if a.track:
         with FileLock():

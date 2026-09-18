@@ -311,6 +311,66 @@ The unit is sandboxed (`ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`)
 with write access limited to `~/devops/jobs`, since the app binds to your LAN
 and has no authentication.
 
+## Beyond the ATS poller
+
+Three channels that reach jobs `job_radar.py` structurally cannot see.
+
+### `inbox.py` — job-alert emails
+
+Every site that blocks scraping still emails you. Njoyn behind its bot manager,
+Taleo, Dayforce, Alberta Health Services, the City of Edmonton, LinkedIn — none
+can block their own notification mail. Subscribe with a dedicated address and
+this reads it over IMAP.
+
+**This is the only channel that reaches the employers in `manual_check.md`.**
+
+```bash
+python3 inbox.py --setup     # writes inbox.json (mode 600, gitignored)
+python3 inbox.py             # parse new alert mail
+python3 inbox.py --md inbox.md --track
+```
+
+Config via `inbox.json` or `RADAR_IMAP_HOST` / `RADAR_IMAP_USER` /
+`RADAR_IMAP_PASS`. **Use a dedicated address and an app password**, never your
+real one — the tool only ever reads. It scores with the same weights as the
+radar, drops unsubscribe/social links, and flags anything the ATS poller already
+found so you are not reading it twice.
+
+Worth doing once: set up alerts on all twenty employers in `manual_check.md`,
+plus a LinkedIn alert for `DevOps Edmonton`. That turns the weekly manual pass
+into something automated.
+
+### `hn.py` — Hacker News "Who is hiring?"
+
+Posted monthly by the `whoishiring` account. Written by engineers, usually with
+a direct contact address, and mostly never reaching an ATS — so zero overlap
+with the radar.
+
+```bash
+python3 hn.py                 # this month, Canada-eligible infra roles
+python3 hn.py --months 3
+python3 hn.py --all           # skip the Canada filter
+```
+
+Low volume, high signal. "Remote (US)" postings are filtered out; a bare
+"remote" is kept.
+
+### `signals.py` — before the job exists
+
+A funding round means infrastructure hiring in roughly six weeks. This is the
+only part of the system that is not downstream of a job posting.
+
+```bash
+python3 signals.py --days 30
+python3 signals.py --untracked    # funded companies the radar cannot see yet
+python3 signals.py --canada-only
+```
+
+Reads BetaKit and TechCrunch Venture, keeps companies raising money (not funds
+closing them), and marks which are already on our boards. **"On our boards = no"
+is the interesting column** — a funded company the radar is blind to. Feed it to
+`discover.py --url`, or email the CTO before the requisition exists.
+
 ## Cadence
 
 | When | Command | Why |
@@ -318,6 +378,9 @@ and has no authentication.
 | **Daily, 5 min** | `./daily.sh` | New reqs |
 | **Weekly, 10 min** | Open the links in `manual_check.md` | Employers with no readable ATS |
 | **Weekly, 1 min** | `python3 discover.py --verify --add` | Prune dead boards |
+| **Daily, 1 min** | `python3 inbox.py` | Alert mail from sites we cannot poll |
+| **Monthly** | `python3 hn.py` | The new Who-is-hiring thread |
+| **Weekly, 2 min** | `python3 signals.py --days 14 --untracked` | Funded companies, before they post |
 | **Monthly** | `python3 canada_employers.py --min-ca 1 --out ../canada_employers.md` | Refresh the Canada-authorized list |
 | **Quarterly** | `discover.py --url` on the `manual_check.md` employers | Career sites get replatformed |
 
