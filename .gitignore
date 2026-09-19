@@ -1,4 +1,10 @@
 # ── Personal data — never commit ─────────────────────────────────────────────
+# IMAP credentials for the job-alert inbox. App password lives here.
+radar/inbox.json
+
+# ntfy topic — anyone who knows it can read your job alerts
+radar/.ntfy_topic
+
 # Live application tracker: hiring-manager names, contact details, candid notes
 # on role fit, and which jobs you have and have not applied to.
 applications.md

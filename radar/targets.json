@@ -4,6 +4,9 @@
   "_workday_note": "Workday tenant names are NOT derivable from the company name (Loblaw's tenant is 'myview'). Add one by pasting its careers URL into discover.py --url, which prints the tenant/cluster/site block.",
   "_phenom_note": "Phenom sites ship jobs inline in phApp.ddo. Some are only a skin over Workday - check a job's applyUrl; if it points at myworkdayjobs.com, poll the Workday tenant instead (structured locations + full descriptions). RBC and BMO are both Workday.",
   "_sf_note": "SuccessFactors RMK has two themes: a table layout (<tr class=\"data-row\">) and a tile layout (<li class=\"job-tile\">, location only in the URL slug). Anchor attribute order differs between them. No JSON API, no RSS. Multi-word q= gets OR'd into noise - single tokens only; adding sortColumn makes it ignore q= entirely. Use default_location for tiles whose slug has no province code.",
+  "_oracle_note": "Oracle Recruiting Cloud. Careers URL looks like https://<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs and the site number (usually CX_1) is in that page's markup. Proper JSON REST API with real PostedDate - one of the better platforms to be on.",
+  "_jobvite_note": "Jobvite: server-rendered HTML at {base}/search?q=<token>. No JSON API and no date in the list - each job page carries schema.org datePosted, so dates come from the hydrate pass. Locations wrap across lines and need whitespace normalising.",
+  "_html_note": "Last-resort generic scraper for careers sites that render jobs server-side but run no recognisable ATS. Config-driven: url + link_re + default_location. Fragile by nature - a site redesign breaks it, which is what discover.py --verify is for.",
   "greenhouse": [
     "1800gotjunk",
     "abacus",
@@ -561,6 +564,11 @@
     {
       "name": "OpenText",
       "base": "https://careers.opentext.com/us/en"
+    },
+    {
+      "name": "City of Edmonton",
+      "base": "https://recruitment.edmonton.ca",
+      "default_location": "Edmonton, AB"
     }
   ],
   "successfactors": [
@@ -623,6 +631,28 @@
       "name": "Government of Alberta",
       "base": "https://jobpostings.alberta.ca",
       "default_location": "Alberta, Canada"
+    }
+  ],
+  "oracle": [
+    {
+      "name": "University of Alberta",
+      "host": "iaejup.fa.ocs.oraclecloud.com",
+      "site": "UOA-Careers",
+      "site_number": "CX_1"
+    }
+  ],
+  "jobvite": [
+    {
+      "name": "EPCOR",
+      "base": "https://jobs.jobvite.com/epcor"
+    }
+  ],
+  "html": [
+    {
+      "name": "City of Calgary",
+      "url": "https://www.calgary.ca/careers.html",
+      "link_re": "recruiting\\.calgary\\.ca",
+      "default_location": "Calgary, AB"
     }
   ],
   "devops_vendors": [

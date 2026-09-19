@@ -20,13 +20,11 @@ python3 job_radar.py "$@" \
   --min-score 8 \
   --max-age 30 \
   --md "$TMP" \
+  --notify --notify-min-score 15 \
   --track --track-min-score 25
 
 # Only replace digest.md when this run actually found something, otherwise a
 # quiet 09:30 run erases what the 09:00 run surfaced.
 if ! grep -qE '^### nothing|_0 shown' "$TMP"; then
   cp "$TMP" digest.md
-  # Optional phone push. Uncomment, pick your own topic, install the ntfy app.
-  # curl -s -H "Title: Job Radar" --data-binary @- https://ntfy.sh/CHANGE-ME-9f3k \
-  #      < <(head -c 3500 digest.md) > /dev/null || true
 fi

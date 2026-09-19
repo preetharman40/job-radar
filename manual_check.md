@@ -5,7 +5,7 @@ verified reason — not because nobody tried. Budget ~10 minutes, once a week,
 same cadence as the radar. Links go straight to a filtered search, so this is
 click-and-scan, not a hunt.
 
-Last verified: 2026-09-17
+Last verified: 2026-09-18
 
 ---
 
@@ -59,24 +59,26 @@ reachable by the tool** — checked 2026-09-17.
 
 | Employer | Search link |
 |---|---|
-| Alberta Health Services | https://careers.albertahealthservices.ca/ |
-| City of Edmonton | https://www.edmonton.ca/city_government/jobs |
-| City of Calgary | https://www.calgary.ca/careers.html |
+| Alberta Health Services | https://careers.albertahealthservices.ca/jobs/search/146469417 |
 
 AHS is the single largest employer in Alberta and runs a substantial IT
-organisation. The City of Edmonton hires Linux, cloud and endpoint staff
-directly. Both are worth a weekly look.
+organisation. Verified 2026-09-18 against the real job-search URL — still Taleo,
+still no usable public feed.
 
-### Custom portals (no ATS signature at all)
+### Custom portals and blocked platforms
 
-| Employer | Search link | Note |
+| Employer | Search link | Why it cannot be polled |
 |---|---|---|
-| University of Alberta | https://www.ualberta.ca/careers | |
-| University of Calgary | https://careers.ucalgary.ca/ | returns 403 to scripts |
-| SAIT | https://www.sait.ca/about-sait/work-at-sait | |
-| MacEwan University | https://www.macewan.ca/about-macewan/careers/ | |
-| EPCOR | https://www.epcor.com/ca/en/careers.html | Edmonton utility, large IT team |
-| ATB Financial | https://www.atb.com/company/careers/ | Alberta-only bank, real cloud org |
+| City of Calgary | https://www.calgary.ca/careers.html#jobs | No ATS signature at all |
+| ATB Financial | https://careers.atb.com/careers | Eightfold — API rejects unauthenticated calls |
+| SAIT | https://sait-jobs.multiscreensite.com/#career-openings | multiscreensite, returns 403 |
+| MacEwan University | https://www.macewan.ca/about-macewan/careers/opportunities/ | No ATS signature |
+| University of Calgary | https://careers.ucalgary.ca/ | Returns 403 to scripts |
+
+**ATB is the closest to solvable.** It runs Eightfold, whose API *does* work —
+it simply rejected a guessed `domain` parameter. Open the careers page with
+DevTools on the Network tab, find the XHR that returns the job list, and that URL
+is very likely enough to automate it.
 
 U of C refuses automated requests outright (HTTP 403), so no amount of adapter
 work reaches it. The rest are ordinary pages with no machine-readable feed.
@@ -85,13 +87,32 @@ work reaches it. The rest are ordinary pages with no machine-readable feed.
 
 These Alberta employers are in `targets.json` and the radar polls them:
 
-**Government of Alberta** (SuccessFactors) · **NAIT** (Workday) · **ENMAX** ·
-**Ovintiv** · **TC Energy** · **Strathcona Resources** · **Ledcor** ·
-**Pembina** · **Imperial Oil**
+| Employer | Platform | Postings |
+|---|---|---|
+| **Government of Alberta** | SuccessFactors | — |
+| **City of Edmonton** | Phenom | 49 |
+| **University of Alberta** | Oracle Recruiting Cloud | 73 |
+| **EPCOR** | Jobvite | 17 |
+| **NAIT** | Workday | — |
+| ENMAX · Ovintiv · TC Energy · Strathcona · Ledcor · Pembina · Imperial Oil | Workday / SuccessFactors | — |
 
-Government of Alberta was the useful find — it runs SuccessFactors, so it is
-polled automatically. It had no DevOps-titled openings at the time of writing,
-but it will surface them when it does.
+The last three were added on 2026-09-18 from real job-search URLs, and two of
+them required new adapters:
+
+- **Oracle Recruiting Cloud** — a proper JSON REST API with real posted dates.
+  Careers URLs look like `<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs`.
+  Widely used by Canadian universities and utilities, so this adapter is reusable.
+- **Jobvite** — server-rendered HTML at `{base}/search?q=<token>`; dates come
+  from schema.org `datePosted` on each job page.
+
+City of Edmonton's first hit was an **Application & Infrastructure Analyst I**,
+entry level — the kind of municipal role that never reaches a tech job board.
+
+**The lesson worth repeating:** the landing page told us nothing. The URL of the
+actual job-search results is what made three of these automatable. If an
+employer here matters to you, click through to their real search page and check
+the address bar for `myworkdayjobs`, `oraclecloud`, `jobvite`, `successfactors`
+or `phApp` — any of those means the radar can probably take it.
 
 ### Search terms for the Alberta links
 

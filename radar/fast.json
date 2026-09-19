@@ -1,0 +1,250 @@
+{
+  "_comment": "FAST LANE - the boards that actually produce matches, polled every few minutes so a new req reaches your phone quickly. A subset of targets.json, not a replacement. Regenerate with make_fast.py after a full sweep.",
+  "devops_vendors": [
+    "1password",
+    "airbyte",
+    "akuity",
+    "arcticwolf",
+    "astronomer",
+    "beyondtrust",
+    "bitwarden",
+    "blockstream",
+    "bluecatnetworks",
+    "buildkite",
+    "camunda",
+    "canonical",
+    "catonetworks",
+    "censys",
+    "chainguard",
+    "circleci",
+    "clickhouse",
+    "cloudflare",
+    "cloudzero",
+    "cockroachlabs",
+    "coder",
+    "confluent",
+    "copado",
+    "coreweave",
+    "cybereason",
+    "databricks",
+    "datadog",
+    "delinea",
+    "depot",
+    "docker",
+    "doppler",
+    "dragos",
+    "elastic",
+    "endorlabs",
+    "fastly",
+    "finout",
+    "fivetran",
+    "gitlab",
+    "goteleport",
+    "grafanalabs",
+    "gremlin",
+    "honeycomb",
+    "huntress",
+    "infisical",
+    "influxdata",
+    "jetbrains",
+    "jfrog",
+    "jumpcloud",
+    "keepersecurity",
+    "kong",
+    "lastpass",
+    "launchdarkly",
+    "logz",
+    "magnetforensics",
+    "materialize",
+    "mongodb",
+    "neon",
+    "netlify",
+    "netskope",
+    "newrelic",
+    "octopusdeploy",
+    "okta",
+    "orcasecurity",
+    "pagerduty",
+    "planetscale",
+    "postman",
+    "purestorage",
+    "render",
+    "runzero",
+    "scaleway",
+    "sentry",
+    "snyk",
+    "solace",
+    "sonarsource",
+    "sonatype",
+    "sophos",
+    "starburst",
+    "sumologic",
+    "sysdig",
+    "tailscale",
+    "veracode",
+    "vercel",
+    "wizinc",
+    "yugabyte",
+    "zscaler"
+  ],
+  "greenhouse": [
+    "beyondtrust",
+    "braze",
+    "censys",
+    "elastic",
+    "fivetran",
+    "gitlab",
+    "globalrelay",
+    "greenhouse",
+    "instacart",
+    "jfrog",
+    "kaseya",
+    "okta",
+    "pagerduty",
+    "stackadapt",
+    "tailscale"
+  ],
+  "lever": [
+    "magnetforensics",
+    "pointclickcare",
+    "waabi"
+  ],
+  "ashby": [
+    "1password",
+    "clickhouse",
+    "cohere",
+    "docker",
+    "jobber",
+    "lightspeedhq",
+    "sentry",
+    "wealthsimple"
+  ],
+  "recruitee": [],
+  "rippling": [],
+  "workday": [
+    {
+      "name": "RBC",
+      "tenant": "rbc",
+      "cluster": "wd3",
+      "site": "RBCGLOBAL1",
+      "country_facet": "Country"
+    },
+    {
+      "name": "BMO",
+      "tenant": "bmo",
+      "cluster": "wd3",
+      "site": "External",
+      "country_facet": "Country"
+    },
+    {
+      "name": "TD Bank",
+      "tenant": "td",
+      "cluster": "wd3",
+      "site": "TD_Bank_Careers",
+      "country_facet": "locationCountry"
+    },
+    {
+      "name": "CIBC",
+      "tenant": "cibc",
+      "cluster": "wd3",
+      "site": "search",
+      "country_facet": "Country"
+    },
+    {
+      "name": "Sun Life",
+      "tenant": "sunlife",
+      "cluster": "wd3",
+      "site": "Experienced-Jobs",
+      "country_facet": "Location_Country"
+    },
+    {
+      "name": "Manulife",
+      "tenant": "manulife",
+      "cluster": "wd3",
+      "site": "MFCJH_Jobs",
+      "country_facet": "Location_Country"
+    },
+    {
+      "name": "Telus Health",
+      "tenant": "lifeworks",
+      "cluster": "wd3",
+      "site": "External",
+      "country_facet": "Country"
+    },
+    {
+      "name": "Canadian Tire",
+      "tenant": "canadiantirecorporation",
+      "cluster": "wd3",
+      "site": "Enterprise_External_Careers_Site",
+      "country_facet": "locationCountry"
+    },
+    {
+      "name": "UBC",
+      "tenant": "ubc",
+      "cluster": "wd10",
+      "site": "ubcstaffjobs",
+      "country_facet": null
+    },
+    {
+      "name": "Interac",
+      "tenant": "interac",
+      "cluster": "wd3",
+      "site": "Interac",
+      "country_facet": null
+    },
+    {
+      "name": "Moneris",
+      "tenant": "moneris",
+      "cluster": "wd3",
+      "site": "Moneris",
+      "country_facet": null
+    },
+    {
+      "name": "Workday",
+      "tenant": "workday",
+      "cluster": "wd5",
+      "site": "Workday",
+      "country_facet": null
+    },
+    {
+      "name": "Ledcor",
+      "tenant": "ledcor",
+      "cluster": "wd3",
+      "site": "Ledcor_External",
+      "country_facet": null
+    }
+  ],
+  "phenom": [
+    {
+      "name": "City of Edmonton",
+      "base": "https://recruitment.edmonton.ca",
+      "default_location": "Edmonton, AB"
+    }
+  ],
+  "successfactors": [
+    {
+      "name": "Rogers",
+      "base": "https://jobs.rogers.com"
+    },
+    {
+      "name": "Scotiabank",
+      "base": "https://jobs.scotiabank.com"
+    },
+    {
+      "name": "Canada Life",
+      "base": "https://jobs.canadalife.com"
+    },
+    {
+      "name": "University of Toronto",
+      "base": "https://jobs.utoronto.ca",
+      "default_location": "Toronto, ON"
+    },
+    {
+      "name": "Celestica",
+      "base": "https://careers.celestica.com"
+    }
+  ],
+  "oracle": [],
+  "jobvite": [],
+  "html": []
+}
