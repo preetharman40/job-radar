@@ -98,7 +98,16 @@ def p_rippling(t):
         return 0
 
 
-PROBES = {"greenhouse": p_greenhouse, "lever": p_lever, "ashby": p_ashby,
+def p_workable(t):
+    try:
+        d = json.loads(_fetch(
+            f"https://apply.workable.com/api/v1/widget/accounts/{t}?details=true"))
+        return len(d.get("jobs", []))
+    except Exception:
+        return 0
+
+
+PROBES = {"greenhouse": p_greenhouse, "workable": p_workable, "lever": p_lever, "ashby": p_ashby,
           "recruitee": p_recruitee, "rippling": p_rippling}
 
 

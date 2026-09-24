@@ -338,3 +338,111 @@ rest report last-modified, where an edit to an old requisition is
 indistinguishable from a new one. The clean sample is smaller than the total,
 and one platform's midnight spike is almost certainly batch processing rather
 than recruiters working at 3am.
+
+## SmartRecruiters
+
+Two public APIs; only one is usable.
+
+**`jobs.smartrecruiters.com/sr-jobs/search` (cross-company) - do not build on
+this.** It silently ignores every filter and paging parameter it is handed.
+`location=Canada`, `country=ca`, `countryCode=ca`, `filter=country:ca`,
+`loc=`, `geo=`, `region=`, `locations=` and `offset=1000` all return the
+identical first ~96 rows, and `totalFound` stays pinned at the unfiltered
+count. Sampling 573 rows across ten keywords returned **zero** Canadian
+postings - not because SmartRecruiters has no Canadian inventory, but because
+the window only ever shows the newest ~96 postings worldwide. It is useful for
+exactly one thing: harvesting tenant identifiers (`company.identifier`).
+
+**`api.smartrecruiters.com/v1/companies/{tenant}/postings` (per-company) - this
+is the adapter.** Keyless, pages correctly via `offset`, returns full
+inventory, and is sorted newest-first, so capping at `SR_MAX_PAGES` keeps the
+freshest rather than an arbitrary slice. Records carry a true `releasedDate`,
+a structured `location` with `remote`/`hybrid` booleans and an ISO country
+code, plus `function` and `experienceLevel` labels that feed the level filter.
+Descriptions hydrate from `/postings/{id}` -> `jobAd.sections`.
+
+**Trap: an unknown tenant returns HTTP 200 with `totalFound: 0`,** which is
+byte-identical to a real tenant with no openings. Guessed identifiers are
+frequently wrong in ways that look like an empty board - `Ubisoft` is empty,
+`Ubisoft2` has 300 postings. Never trust a hand-typed token; confirm it has
+produced at least once. `board_health.py` is the safety net.
+
+Tenants were found by harvesting `company.identifier` from the cross-company
+search across 24 keywords (415 distinct tenants), then scanning each
+per-company board for `location.country == "ca"`. 90 of 415 had Canadian
+inventory on page one.
+
+## Taleo (via Radancy TalentBrew career sites)
+
+Most large Canadian employers have left Taleo - of 19 guessed tenants
+(`rbc`, `td`, `cibc`, `bell`, `telus`, `cn`, ...) only `aircanada.taleo.net`
+still resolves, and its public careersection redirects to the SmartOrg admin
+login. The Taleo worth reaching is the kind fronted by a Radancy TalentBrew
+career site on the employer's own domain, e.g.
+`careers.albertahealthservices.ca`. Alberta Health Services is the largest
+employer in Alberta and was previously on the manual-check list.
+
+The job list is client-side, but it is driven by a plain JSON facet API:
+
+    GET /ajax/jobs/<search_id>/add/<facet>/<value>
+      -> {"Status":"OK","UserMessage":"<count>","Result":"<new_search_id>"}
+
+Adding a facet does not return jobs; it mints a **new search id** that you then
+page through. Three traps, each of which silently returns plausible data:
+
+1. **The keyword facet needs the term in both the path and the query string.**
+   `/add/keywords/engineer` returns `Status: OK` and the *unfiltered* board
+   (1,228 rows). `/add/keywords/engineer?keywords=engineer` returns 20. Nothing
+   distinguishes the two responses except the count.
+2. **Pagination is `/jobs/search/<id>/page<n>`** - no slash before the number.
+   `?page=2`, `?offset=10`, `/page/2` and six other forms all silently serve
+   page 1. The pattern is built in `job_list.js`, not exposed in the HTML.
+3. **`POST /ajax/jobs/search/create`** - the endpoint the search box itself
+   uses - answers `Invalid Access` to every scripted call, with or without
+   cookies, Referer and Origin. The facet API above is the way in.
+
+Keyword matching runs over full job text, not titles, so broad terms are
+useless: `support` returns 1,156 of 1,228 rows. Narrow facets are what work -
+`category/177` ("Information Technology") is the precise slice, with
+`analyst`, `cloud`, `infrastructure`, `network` and `security` as backstops for
+IT roles filed under other categories.
+
+**There is no posting date anywhere on this platform** - not on the result card,
+not on the job page, not in a meta tag, and there is no JSON-LD block at all.
+`age` is always `None`; the only freshness signal is a "New" badge, which the
+adapter passes through in `updated` rather than converting into a day count it
+cannot justify. This is the same honesty rule applied to SuccessFactors
+reference dates.
+
+Result cards carry title, location, category and a description snippet, so no
+per-job hydration request is needed.
+
+## Workday: a withdrawn requisition answers 403, not 404
+
+`verify_tracked.py` asks the CXS job endpoint directly rather than trusting the
+sweep, because Workday's keyword index lags its job endpoints. That part was
+right. What was wrong was the status handling: only **404** was treated as
+gone, and 403 was lumped in with 429/500/502 as transient.
+
+Workday does not 404 a pulled requisition. It answers **403 with a JSON body
+carrying `errorCode: "S22"`**, while the HTML job URL keeps returning **200** -
+it is a single-page app whose shell renders "not found" client-side, so a
+surface check of the page cannot tell the difference (6.5KB of shell, no job
+text, empty `<title>`).
+
+The consequence was silent: those jobs sat in state `checking` with `misses=0`
+forever, never accumulating a miss, never hidden. Seven tracked postings were
+stale this way - a Sun Life Cloud Engineer req was still on the board three days
+after being pulled, alongside reqs from RBC (x3), TD, Desjardins and one more.
+They had been reported as "unclear", which read like harmless noise and was
+actually seven dead jobs held open.
+
+**403 alone is not sufficient evidence** - a throttled or bot-blocked tenant
+answers 403 too, which is why it was transient in the first place. The check
+therefore keys on the S22 body specifically. Verified by firing 10 concurrent
+requests at one tenant, the documented 403 trigger: the live requisition
+returned 200 all ten times while the pulled one returned 403/S22 all ten, so the
+code tracks the requisition's state and not the server's load.
+
+`MISSES_BEFORE_GONE = 3` still applies on top, so a job is hidden only after
+three consecutive S22 readings.

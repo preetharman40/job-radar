@@ -6,6 +6,7 @@
   "_sf_note": "SuccessFactors RMK has two themes: a table layout (<tr class=\"data-row\">) and a tile layout (<li class=\"job-tile\">, location only in the URL slug). Anchor attribute order differs between them. No JSON API, no RSS. Multi-word q= gets OR'd into noise - single tokens only; adding sortColumn makes it ignore q= entirely. Use default_location for tiles whose slug has no province code.",
   "_oracle_note": "Oracle Recruiting Cloud. Careers URL looks like https://<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs and the site number (usually CX_1) is in that page's markup. Proper JSON REST API with real PostedDate - one of the better platforms to be on.",
   "_jobvite_note": "Jobvite: server-rendered HTML at {base}/search?q=<token>. No JSON API and no date in the list - each job page carries schema.org datePosted, so dates come from the hydrate pass. Locations wrap across lines and need whitespace normalising.",
+  "_workable_note": "Workable: GET apply.workable.com/api/v1/widget/accounts/{account}?details=true - public, no auth, ships full descriptions and a real published_on date, so no hydrate needed. The account name is the path segment on workable.com/{account}/, usually visible in the embed on the company's own careers page.",
   "_html_note": "Last-resort generic scraper for careers sites that render jobs server-side but run no recognisable ATS. Config-driven: url + link_re + default_location. Fragile by nature - a site redesign breaks it, which is what discover.py --verify is for.",
   "greenhouse": [
     "1800gotjunk",
@@ -46,7 +47,6 @@
     "buildops",
     "calm",
     "canonical",
-    "canto",
     "carta",
     "catonetworks",
     "censys",
@@ -111,7 +111,6 @@
     "huntress",
     "imply",
     "indigo",
-    "instabase",
     "instacart",
     "integra",
     "inter",
@@ -230,7 +229,6 @@
     "kepler",
     "knix",
     "linkedin",
-    "logz",
     "lucidworks",
     "magnetforensics",
     "modeln",
@@ -337,7 +335,6 @@
   "rippling": [
     "anaconda",
     "arbor",
-    "bravo",
     "brightside",
     "clearpath",
     "copado",
@@ -354,6 +351,9 @@
     "rippling",
     "rsa-security",
     "summit"
+  ],
+  "workable": [
+    "mlabs"
   ],
   "workday": [
     {
@@ -469,13 +469,6 @@
       "country_facet": null
     },
     {
-      "name": "UBC Student",
-      "tenant": "ubc",
-      "cluster": "wd10",
-      "site": "ubcstudentjob",
-      "country_facet": null
-    },
-    {
       "name": "Desjardins",
       "tenant": "desjardins",
       "cluster": "wd10",
@@ -550,6 +543,30 @@
       "cluster": "wd10",
       "site": "Careers",
       "country_facet": null
+    },
+    {
+      "name": "AIMCo",
+      "tenant": "aimco",
+      "cluster": "wd10",
+      "site": "AIMCoCareers"
+    },
+    {
+      "name": "Alberta Energy Regulator",
+      "tenant": "aer",
+      "cluster": "wd3",
+      "site": "aer"
+    },
+    {
+      "name": "Alberta Motor Association",
+      "tenant": "albertamotorassociation",
+      "cluster": "wd3",
+      "site": "AMA"
+    },
+    {
+      "name": "WCB Alberta",
+      "tenant": "wcbalberta",
+      "cluster": "wd10",
+      "site": "wcbalbertacareers"
     }
   ],
   "phenom": [
@@ -621,7 +638,8 @@
     },
     {
       "name": "Imperial Oil",
-      "base": "https://jobs.exxonmobil.com/Imperial"
+      "base": "https://jobs.exxonmobil.com",
+      "default_location": "Canada"
     },
     {
       "name": "Pembina Pipeline",
@@ -638,6 +656,12 @@
       "name": "University of Alberta",
       "host": "iaejup.fa.ocs.oraclecloud.com",
       "site": "UOA-Careers",
+      "site_number": "CX_1"
+    },
+    {
+      "name": "City of Red Deer",
+      "host": "fa-eyjj-saasfaprod1.fa.ocs.oraclecloud.com",
+      "site": "CX_1",
       "site_number": "CX_1"
     }
   ],
@@ -741,5 +765,130 @@
     "wizinc",
     "yugabyte",
     "zscaler"
+  ],
+  "smartrecruiters": [
+    "ADVENS",
+    "AECOM2",
+    "AWPSafety",
+    "AccorCorpo",
+    "AccorHotel",
+    "Acumatica",
+    "AllegisGlobalSolutions",
+    "AltenCalsoftLabs1",
+    "AlterSolutions",
+    "AmericanIronandMetal",
+    "AngloAmericanDeBeersGroup",
+    "AntonPaar1",
+    "AristaNetworks",
+    "Artelia",
+    "Ayming",
+    "BEUMERGroup1",
+    "CDPROJEKTRED",
+    "CRB",
+    "CaliforniaClosets",
+    "CheckPointSoftwareTechnologies2",
+    "Collabera2",
+    "Continental",
+    "ContinentalGroupSectorContiTech",
+    "DataIntellect",
+    "Dev2",
+    "Dexterra",
+    "EVERSANA1",
+    "Eataly",
+    "EgisGroup",
+    "EnviriCorporation",
+    "Equinox",
+    "Ergomed",
+    "EtihadAirways5",
+    "Eurofins",
+    "Evolution",
+    "GDMSI",
+    "Gameloft",
+    "GenerixGroup",
+    "GrantekSystemsIntegration",
+    "HMGroup",
+    "HitachiSolutions",
+    "IFS1",
+    "InternationalDairyQueen",
+    "JobMobz1",
+    "JobsForHumanity",
+    "Keenfinity",
+    "Konecranes",
+    "KrgTechnologyInc",
+    "LGCGroup",
+    "LinkedIn3",
+    "LouisDreyfusCompany",
+    "MUFGInvestorServices",
+    "MattelInc",
+    "Medfar",
+    "Miratech1",
+    "NBCUniversal3",
+    "Nagarro1",
+    "NielsenIQ",
+    "O-I",
+    "Oetiker",
+    "PRT",
+    "PSICRO",
+    "PilotCompany",
+    "Pyrotek3",
+    "QIMA",
+    "Quadient1",
+    "RESPECInc",
+    "REXEL1",
+    "RedBull",
+    "RelaisChateaux",
+    "SGS",
+    "SIXT",
+    "Salomon",
+    "Scalian",
+    "ServiceNow",
+    "SharkLogicTechSolutionLimited",
+    "Sia",
+    "SikaAG",
+    "StepStoneGroup",
+    "Sutherland",
+    "Talan",
+    "TeamworkCorporate",
+    "TessenderloGroup",
+    "TheWonderfulCompany",
+    "TurnerTownsend",
+    "Ubisoft2",
+    "UmdaschGroup",
+    "VeoliaEnvironnementSA",
+    "VusionGroupSA",
+    "prosidianconsulting"
+  ],
+  "taleo": [
+    {
+      "name": "Alberta Health Services",
+      "base": "https://careers.albertahealthservices.ca",
+      "search_id": "146469417",
+      "queries": [
+        [
+          "category",
+          "177"
+        ],
+        [
+          "keywords",
+          "analyst"
+        ],
+        [
+          "keywords",
+          "cloud"
+        ],
+        [
+          "keywords",
+          "infrastructure"
+        ],
+        [
+          "keywords",
+          "network"
+        ],
+        [
+          "keywords",
+          "security"
+        ]
+      ]
+    }
   ]
 }

@@ -32,6 +32,7 @@ import fcntl
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -256,6 +257,13 @@ def classify_location(loc):
     if not loc:
         return "OTHER", False
     l = loc.lower()
+    # An explicit "Canada" wins outright, before any foreign veto. Boards list
+    # one requisition under several countries sharing a single URL - an MLabs
+    # SRE role read "Remote - United Kingdom / Remote - Poland / ... / Remote -
+    # Canada" - and an absolute veto threw away a role that is genuinely open
+    # to you.
+    if re.search(r"(?<![a-z])canad(a|ian)(?![a-z])", l):
+        return "CA", True
     # Country names on the lowercased string; state codes on the original, so
     # an uppercase "OR" is Oregon but a lowercase "or" is just the word.
     foreign = bool(NOT_CANADA.search(l)) or bool(US_STATE_CODE.search(loc))
@@ -313,6 +321,24 @@ def score(title, company, tier, family, blob):
 
 
 # --------------------------------------------------------------- transport ---
+
+# Python 3.10's urllib handles 301/302/303/307 but NOT 308 - a permanent
+# redirect just raises HTTPError. Instacart's careers host uses 308, which made
+# a live posting look unreachable. Teach the default opener to follow it.
+class _Redirect308(urllib.request.HTTPRedirectHandler):
+    # Overriding http_error_308 alone is not enough: redirect_request itself
+    # whitelists 301/302/303/307 and raises on anything else.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if code == 308:
+            code = 301
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    def http_error_308(self, req, fp, code, msg, headers):
+        return self.http_error_301(req, fp, code, msg, headers)
+
+
+urllib.request.install_opener(urllib.request.build_opener(_Redirect308))
+
 
 def _req(url, data=None, timeout=25, retries=2):
     """Retry on transport failures - at 400+ concurrent tasks a single blip
@@ -534,44 +560,78 @@ def _wd_country_facet(api):
 # away. Ask the server for the roles we want instead.
 WD_QUERIES = ["devops", "site reliability", "platform engineer", "cloud engineer",
               "infrastructure engineer", "kubernetes", "linux", "support engineer",
-              "automation engineer", "systems engineer"]
+              "automation engineer", "systems engineer",
+              # Endpoint/device-management work is a weight-4 title family and a
+              # weight-4 skill family, but none of the terms above surface it -
+              # Workday matches job text, and an "Endpoint Engineer" req rarely
+              # says "devops" or "kubernetes". Without these three, roles like
+              # TD's Senior MDM Engineer and CIBC's Endpoint Engineer were
+              # invisible on every one of the 31 Workday tenants.
+              "endpoint", "intune", "modern workplace"]
+
+
+# Workday rate-limits per TENANT, not per request. The sweep fans every
+# WD_QUERIES term out concurrently, so a single tenant could see 13 simultaneous
+# requests - and at 31 tenants x 13 terms that is 403 requests a sweep, with the
+# fast lane adding ~180 more at :00 and :30. Measured result: bursts of 60+
+# "HTTP 429 Too Many Requests" in radar.log, on productive boards - Moneris,
+# Interac and Ledcor all contribute matches and all got throttled.
+#
+# A semaphore per tenant caps the burst without serialising it completely;
+# full serialisation would be far too slow, since one RBC query alone can take
+# 13s. Different tenants still run fully in parallel.
+# 6 halves the worst-case burst (13 concurrent -> 6) for about 10s of sweep
+# time; 3 costs 47s for little extra safety. Tuning this empirically is not
+# possible in isolation - Workday only throttles when something else is hitting
+# the same tenant at the same moment, so a quiet test returns 0 at every value.
+WD_TENANT_BURST = 6
+_WD_SEM = {}
+_WD_SEM_LOCK = threading.Lock()
+
+
+def _wd_sem(tenant):
+    with _WD_SEM_LOCK:
+        if tenant not in _WD_SEM:
+            _WD_SEM[tenant] = threading.BoundedSemaphore(WD_TENANT_BURST)
+        return _WD_SEM[tenant]
 
 
 def fetch_workday(t):
-    """Fetch ONE keyword query against one tenant.
+    with _wd_sem(t.get("tenant", "")):
+        """Fetch ONE keyword query against one tenant.
 
-    main() expands each Workday target into one task per query so the shared
-    thread pool parallelises them; doing all ten queries inline made a 9-tenant
-    run take minutes.
-    """
-    tenant, cluster, site = t["tenant"], t["cluster"], t["site"]
-    base = f"https://{tenant}.{cluster}.myworkdayjobs.com"
-    api = f"{base}/wday/cxs/{tenant}/{site}/jobs"
-    facet = t.get("country_facet") or _wd_country_facet(api)
-    applied = {facet: [WD_CANADA]} if facet else {}
-    name = t.get("name", tenant)
-    query = t.get("_query", "")
+        main() expands each Workday target into one task per query so the shared
+        thread pool parallelises them; doing all ten queries inline made a 9-tenant
+        run take minutes.
+        """
+        tenant, cluster, site = t["tenant"], t["cluster"], t["site"]
+        base = f"https://{tenant}.{cluster}.myworkdayjobs.com"
+        api = f"{base}/wday/cxs/{tenant}/{site}/jobs"
+        facet = t.get("country_facet") or _wd_country_facet(api)
+        applied = {facet: [WD_CANADA]} if facet else {}
+        name = t.get("name", tenant)
+        query = t.get("_query", "")
 
-    out, offset = [], 0
-    while offset < 40:            # 2 pages per query
-        d = _req(api, {"appliedFacets": applied, "limit": 20,
-                       "offset": offset, "searchText": query})
-        posts = d.get("jobPostings", [])
-        if not posts:
-            break
-        for j in posts:
-            path = j.get("externalPath", "")
-            loc = j.get("locationsText", "")
-            out.append(job("workday", name, j.get("title", ""), loc,
-                           f"{base}/en-US/{site}{path}",
-                           j.get("postedOn", ""), wd_age(j.get("postedOn")),
-                           f"{j.get('title','')} {loc} {j.get('remoteType','')}",
-                           hyd=("workday", f"{base}/wday/cxs/{tenant}/{site}{path}")))
-        # `total` is reported only on page 1; later pages say 0.
-        if offset == 0 and d.get("total", 0) <= 20:
-            break
-        offset += 20
-    return out
+        out, offset = [], 0
+        while offset < 40:            # 2 pages per query
+            d = _req(api, {"appliedFacets": applied, "limit": 20,
+                           "offset": offset, "searchText": query})
+            posts = d.get("jobPostings", [])
+            if not posts:
+                break
+            for j in posts:
+                path = j.get("externalPath", "")
+                loc = j.get("locationsText", "")
+                out.append(job("workday", name, j.get("title", ""), loc,
+                               f"{base}/en-US/{site}{path}",
+                               j.get("postedOn", ""), wd_age(j.get("postedOn")),
+                               f"{j.get('title','')} {loc} {j.get('remoteType','')}",
+                               hyd=("workday", f"{base}/wday/cxs/{tenant}/{site}{path}")))
+            # `total` is reported only on page 1; later pages say 0.
+            if offset == 0 and d.get("total", 0) <= 20:
+                break
+            offset += 20
+        return out
 
 
 def _braces(h, i):
@@ -893,12 +953,182 @@ def fetch_html(t):
     return out
 
 
+# --- Workable -----------------------------------------------------------------
+# Public widget endpoint, no auth, and it ships full descriptions plus a real
+# `published_on` date in the list call - so no hydrate pass is needed.
+#   GET https://apply.workable.com/api/v1/widget/accounts/{account}?details=true
+# The account name is the path segment on workable.com/{account}/, which is
+# usually visible in the embed on the company's own careers page.
+
+
+def fetch_workable(tok):
+    d = _req(f"https://apply.workable.com/api/v1/widget/accounts/{tok}?details=true")
+    out = []
+    for j in d.get("jobs", []):
+        locs = j.get("locations") or []
+        loc = " / ".join(
+            ", ".join(filter(None, [l.get("city"), l.get("region") or l.get("state"),
+                                    l.get("country")])) for l in locs if l)
+        if not loc:
+            loc = ", ".join(filter(None, [j.get("city"), j.get("state"),
+                                          j.get("country")]))
+        if j.get("telecommuting") and "remote" not in loc.lower():
+            loc = f"Remote{' - ' + loc if loc else ''}"
+        posted = str(j.get("published_on") or j.get("created_at") or "")[:10]
+        out.append(job("workable", tok, j.get("title", ""), loc,
+                       j.get("shortlink") or j.get("url") or j.get("application_url", ""),
+                       posted, days_ago(posted),
+                       " ".join([j.get("title", ""), loc,
+                                 j.get("department") or "", j.get("function") or "",
+                                 strip_html(j.get("description", ""))[:6000]])))
+    return out
+
+
+# SmartRecruiters sorts every listing newest-first, so capping pages keeps the
+# freshest rather than an arbitrary slice. Five pages covers the largest tenants
+# we track (SGS posts 4,506 reqs; its newest 100 still span only two days).
+SR_MAX_PAGES = 5
+
+
+def fetch_smartrecruiters(tok):
+    """SmartRecruiters publishes two APIs and only one of them is usable.
+
+    The cross-company search (jobs.smartrecruiters.com/sr-jobs/search) silently
+    ignores every location and paging parameter it is given - `location=Canada`,
+    `country=ca`, `filter=country:ca` and `offset=1000` all return the identical
+    first ~96 global rows - so it can only ever see a fixed window of the newest
+    postings worldwide. It is good for harvesting tenant identifiers and nothing
+    else; this per-company endpoint pages correctly and returns full inventory.
+
+    Beware: an unknown tenant returns HTTP 200 with totalFound 0, which is
+    byte-identical to a real tenant with no openings. A typo here cannot be
+    distinguished from an empty board at fetch time - board_health.py is what
+    catches it.
+    """
+    out, offset = [], 0
+    for _ in range(SR_MAX_PAGES):
+        d = _req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
+                 f"/postings?limit=100&offset={offset}")
+        rows = d.get("content") or []
+        for j in rows:
+            L = j.get("location") or {}
+            loc = L.get("fullLocation") or ", ".join(filter(None, [
+                L.get("city"), L.get("region"), (L.get("country") or "").upper()]))
+            if L.get("remote"):
+                loc = f"Remote{' - ' + loc if loc else ''}"
+            elif L.get("hybrid") and loc:
+                loc = f"Hybrid - {loc}"
+            posted = str(j.get("releasedDate") or "")[:10]
+            jid = str(j.get("id", ""))
+            out.append(job("smartrecruiters", tok, (j.get("name") or "").strip(),
+                           loc, f"https://jobs.smartrecruiters.com/{tok}/{jid}",
+                           posted, days_ago(posted),
+                           " ".join(filter(None, [
+                               j.get("name") or "", loc,
+                               (j.get("function") or {}).get("label", ""),
+                               (j.get("experienceLevel") or {}).get("label", ""),
+                               (j.get("typeOfEmployment") or {}).get("label", "")])),
+                           hyd=("smartrecruiters", tok, jid)))
+        offset += len(rows)
+        if not rows or offset >= d.get("totalFound", 0):
+            break
+    return out
+
+
+# Taleo behind a Radancy TalentBrew career site (careers.<employer>.ca). Three
+# quirks shape this adapter, all of them found the hard way:
+#
+#   1. The keyword facet needs the term in BOTH the path and the query string.
+#      /add/keywords/engineer on its own returns the *unfiltered* board (1,228
+#      rows) with Status OK - it looks like it worked. Only
+#      /add/keywords/engineer?keywords=engineer actually filters, to 20.
+#   2. Adding a facet does not return jobs. It mints a NEW search id, which you
+#      then page through; the count comes back in UserMessage.
+#   3. Pagination is /jobs/search/<id>/page<n> - no slash before the number.
+#      Every ?page=/&offset= form silently returns page 1.
+#
+# There is no posting date anywhere on this platform: not on the result card,
+# not on the job page, not in a meta tag or JSON-LD block. `age` is therefore
+# always None. The only freshness signal offered is a "New" badge, which we
+# pass through verbatim rather than converting into a day count we cannot
+# actually justify.
+TALEO_PAGE = 10          # results per page, fixed by the platform
+TALEO_MAX_PAGES = 12     # 120 jobs per query is far past anything IT-sized
+
+TALEO_TITLE = re.compile(r'class="job_link[^"]*"[^>]*>(.*?)</a>', re.S)
+TALEO_HREF = re.compile(r'href="([^"]+/jobs/[^"]+)"[^>]*class="job_link')
+TALEO_LOC = re.compile(r'class="location">\s*(.*?)\s*</span>', re.S)
+TALEO_CAT = re.compile(r'class="category">\s*(.*?)\s*</span>', re.S)
+
+
+def fetch_taleo(t):
+    base = t["base"].rstrip("/")
+    name = t.get("name", base)
+    facet, value = t.get("_query") or ("category", "177")
+    enc = urllib.parse.quote(str(value))
+
+    # The keyword facet is the one that needs the redundant query string; the
+    # category facet ignores it. Sending it for both is harmless and keeps the
+    # call site simple.
+    claim = (f"{base}/ajax/jobs/{t['search_id']}/add/{facet}/{enc}"
+             f"?keywords={enc}")
+    try:
+        d = _req(claim)
+    except Exception:
+        return []
+    if (d.get("Status") or "") != "OK":
+        return []
+    sid = str(d.get("Result") or "")
+    if not sid:
+        return []
+    try:
+        total = int(str(d.get("UserMessage", "0")).replace(",", ""))
+    except ValueError:
+        total = 0
+    if not total:
+        return []
+
+    out, seen = [], set()
+    pages = min(TALEO_MAX_PAGES, -(-total // TALEO_PAGE))
+    for pg in range(1, pages + 1):
+        url = f"{base}/jobs/search/{sid}" + (f"/page{pg}" if pg > 1 else "")
+        try:
+            h = _get_text(url)
+        except Exception:
+            break
+        for blk in re.findall(
+                r'<div id="job_list_\d+.*?(?=<div id="job_list_|jPaginationHldr)',
+                h, re.S):
+            ti = TALEO_TITLE.search(blk)
+            hr = TALEO_HREF.search(blk)
+            if not ti or not hr:
+                continue
+            href = html_unescape(hr.group(1))
+            if href in seen:
+                continue
+            seen.add(href)
+            title = strip_html(ti.group(1)).strip()
+            lo = TALEO_LOC.search(blk)
+            loc = strip_html(lo.group(1)).strip() if lo else ""
+            ca = TALEO_CAT.search(blk)
+            cat = strip_html(ca.group(1)).strip() if ca else ""
+            desc = re.search(r'class="jlr_description">(.*?)</p>', blk, re.S)
+            out.append(job("taleo", name, title, loc, href, "", None,
+                           " ".join(filter(None, [
+                               title, loc, cat,
+                               strip_html(desc.group(1))[:2000] if desc else ""])),
+                           updated="New" if "new_flg" in blk else ""))
+    return out
+
+
 ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "ashby": fetch_ashby, "recruitee": fetch_recruitee,
             "rippling": fetch_rippling, "workday": fetch_workday,
             "phenom": fetch_phenom, "successfactors": fetch_successfactors,
             "oracle": fetch_oracle, "jobvite": fetch_jobvite,
-            "html": fetch_html}
+            "html": fetch_html, "workable": fetch_workable,
+            "smartrecruiters": fetch_smartrecruiters,
+            "taleo": fetch_taleo}
 
 
 # ---------------------------------------- pass 2: hydrate only the finalists --
@@ -933,6 +1163,15 @@ def hydrate(j):
                 exact = days_ago(ji["startDate"])
                 if exact is not None:
                     j["age"] = exact
+        elif kind[0] == "smartrecruiters":
+            _, tok, jid = kind
+            d = _req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
+                     f"/postings/{jid}")
+            secs = (d.get("jobAd") or {}).get("sections") or {}
+            j["blob"] += " " + strip_html(" ".join(
+                (secs.get(k) or {}).get("text", "") for k in
+                ("jobDescription", "qualifications", "additionalInformation")
+            ))[:8000]
         elif kind[0] == "jobvite":
             h = _get_text(kind[1])
             m = JV_DATE.search(h)
@@ -1189,7 +1428,7 @@ def notify(jobs, topic, limit=6):
     if not topic or not jobs:
         return 0
     jobs = sorted(jobs, key=lambda j: -j["score"])
-    sent = 0
+    sent, failed = 0, []
     for j in jobs[:limit]:
         prio = "urgent" if j["score"] >= 35 else "high" if j["score"] >= 25 else "default"
         tag = {"vendor": "handshake", "devops": "rocket"}.get(j["family"], "wrench")
@@ -1209,8 +1448,12 @@ def notify(jobs, topic, limit=6):
         try:
             urllib.request.urlopen(req, timeout=12)
             sent += 1
-        except Exception:
-            pass
+        except Exception as e:
+            # Never swallow this. A rate limit, a network drop or a bad topic
+            # used to look exactly like "nothing matched" - the alerts simply
+            # stopped and nothing said so. cron captures stdout, so a failure
+            # here lands in the log where it can be seen.
+            failed.append(f"{type(e).__name__}: {e} — {j['title'][:40]}")
     rest = jobs[limit:]
     if rest:
         body = "\n".join(f"[{j['score']}] {j['title'][:52]} — {j['company']}"
@@ -1222,8 +1465,15 @@ def notify(jobs, topic, limit=6):
                          "Priority": "low", "Tags": "mag",
                          "User-Agent": UA["User-Agent"]}, method="POST"), timeout=12)
             sent += 1
-        except Exception:
-            pass
+        except Exception as e:
+            failed.append(f"{type(e).__name__}: {e} — roll-up")
+    if failed:
+        print(f"  !! {len(failed)} notification(s) FAILED to send:")
+        for f in failed[:5]:
+            print(f"     {f}")
+        if sent == 0:
+            print("     every push failed - check ntfy.sh reachability and "
+                  f"the topic in {NTFY_FILE}")
     return sent
 
 
@@ -1291,8 +1541,8 @@ def main():
     ap.add_argument("--track", action="store_true",
                     help="append shown postings to the application tracker")
     ap.add_argument("--track-file", default=TRACKER)
-    ap.add_argument("--track-min-score", type=int, default=25,
-                    help="only track postings at or above this score (default 25)")
+    ap.add_argument("--track-min-score", type=int, default=15,
+                    help="only track postings at or above this score (default 15, matching --notify-min-score so nothing buzzes your phone without landing in the tracker)")
     ap.add_argument("--targets", default=TARGETS)
     ap.add_argument("--workers", type=int, default=24)
     a = ap.parse_args()
@@ -1320,6 +1570,9 @@ def main():
             elif src == "jobvite":
                 for q in JV_QUERIES:
                     tasks.append((src, {**tok, "_query": q}, fn))
+            elif src == "taleo":
+                for q in tok.get("queries") or [["category", "177"]]:
+                    tasks.append((src, {**tok, "_query": tuple(q)}, fn))
             else:
                 tasks.append((src, tok, fn))
 
@@ -1334,10 +1587,24 @@ def main():
             except Exception as e:
                 errors.append(f"{src}/{label}: {type(e).__name__} {e}")
 
-    # The same Workday req comes back under several keyword queries.
+    # The same posting arrives more than once: a Workday req matches several
+    # keyword queries, and some boards list one req under several countries
+    # sharing a single URL. Keeping the first occurrence silently dropped the
+    # Canada-eligible variant - an MLabs SRE role was listed for UK, Poland,
+    # Germany, Netherlands and Canada under one shortlink, and the UK entry won.
+    # Merge the locations instead so the classifier sees every one of them.
     _byurl = {}
     for j in jobs:
-        _byurl.setdefault(j["url"], j)
+        prev = _byurl.get(j["url"])
+        if prev is None:
+            _byurl[j["url"]] = j
+            continue
+        locs = [p.strip() for p in prev["location"].split(" / ") if p.strip()]
+        if j["location"] and j["location"] not in locs:
+            locs.append(j["location"])
+            prev["location"] = " / ".join(locs)
+        if len(j.get("blob", "")) > len(prev.get("blob", "")):
+            prev["blob"] = j["blob"]
     jobs = list(_byurl.values())
 
     # Pass 1: cheap filters on title + location only.
@@ -1482,6 +1749,9 @@ def main():
             n = notify(worth, topic)
             if n:
                 print(f"\n>> pushed {n} notification(s) to ntfy topic {topic[:6]}…")
+            elif worth:
+                print(f"\n>> WARNING: {len(worth)} job(s) matched but NO "
+                      "notification was delivered")
 
     if a.track:
         with FileLock():

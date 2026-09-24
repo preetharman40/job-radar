@@ -92,19 +92,16 @@
     "braze",
     "censys",
     "elastic",
-    "fivetran",
     "gitlab",
     "globalrelay",
-    "greenhouse",
     "instacart",
     "jfrog",
-    "kaseya",
-    "okta",
+    "mercury",
     "pagerduty",
-    "stackadapt",
-    "tailscale"
+    "stackadapt"
   ],
   "lever": [
+    "eqbank",
     "magnetforensics",
     "pointclickcare",
     "waabi"
@@ -115,12 +112,24 @@
     "cohere",
     "docker",
     "jobber",
+    "klue",
     "lightspeedhq",
     "sentry",
     "wealthsimple"
   ],
   "recruitee": [],
   "rippling": [],
+  "workable": [
+    "mlabs"
+  ],
+  "smartrecruiters": [
+    "AmericanIronandMetal",
+    "AristaNetworks",
+    "GDMSI",
+    "Medfar",
+    "REXEL1",
+    "Scalian"
+  ],
   "workday": [
     {
       "name": "RBC",
@@ -212,6 +221,12 @@
       "cluster": "wd3",
       "site": "Ledcor_External",
       "country_facet": null
+    },
+    {
+      "name": "AIMCo",
+      "tenant": "aimco",
+      "cluster": "wd10",
+      "site": "AIMCoCareers"
     }
   ],
   "phenom": [
@@ -242,9 +257,20 @@
     {
       "name": "Celestica",
       "base": "https://careers.celestica.com"
+    },
+    {
+      "name": "Imperial Oil",
+      "base": "https://jobs.exxonmobil.com",
+      "default_location": "Canada"
+    },
+    {
+      "name": "Government of Alberta",
+      "base": "https://jobpostings.alberta.ca",
+      "default_location": "Alberta, Canada"
     }
   ],
   "oracle": [],
   "jobvite": [],
-  "html": []
+  "html": [],
+  "taleo": []
 }

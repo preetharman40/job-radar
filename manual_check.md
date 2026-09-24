@@ -55,33 +55,37 @@ You live in Edmonton, so hybrid and onsite roles here are viable in a way Toront
 ones are not. These are the biggest Alberta IT employers, and **none of them are
 reachable by the tool** — checked 2026-09-17.
 
-### Taleo (no adapter — Oracle Taleo exposes no usable public feed)
+### Taleo — **now automated** (2026-09-24)
 
-| Employer | Search link |
-|---|---|
-| Alberta Health Services | https://careers.albertahealthservices.ca/jobs/search/146469417 |
+Alberta Health Services is no longer a manual check. Its TalentBrew facet API
+turned out to be reachable; see the Taleo section of `ARCHITECTURE.md`. The
+radar polls `category/177` (Information Technology) plus five keyword facets.
 
-AHS is the single largest employer in Alberta and runs a substantial IT
-organisation. Verified 2026-09-18 against the real job-search URL — still Taleo,
-still no usable public feed.
+Note it exposes **no posting date at all**, so AHS rows always show
+`age unknown`.
 
 ### Custom portals and blocked platforms
 
+Re-verified 2026-09-24.
+
 | Employer | Search link | Why it cannot be polled |
 |---|---|---|
-| City of Calgary | https://www.calgary.ca/careers.html#jobs | No ATS signature at all |
+| City of Calgary | https://www.calgary.ca/careers.html | No ATS signature at all |
 | ATB Financial | https://careers.atb.com/careers | Eightfold — API rejects unauthenticated calls |
-| SAIT | https://sait-jobs.multiscreensite.com/#career-openings | multiscreensite, returns 403 |
-| MacEwan University | https://www.macewan.ca/about-macewan/careers/opportunities/ | No ATS signature |
+| SAIT | https://www.sait.ca/about-sait/work-at-sait | No ATS signature |
+| MacEwan University | https://www.macewan.ca/about-macewan/careers/ | No ATS signature |
 | University of Calgary | https://careers.ucalgary.ca/ | Returns 403 to scripts |
+| Alberta Blue Cross | https://www.ab.bluecross.ca/careers/ | Returns 403 to scripts |
+| Covenant Health | https://covenanthealth.ca/join-our-team | UKG/UltiPro — no adapter |
+| Olds College | https://www.oldscollege.ca/about-us/work-at-olds-college | ADP WorkforceNow — no adapter |
+| City of Lethbridge | https://www.lethbridge.ca/careers | Taleo + BambooHR mix — no usable feed found |
+| Calgary Board of Education | https://www.cbe.ab.ca/careers | No ATS signature |
+| Edmonton Public Schools | https://epsb.ca/ourdistrict/careers/ | No ATS signature |
 
-**ATB is the closest to solvable.** It runs Eightfold, whose API *does* work —
-it simply rejected a guessed `domain` parameter. Open the careers page with
-DevTools on the Network tab, find the XHR that returns the job list, and that URL
-is very likely enough to automate it.
-
-U of C refuses automated requests outright (HTTP 403), so no amount of adapter
-work reaches it. The rest are ordinary pages with no machine-readable feed.
+**ATB is still the closest to solvable.** It runs Eightfold, whose API does work
+— it simply rejected a guessed `domain` parameter. Open the careers page with
+DevTools on the Network tab, find the XHR that returns the job list, and that
+URL is very likely enough to automate it.
 
 ### Already automated — do **not** check these by hand
 
@@ -90,6 +94,12 @@ These Alberta employers are in `targets.json` and the radar polls them:
 | Employer | Platform | Postings |
 |---|---|---|
 | **Government of Alberta** | SuccessFactors | — |
+| **Alberta Health Services** | Taleo | 6 (IT category) |
+| **AIMCo** | Workday | 7 |
+| **WCB Alberta** | Workday | 7 |
+| **Alberta Energy Regulator** | Workday | 3 |
+| **Alberta Motor Association** | Workday | 45 |
+| **City of Red Deer** | Oracle Recruiting Cloud | 14 |
 | **City of Edmonton** | Phenom | 49 |
 | **University of Alberta** | Oracle Recruiting Cloud | 73 |
 | **EPCOR** | Jobvite | 17 |

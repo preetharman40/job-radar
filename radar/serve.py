@@ -42,15 +42,63 @@ FIELD = re.compile(r"\*\*(.+?):\*\*\s*(.*?)(?=\s*·\s*\*\*|\n|$)")
 CHECK = re.compile(r"^- \[([ xX])\]\s*(.+)$", re.M)
 
 
+LEVELS = ("entry", "mid", "senior", "exec", "intern")
+_MD = re.compile(r"[*_`]+")
+
+
+# Fields whose value is a URL. These must survive verbatim: stripping markdown
+# from them deletes any underscore in the path or query, and the 120-char cap
+# truncates long ones. Either corruption silently breaks every lookup keyed on
+# the URL - delete, status changes, the Apply link and expiry detection all
+# match on the exact string. Measured on a live tracker: 53 of 106 URLs
+# contained an underscore (Workday req ids almost always do - "..._R-0000180718")
+# and 21 exceeded 120 characters.
+URL_FIELDS = {"Apply"}
+
+
+def _clean_field(v, raw=False):
+    """Strip markdown, collapse whitespace, and cap runaway values.
+
+    `raw` keeps the value byte-exact apart from surrounding whitespace - use it
+    for anything that is matched rather than displayed.
+    """
+    v = v or ""
+    if raw:
+        return v.strip()
+    v = _MD.sub("", v)
+    v = re.sub(r"\s+", " ", v).strip().rstrip("·").strip()
+    return v[:120]
+
+
+def _norm_level(v):
+    """Return a known level, or '' - never a sentence."""
+    if not v:
+        return ""
+    low = v.lower()
+    if low in LEVELS:
+        return low
+    # Prose sometimes names the level it is discussing; take the first one.
+    for lv in LEVELS:
+        if re.search(rf"(?<![a-z]){lv}(?![a-z])", low):
+            return lv
+    return ""
+
+
 def live_urls():
-    """URLs still present on some board as of the last full sweep, plus whether
-    any sweep has run at all - without one we cannot call anything expired."""
+    """Which tracked jobs are gone, from verify_tracked.py.
+
+    This used to infer liveness from whether a URL turned up in the last sweep.
+    That was wrong: a Manulife req posted 2026-09-22 was live and fetchable at
+    its own endpoint while absent from Workday's keyword search for every query,
+    with and without the country facet, through 200 results. Search indexes lag;
+    job endpoints do not. verify_tracked.py asks each posting directly and only
+    calls one gone after three consecutive misses."""
     try:
         c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
-        swept = c.execute("SELECT MAX(ts) FROM sweeps").fetchone()[0]
-        urls = {r[0] for r in c.execute("SELECT url FROM live")}
+        rows = list(c.execute("SELECT url, state FROM tracked_live"))
+        checked = c.execute("SELECT MAX(checked) FROM tracked_live").fetchone()[0]
         c.close()
-        return urls, swept
+        return {u for u, st in rows if st == "gone"}, checked
     except Exception:
         return set(), None
 
@@ -64,8 +112,13 @@ def parse(path):
     blocks = {}
     for m in BLOCK.finditer(src):
         n, title, body = int(m.group(1)), m.group(2).strip(), m.group(3)
-        fields = {k.strip(): v.strip().rstrip("·").strip()
+        fields = {k.strip(): _clean_field(v, raw=k.strip() in URL_FIELDS)
                   for k, v in FIELD.findall(body)}
+        # A hand-written block can put prose where a value belongs - one entry
+        # had "Level: radar tagged `mid` from the title, but the JD opens
+        # with..." which rendered as a level in the UI. Normalise the fields
+        # that drive display so prose degrades to a sane value instead.
+        fields["Level"] = _norm_level(fields.get("Level", ""))
         checks = [{"done": c.lower() == "x", "label": l.strip()}
                   for c, l in CHECK.findall(body)]
         # Prose paragraphs, minus the bullet/field lines
@@ -74,7 +127,7 @@ def parse(path):
         blocks[n] = {"title": title, "fields": fields, "checks": checks,
                      "prose": prose}
 
-    live, swept = live_urls()
+    gone, swept = live_urls()
     jobs = []
     for m in ROW.finditer(src):
         n = int(m.group(1))
@@ -104,9 +157,9 @@ def parse(path):
             "matched": f.get("Resume keywords matched", ""),
             "checks": b.get("checks", []),
             "prose": b.get("prose", []),
-            # Only claim a job is expired once a full sweep has actually run;
-            # otherwise an empty live table would hide everything.
-            "expired": bool(swept) and f.get("Apply", "") not in live,
+            # Expired only if verify_tracked.py has confirmed it gone. Absence
+            # of evidence is not evidence - an unchecked job stays visible.
+            "expired": f.get("Apply", "") in gone,
         })
     jobs.sort(key=lambda j: -j["score"])
     return {"jobs": jobs, "count": len(jobs),

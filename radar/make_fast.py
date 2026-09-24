@@ -12,8 +12,10 @@ Run a full sweep, then regenerate:
 import collections, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling")
-DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html")
+TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling",
+              "workable", "smartrecruiters")
+DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
+             "taleo")
 
 
 def main():
