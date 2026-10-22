@@ -145,12 +145,17 @@ const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;
 
 // Expired jobs are hidden everywhere except their own view - a posting that is
 // gone is noise, but deleting it automatically would throw away your history.
+// Senior roles are tracked but hidden by default - they are a stretch at one
+// year of hands-on DevOps, so they should not crowd out the roles that convert.
+// The `senior` chip shows them on demand; `everything` shows the lot.
+const junior = j => !j.expired && j.level !== 'senior' && j.level !== 'exec';
 const FILTERS = [
-  ['open',        j => !j.expired],
-  ['to apply',    j => !j.expired && j.status==='toapply'],
-  ['25+',         j => !j.expired && j.score>=25],
-  ['vendor',      j => !j.expired && /support|solutions|customer success|sales engineer|escalation/i.test(j.role)],
-  ['devops',      j => !j.expired && /devops|sre|site reliability|platform|cloud|infrastructur/i.test(j.role)],
+  ['open',        junior],
+  ['to apply',    j => junior(j) && j.status==='toapply'],
+  ['25+',         j => junior(j) && j.score>=25],
+  ['vendor',      j => junior(j) && /support|solutions|customer success|sales engineer|escalation/i.test(j.role)],
+  ['devops',      j => junior(j) && /devops|sre|site reliability|platform|cloud|infrastructur/i.test(j.role)],
+  ['senior',      j => !j.expired && (j.level==='senior' || j.level==='exec')],
   ['applied',     j => !j.expired && j.status!=='toapply'],
   ['expired',     j => j.expired],
   ['everything',  () => true],
@@ -267,19 +272,24 @@ async function load(){
   try{
     const d = await (await fetch('/api/jobs',{cache:'no-store'})).json();
     JOBS = d.jobs||[];
-    const open=JOBS.filter(j=>!j.expired);
+    const open=JOBS.filter(j=>!j.expired && j.level!=='senior' && j.level!=='exec');
+    const sen=JOBS.filter(j=>!j.expired && (j.level==='senior'||j.level==='exec')).length;
     const todo=open.filter(j=>j.status==='toapply').length;
     const hot=open.filter(j=>j.score>=25).length;
     $('#status').textContent = `${open.length} open · ${todo} to apply to`;
-    $('#foot').textContent = `${hot} scoring 25+ · ${d.expired||0} expired hidden · read ${d.updated}`;
+    $('#foot').textContent = `${hot} scoring 25+ · ${sen} senior (hidden) · ${d.expired||0} expired · read ${d.updated}`;
     draw();
   }catch(_){ $('#status').textContent='could not read applications.md'; }
 }
 function live(){
   const es=new EventSource('/events');
-  es.onopen=()=>$('#dot').classList.remove('off');
+  // Reload on connect, not just on message. A server restart kills the stream;
+  // the browser reconnects silently but would otherwise sit on stale data until
+  // the polling fallback fired - which a backgrounded tab may never do.
+  es.onopen=()=>{ $('#dot').classList.remove('off'); load(); };
   es.onmessage=()=>load();
   es.onerror=()=>$('#dot').classList.add('off');
 }
-drawFilters(); load(); live(); setInterval(load,120000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) load(); });
+drawFilters(); load(); live(); setInterval(load,60000);
 </script></body></html>

@@ -98,7 +98,16 @@ def p_rippling(t):
         return 0
 
 
-PROBES = {"greenhouse": p_greenhouse, "lever": p_lever, "ashby": p_ashby,
+def p_workable(t):
+    try:
+        d = json.loads(_fetch(
+            f"https://apply.workable.com/api/v1/widget/accounts/{t}?details=true"))
+        return len(d.get("jobs", []))
+    except Exception:
+        return 0
+
+
+PROBES = {"greenhouse": p_greenhouse, "workable": p_workable, "lever": p_lever, "ashby": p_ashby,
           "recruitee": p_recruitee, "rippling": p_rippling}
 
 
@@ -207,7 +216,10 @@ def main():
     if a.names:
         names += a.names
     if a.file:
-        names += [l.strip() for l in open(a.file) if l.strip()]
+        # Skip blanks and `#` comments. A curated list is worth annotating,
+        # and without this the header comment itself became a probe token.
+        names += [l.strip() for l in open(a.file)
+                  if l.strip() and not l.lstrip().startswith("#")]
     if a.wiki:
         got = names_from_wikipedia(a.wiki, a.limit)
         print(f"  {len(got)} names from {a.wiki}")

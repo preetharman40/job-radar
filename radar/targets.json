@@ -1,11 +1,12 @@
 {
   "_comment": "Every token probed live 2026-09-16 and returned >0 postings. Re-verify: python3 discover.py --verify",
   "_vendor_note": "devops_vendors = companies that SELL devops/cloud/infra tooling. Support/solutions/implementation engineer roles at these score as tier-1 targets, not as generic support jobs.",
-  "_workday_note": "Workday tenant names are NOT derivable from the company name (Loblaw's tenant is 'myview'). Add one by pasting its careers URL into discover.py --url, which prints the tenant/cluster/site block.",
+  "_workday_note": "Workday tenant names are NOT derivable from the company name (Loblaw's tenant is 'myview'). Add one by pasting its careers URL into discover.py --url, which prints the tenant/cluster/site block. PAGING, fixed 2026-10-21: fetch_workday used to stop at offset 40 ('2 pages per query'), silently dropping every query with more than 40 Canadian hits - Manulife lost rows on 4 of 13 queries and RBC on 6 of 13, and recovering them took a full sweep from 149 matches to 154. It now pages to `total` (captured on page 1, since later pages report 0) and stops on a short page, on total, or at WD_MAX_PAGES=15. `limit` cannot be raised as a shortcut: Workday answers HTTP 400 above 20. Per-target override: add \"max_pages\": N to a target that genuinely needs deeper paging. Do NOT raise the global for CIBC - it truncates every sweep ON PURPOSE. CIBC's searchText works (devops -> 5 hits, a nonsense term -> 0) but 'linux' matches 489 of its 490 Canadian reqs because the word is in CIBC's posting boilerplate, so page one of that query is Mobile Mortgage Advisors; paging all 25 pages would cost ~130 requests a sweep to read retail banking roles that title_match rejects at tier 0. Truncations are listed in the run footer, and that CIBC line is expected output, not a fault. PWC, added 2026-10-21 with \"max_pages\": 2 ON PURPOSE. PwC exposes only a GLOBAL site (Global_Experienced_Careers, 3859 reqs) - seven Canada-scoped site names were tried and all 404, and the board offers only a `locations` facet taking location GUIDs, NOT a Country facet, so _wd_country_facet correctly returns None and WD_CANADA cannot be applied. Left at the global ceiling it would be the most expensive board here by far: 13 queries x up to 15 pages = ~195 requests a sweep, with four queries hitting the ceiling, to reach ~20 Canadian reqs out of 638 sampled. max_pages=2 bounds it to ~26 requests. That is sound rather than lossy because Workday ranks by relevance and recency and the role this was added for - Cloud Infrastructure Engineer, Senior Associate - was the FIRST result for 'devops' and posted that day, so a shallow read still catches fresh relevant postings. An explicit max_pages also suppresses the WD_TRUNCATED warning, deliberately: a deliberate shallow read is not accidental truncation, and four warnings every half hour would train you to ignore the register that caught CIBC.",
   "_phenom_note": "Phenom sites ship jobs inline in phApp.ddo. Some are only a skin over Workday - check a job's applyUrl; if it points at myworkdayjobs.com, poll the Workday tenant instead (structured locations + full descriptions). RBC and BMO are both Workday.",
   "_sf_note": "SuccessFactors RMK has two themes: a table layout (<tr class=\"data-row\">) and a tile layout (<li class=\"job-tile\">, location only in the URL slug). Anchor attribute order differs between them. No JSON API, no RSS. Multi-word q= gets OR'd into noise - single tokens only; adding sortColumn makes it ignore q= entirely. Use default_location for tiles whose slug has no province code.",
-  "_oracle_note": "Oracle Recruiting Cloud. Careers URL looks like https://<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs and the site number (usually CX_1) is in that page's markup. Proper JSON REST API with real PostedDate - one of the better platforms to be on.",
+  "_oracle_note": "Oracle Recruiting Cloud. Careers URL looks like https://<host>/hcmUI/CandidateExperience/en/sites/<SITE>/jobs and the site number (usually CX_1) is in that page's markup. Proper JSON REST API with real PostedDate - one of the better platforms to be on. WARNING added 2026-10-21 with Fortinet: siteNumber is NOT validated by this API. Fortinet's board returns the same 50 postings for siteNumber=CX_2001, CX_1, CX_2, CX_999999 and even NOT_A_SITE, so a wrong site number looks like a working board - silent-success, same class as SmartRecruiters' totalFound:0 and the Recruitee demo accounts. Confirm a new Oracle board by its organizationsFacet (Fortinet's reads 'Fortinet Inc.' / 'Fortinet Technologies Canada ULC'), not by the token answering. Also note fetch_oracle hardcodes limit=50 while Fortinet has 1031 requisitions: the 10 ORC_QUERIES keep coverage adequate (~14 new postings/day vs a 50 cap), but a board whose best_count sits at exactly 50 is probably truncated, not complete - oracle/University of Alberta reads 50 for that reason.",
   "_jobvite_note": "Jobvite: server-rendered HTML at {base}/search?q=<token>. No JSON API and no date in the list - each job page carries schema.org datePosted, so dates come from the hydrate pass. Locations wrap across lines and need whitespace normalising.",
+  "_workable_note": "Workable: GET apply.workable.com/api/v1/widget/accounts/{account}?details=true - public, no auth, ships full descriptions and a real published_on date, so no hydrate needed. The account name is the path segment on workable.com/{account}/, usually visible in the embed on the company's own careers page.",
   "_html_note": "Last-resort generic scraper for careers sites that render jobs server-side but run no recognisable ATS. Config-driven: url + link_re + default_location. Fragile by nature - a site redesign breaks it, which is what discover.py --verify is for.",
   "greenhouse": [
     "1800gotjunk",
@@ -19,7 +20,6 @@
     "akuity",
     "alliance",
     "allied",
-    "amplitude",
     "amwell",
     "angusreid",
     "appian",
@@ -46,20 +46,17 @@
     "buildops",
     "calm",
     "canonical",
-    "canto",
     "carta",
     "catonetworks",
     "censys",
     "chainguard",
     "circleci",
-    "civicplus",
     "cloudflare",
     "clutch",
     "cockroachlabs",
     "cognite",
     "coherentsolutions",
     "comet",
-    "community",
     "commvault",
     "conga",
     "coreweave",
@@ -67,7 +64,6 @@
     "coursera",
     "cribl",
     "curaleaf",
-    "cybereason",
     "d2l",
     "databricks",
     "datadog",
@@ -83,7 +79,6 @@
     "elastic",
     "encore",
     "endorlabs",
-    "enthought",
     "esri",
     "faire",
     "fastly",
@@ -111,7 +106,6 @@
     "huntress",
     "imply",
     "indigo",
-    "instabase",
     "instacart",
     "integra",
     "inter",
@@ -126,7 +120,6 @@
     "lastpass",
     "later",
     "launchdarkly",
-    "linkedin",
     "liveperson",
     "mcafee",
     "mejuri",
@@ -145,7 +138,6 @@
     "netskope",
     "newrelic",
     "ngrokinc",
-    "nimbus",
     "octagon",
     "octopusdeploy",
     "ogilvy",
@@ -166,7 +158,6 @@
     "qualtrics",
     "revel",
     "ritual",
-    "runzero",
     "shakepay",
     "sidlee",
     "smartbear",
@@ -223,14 +214,12 @@
     "grand",
     "harmony",
     "horizon",
-    "integrate",
     "jobvite",
     "jumpcloud",
     "kabam",
     "kepler",
     "knix",
     "linkedin",
-    "logz",
     "lucidworks",
     "magnetforensics",
     "modeln",
@@ -275,7 +264,6 @@
     "cloudzero",
     "coder",
     "cohere",
-    "confluent",
     "delinea",
     "depot",
     "docker",
@@ -318,26 +306,10 @@
     "trulioo",
     "wealthsimple"
   ],
-  "recruitee": [
-    "accenture",
-    "ashley",
-    "automation",
-    "change",
-    "context",
-    "coursera",
-    "education",
-    "enterprise",
-    "ey",
-    "fastepp",
-    "google",
-    "hybrid",
-    "legal",
-    "phase"
-  ],
+  "recruitee": [],
   "rippling": [
     "anaconda",
     "arbor",
-    "bravo",
     "brightside",
     "clearpath",
     "copado",
@@ -346,6 +318,7 @@
     "gobolt",
     "golden",
     "harvest",
+    "integratecom-inc",
     "kajabi",
     "malwarebytes",
     "mclean",
@@ -354,6 +327,9 @@
     "rippling",
     "rsa-security",
     "summit"
+  ],
+  "workable": [
+    "mlabs"
   ],
   "workday": [
     {
@@ -469,13 +445,6 @@
       "country_facet": null
     },
     {
-      "name": "UBC Student",
-      "tenant": "ubc",
-      "cluster": "wd10",
-      "site": "ubcstudentjob",
-      "country_facet": null
-    },
-    {
       "name": "Desjardins",
       "tenant": "desjardins",
       "cluster": "wd10",
@@ -550,6 +519,49 @@
       "cluster": "wd10",
       "site": "Careers",
       "country_facet": null
+    },
+    {
+      "name": "AIMCo",
+      "tenant": "aimco",
+      "cluster": "wd10",
+      "site": "AIMCoCareers"
+    },
+    {
+      "name": "Alberta Energy Regulator",
+      "tenant": "aer",
+      "cluster": "wd3",
+      "site": "aer"
+    },
+    {
+      "name": "Alberta Motor Association",
+      "tenant": "albertamotorassociation",
+      "cluster": "wd3",
+      "site": "AMA"
+    },
+    {
+      "name": "WCB Alberta",
+      "tenant": "wcbalberta",
+      "cluster": "wd10",
+      "site": "wcbalbertacareers"
+    },
+    {
+      "name": "Recurrent Energy",
+      "tenant": "recurrentenergy",
+      "cluster": "wd12",
+      "site": "RecurrentEnergy"
+    },
+    {
+      "name": "TMX Group",
+      "tenant": "tmx",
+      "cluster": "wd3",
+      "site": "TMX_Careers"
+    },
+    {
+      "name": "PwC Canada",
+      "tenant": "pwc",
+      "cluster": "wd3",
+      "site": "Global_Experienced_Careers",
+      "max_pages": 2
     }
   ],
   "phenom": [
@@ -569,6 +581,14 @@
       "name": "City of Edmonton",
       "base": "https://recruitment.edmonton.ca",
       "default_location": "Edmonton, AB"
+    },
+    {
+      "name": "Just Eat Takeaway / SkipTheDishes",
+      "base": "https://careers.justeattakeaway.com/global/en"
+    },
+    {
+      "name": "McCain Foods",
+      "base": "https://careers.mccain.com/us/en"
     }
   ],
   "successfactors": [
@@ -621,7 +641,8 @@
     },
     {
       "name": "Imperial Oil",
-      "base": "https://jobs.exxonmobil.com/Imperial"
+      "base": "https://jobs.exxonmobil.com",
+      "default_location": "Canada"
     },
     {
       "name": "Pembina Pipeline",
@@ -639,12 +660,47 @@
       "host": "iaejup.fa.ocs.oraclecloud.com",
       "site": "UOA-Careers",
       "site_number": "CX_1"
+    },
+    {
+      "name": "City of Red Deer",
+      "host": "fa-eyjj-saasfaprod1.fa.ocs.oraclecloud.com",
+      "site": "CX_1",
+      "site_number": "CX_1"
+    },
+    {
+      "name": "Fortinet",
+      "host": "edel.fa.us2.oraclecloud.com",
+      "site": "CX_2001",
+      "site_number": "CX_2001"
     }
   ],
   "jobvite": [
     {
       "name": "EPCOR",
       "base": "https://jobs.jobvite.com/epcor"
+    }
+  ],
+  "avature": [
+    {
+      "name": "Electronic Arts",
+      "base": "https://jobs.ea.com/en_US/careers"
+    }
+  ],
+  "teamtailor": [
+    {
+      "name": "commonsku",
+      "base": "https://commonsku.na.teamtailor.com"
+    }
+  ],
+  "ultipro": [
+    {
+      "name": "Haventree Bank",
+      "board": "https://recruiting.ultipro.ca/HAV5100HBANK/JobBoard/cac8df59-088b-4449-aa9d-7a419f8521f1"
+    }
+  ],
+  "jobbank": [
+    {
+      "name": "Job Bank"
     }
   ],
   "html": [
@@ -741,5 +797,157 @@
     "wizinc",
     "yugabyte",
     "zscaler"
-  ]
+  ],
+  "smartrecruiters": [
+    "ADVENS",
+    "AECOM2",
+    "AWPSafety",
+    "AccorCorpo",
+    "AccorHotel",
+    "Acumatica",
+    "AllegisGlobalSolutions",
+    "AltenCalsoftLabs1",
+    "AlterSolutions",
+    "AmericanIronandMetal",
+    "AngloAmericanDeBeersGroup",
+    "AntonPaar1",
+    "AristaNetworks",
+    "Artelia",
+    "Ayming",
+    "BEUMERGroup1",
+    "CDPROJEKTRED",
+    "CRB",
+    "CaliforniaClosets",
+    "CheckPointSoftwareTechnologies2",
+    "Collabera2",
+    "Continental",
+    "ContinentalGroupSectorContiTech",
+    "DataIntellect",
+    "Dev2",
+    "Dexterra",
+    "EVERSANA1",
+    "Eataly",
+    "EgisGroup",
+    "EnviriCorporation",
+    "Equinox",
+    "Ergomed",
+    "EtihadAirways5",
+    "Eurofins",
+    "Evolution",
+    "GDMSI",
+    "Gameloft",
+    "GenerixGroup",
+    "GrantekSystemsIntegration",
+    "HMGroup",
+    "HitachiSolutions",
+    "IFS1",
+    "InternationalDairyQueen",
+    "JobMobz1",
+    "JobsForHumanity",
+    "Keenfinity",
+    "Konecranes",
+    "KrgTechnologyInc",
+    "LGCGroup",
+    "LinkedIn3",
+    "LouisDreyfusCompany",
+    "MUFGInvestorServices",
+    "MattelInc",
+    "Medfar",
+    "Miratech1",
+    "NBCUniversal3",
+    "Nagarro1",
+    "NielsenIQ",
+    "O-I",
+    "Oetiker",
+    "PRT",
+    "PSICRO",
+    "PilotCompany",
+    "Pyrotek3",
+    "QIMA",
+    "Quadient1",
+    "RESPECInc",
+    "REXEL1",
+    "RedBull",
+    "RelaisChateaux",
+    "SGS",
+    "SIXT",
+    "Salomon",
+    "Scalian",
+    "ServiceNow",
+    "SharkLogicTechSolutionLimited",
+    "Sia",
+    "SikaAG",
+    "StepStoneGroup",
+    "Sutherland",
+    "Talan",
+    "TeamworkCorporate",
+    "TessenderloGroup",
+    "TheWonderfulCompany",
+    "TurnerTownsend",
+    "Ubisoft2",
+    "UmdaschGroup",
+    "VeoliaEnvironnementSA",
+    "VusionGroupSA",
+    "prosidianconsulting"
+  ],
+  "taleo": [
+    {
+      "name": "Alberta Health Services",
+      "base": "https://careers.albertahealthservices.ca",
+      "search_id": "146469417",
+      "queries": [
+        [
+          "category",
+          "177"
+        ],
+        [
+          "keywords",
+          "analyst"
+        ],
+        [
+          "keywords",
+          "cloud"
+        ],
+        [
+          "keywords",
+          "infrastructure"
+        ],
+        [
+          "keywords",
+          "network"
+        ],
+        [
+          "keywords",
+          "security"
+        ]
+      ]
+    }
+  ],
+  "_wpjobs_note": "Staffing agencies and any careers site running a WordPress job plugin. `type` is the post type's REST base - read {base}/wp-json/wp/v2/types to find it, do not guess the post type name. See fetch_wpjobs in job_radar.py.",
+  "wpjobs": [
+    {
+      "name": "David Aplin Group",
+      "base": "https://www.aplin.com",
+      "type": "job-listings"
+    },
+    {
+      "name": "Raise Recruiting",
+      "base": "https://raise.jobs",
+      "type": "matador-job-listings"
+    }
+  ],
+  "_amazon_note": "In-house ATS, not a third-party product, so harvest.py and discover.py --company can never find it. One entry covers a whole country: `country` is an ISO 3166 alpha-3 facet (CAN) and Amazon Canada is ~425 reqs in 5 requests, descriptions inline. Added after a Toronto DevOps Engineer req scoring 22 was missed entirely. See fetch_amazon in job_radar.py.",
+  "amazon": [
+    {
+      "name": "Amazon",
+      "country": "CAN"
+    }
+  ],
+  "_recruitee_note": "Emptied 2026-10-19 after probing all 14. Five were Recruitee DEMO accounts, not the companies they appear to name: accenture, ashley, education, google and ey all returned a posting literally titled 'Senior Marketer (Sample)', and coursera returned 'Job 1'. harvest.py's name-variant probing found them because {name}.recruitee.com answers HTTP 200 with sample data for common words - a silent-success false positive, same class as SmartRecruiters' totalFound: 0. The other nine (automation, change, enterprise, hybrid, phase, context, fastepp, legal, plus the vanity-domain accounts) were real but Dutch, German and Danish, with zero Canada postings. fast.json had already selected none of them. WARNING: discover.py --company and harvest.py both probe recruitee, so re-running either with --add will re-introduce these. Check any recruitee hit for 'Sample' in the titles before adding it.",
+  "_confluent_note": "ashby/confluent removed 2026-10-20. The board is NOT dead and the token is NOT wrong: Ashby's GraphQL returns a jobBoard object with jobPostings: [] for 'confluent', while a bogus name returns jobBoard: null - so the board still exists and is deliberately empty. Confluent was acquired by IBM and rebuilt its careers site as careers.confluent.io, a div-based Next.js page that still uses Ashby posting UUIDs (e.g. /jobs/job/f60bba87-9470-4238-bf6f-dce1b4da8006 is a URL this radar once held as jobs.ashbyhq.com/confluent/f60bba87-...), but every posting is now unlisted on the public Ashby board, so no ATS adapter can enumerate them. Last Ashby posting seen 2026-10-12. It produced 0 rows in seen/tracked_live/dismissed across the radar's whole history, and its 17 current reqs are all Senior/Staff/Principal SWE and PM. To poll it you would need an html target for careers.confluent.io/jobs, but fetch_html's GEN_ROW is <tr>-only and that page is divs - it would return 0 silently. WARNING: discover.py --company will fingerprint confluent.io as Ashby and re-add this token; it will read as live-but-empty forever, same false-signal class as the recruitee demo boards.",
+  "_integrate_note": "lever/integrate became rippling/integratecom-inc on 2026-10-20. Integrate migrated ATS: the old lever token now 404s on individual postings and returns [] for the board, while integrate.com/company/careers embeds ats.rippling.com/embed/integratecom-inc/jobs. The new token returns exactly 7 postings - the same count as lever/integrate's best_count of 7 - which is what confirms it is the same board and not a lookalike. All 7 are India or Remote (India); it has produced 0 matches in seen/tracked_live/dismissed, so this swap keeps the board honest rather than expecting matches from it.",
+  "_avature_note": "Avature, added 2026-10-21 with Electronic Arts (jobs.ea.com, tenant ea.avature.net). `base` is the locale-scoped careers root and the adapter appends /SearchJobs/. Only en_US is polled: EA publishes the same reqs under es_ES, fr_CA, zh_CN and others, so adding a second locale would duplicate every posting under a different URL and defeat the live-URL dedupe. robots.txt explicitly Allows /careers and /*/careers and only Disallows *qtvc=, which the adapter never sends. NO DATES: Avature exposes no datePosted, no JSON-LD and no date in the markup of either the result row or the posting page, so every posting arrives age-unknown and --max-age cannot suppress a stale req - unlike Fortinet, whose 393-day-old DevOps req was correctly filtered. Judge EA postings by Role ID instead: they are roughly sequential, so a 216xxx ID is current while a 213xxx one has been open a while. Page size is fixed at 20 server-side (jobRecordsPerPage is ignored), so coverage comes from AV_QUERIES, not from paging the whole board; EA had 354 reqs at 8 queries x up to 4 pages. The Canada roles are Vancouver, Victoria and Montreal - none in Alberta.",
+  "_teamtailor_note": "Teamtailor, added 2026-10-21 with commonsku (found via a LinkedIn job alert, which is the inbox.py channel doing exactly what it was built for). `base` is the tenant root; note the REGION segment - commonsku is commonsku.na.teamtailor.com, while European tenants are {name}.teamtailor.com with no region, so the base must be copied from a real posting URL rather than assembled from the company name. Best-shaped platform here: {base}/jobs.json is a JSON Feed carrying ISO date_published, the full content_html description inline AND a schema.org JobPosting with a structured PostalAddress, so it needs no hydrate pass and --max-age works properly. robots.txt allows it (only /app/, /messages/, /messenger/, /facebook/tab/, /jobs/internal/ are disallowed). TWO TRAPS, both found by measurement and both fixed in fetch_teamtailor: (1) addressCountry is an ISO code and bare 'CA' does NOT read as Canada unless the city is already in the classifier's Canadian list - 'Lethbridge, CA', 'Medicine Hat, CA', 'Grande Prairie, CA' and 'Nisku, CA' all fell into OTHER and were dropped, so TT_ISO expands the code to a country name. (2) addressRegion is sometimes a CONTINENT - Teamtailor's own board files Chicago under 'North America', which made 'Chicago, North America, United States' classify as NA-REMOTE and get KEPT as a remote opportunity; TT_SKIP_REGION drops continents and a region that merely repeats the country. Paging: per_page + page, honoured to at least 500, and a run ends on an EMPTY page - never on a short one, because a silently-capped per_page would make every full page look short and end the sweep after one, which is how the Workday 40-row cap hid itself.",
+  "_ultipro_note": "UltiPro / UKG Recruiting, added 2026-10-21 with Haventree Bank (surfaced by a LinkedIn alert through inbox.py, then fingerprinted off their careers page). `board` is the FULL prefix including the company code and the board GUID and must be copied verbatim from the employer's careers page: the GUID is not derivable, and the host is recruiting.ultipro.CA or .COM depending on the tenant's UKG region. The API is a JSON POST to {board}/JobBoardView/LoadSearchResults with an opportunitySearch body; totalCount comes back on EVERY page (unlike Workday, which gives it only on page 1), so it is the authoritative stop. Paging advances by len(opportunities), not by the requested Top, so a tenant that ever capped Top server-side cannot make us step over unreturned rows. LOCATION TRAP: never build the location from LocalizedLocationId - it is a bare province code, and bare 'AB'/'ON' classify as OTHER and get DROPPED. Use the nested Address (City + State.Code + Country.NAME); Country.Code is the three-letter 'CAN', which is why the name is read instead. BriefDescription is only a 100-800 char teaser, so this adapter DOES need the hydrate pass - the detail page embeds the real posting in a JSON \"Description\" field (9,101 chars on Haventree's DevOps Engineer, taking its blob from 464 to 6,530 chars). UKG is common among mid-size Canadian employers, so this adapter is worth more than the one board it currently serves.",
+  "_jobbank_note": "Job Bank (Government of Canada), added 2026-10-21 at your request. The only source here that is neither an ATS product nor an employer's own site, so there is no token - one entry covers the whole board, and \"queries\" can override JB_QUERIES per target. No JSON and no RSS: /jobsearch/rss and /sitemap.xml both 404, so the search results page is parsed; the markup is server-rendered and stable (one <article id='article-{id}'> per posting). robots.txt is 'User-agent: * / Crawl-delay: 5' - the only host in targets.json that asks for a delay, and it gets one: _jb_wait() enforces a 5s minimum gap shared by the list AND hydrate passes, which is also why this is one sequential task rather than one task per query. A sweep costs ~30s of wall clock for 6 queries, absorbed in parallel with the other boards. THREE TRAPS, all silent if missed: (1) jsessionid is in the PATH, not the query string, and rotates per visit - left in, every sweep sees a new URL for the same job and re-notifies forever; JB_SESS strips it. (2) dates are localised English month names ('October 06, 2026'), the Amazon trap exactly - %B is locale-dependent and cron has a minimal environment, so it would pass by hand and fail on every scheduled run; _amz_date is reused. (3) the location cell carries a screen-reader label so strip_html yields 'Location Toronto (ON)' - the leading word must come off or the string stops classifying. EXPECTATIONS: measured 2026-10-21, 'devops' returns 5 results Canada-wide (the page's own results-summary confirms that is the whole set), 'site reliability engineer' and 'cloud infrastructure' return 0, and 50 postings across 6 queries yielded 4 Alberta rows. Job Bank is overwhelmingly trades and service work - a location-only query returns cooks and diesel mechanics - and it AGGREGATES from indeed.com and others, so expect duplicates of postings the ATS lanes already have under a different URL; cross-source matching is by title+company, not URL. Also note locationstring is IGNORED on a GET: the real search is a stateful JSF POST, so filtering has to happen in classify_location, not in the request. QUERY SET: 'systems administrator' was tried and REMOVED on the same day. It produced 14 of 17 Infra-adjacent matches as 'network system administrator' / 'information technology (it) system administrator' at scores 11-13 - four of them one employer posting the same role four times - and one crossed the tracking threshold at 15. Job Bank's titles are NOC-derived, so that phrase maps onto help-desk and desktop work, which is explicitly not wanted in the tracker. Do not re-add it. ALBERTA, measured honestly: the adapter DOES surface Alberta rows (a network system administrator in Edmonton, user support technicians in Calgary and Sherwood Park) but NONE of them survive scoring - they are support-tier titles below the threshold. Job Bank's scored output is Ontario, Quebec and BC. Treat its Alberta coverage as zero for planning purposes."
 }

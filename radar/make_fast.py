@@ -12,8 +12,27 @@ Run a full sweep, then regenerate:
 import collections, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling")
-DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html")
+TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling",
+              "workable", "smartrecruiters")
+DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
+             "taleo", "wpjobs", "amazon", "avature", "teamtailor", "ultipro", "jobbank")
+
+
+# Platforms that must NEVER enter the fast lane, whatever they produced.
+#
+# jobbank honours robots.txt Crawl-delay: 5 through a per-host limiter shared by
+# the list and hydrate passes, so one sweep of it costs ~25s of queries plus ~5s
+# per finalist - measured at ~105s on a run with 16 Job Bank matches. The fast
+# lane fires every 5 MINUTES, and two lanes that overlap on the same host is
+# exactly what produced 285 rate-limit errors in a day on Workday. A board that
+# asks to be crawled slowly belongs on the 30-minute lane only.
+#
+# Today jobbank is also excluded by accident: fetch_jobbank sets `company` to
+# the EMPLOYER ("AptPay Inc"), not the board, so "job bank" never appears in the
+# digest's producer list and the name match below cannot hit. That is luck, not
+# design - it would silently stop protecting us the day that field changed - so
+# the exclusion is written down.
+NEVER_FAST = ("jobbank",)
 
 
 def main():
@@ -32,6 +51,9 @@ def main():
         fast[k] = [t for t in full.get(k, []) if t.lower() in producers]
         kept += len(fast[k])
     for k in DICT_SRC:
+        if k in NEVER_FAST:
+            fast[k] = []
+            continue
         fast[k] = [t for t in full.get(k, [])
                    if (t.get("name") or "").lower() in producers]
         kept += len(fast[k])

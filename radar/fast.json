@@ -88,39 +88,53 @@
     "zscaler"
   ],
   "greenhouse": [
+    "appnovation",
     "beyondtrust",
-    "braze",
-    "censys",
+    "chainguard",
+    "dropbox",
     "elastic",
-    "fivetran",
     "gitlab",
     "globalrelay",
-    "greenhouse",
-    "instacart",
-    "jfrog",
-    "kaseya",
+    "later",
     "okta",
     "pagerduty",
-    "stackadapt",
-    "tailscale"
+    "stay22",
+    "tailscale",
+    "zscaler"
   ],
   "lever": [
-    "magnetforensics",
+    "crypto",
+    "eqbank",
     "pointclickcare",
-    "waabi"
+    "sophos",
+    "telesat"
   ],
   "ashby": [
     "1password",
-    "clickhouse",
+    "airbyte",
+    "camunda",
+    "coder",
     "cohere",
     "docker",
-    "jobber",
+    "influxdata",
+    "klue",
     "lightspeedhq",
     "sentry",
     "wealthsimple"
   ],
   "recruitee": [],
   "rippling": [],
+  "workable": [
+    "mlabs"
+  ],
+  "smartrecruiters": [
+    "AristaNetworks",
+    "Dexterra",
+    "EgisGroup",
+    "GDMSI",
+    "Medfar",
+    "Ubisoft2"
+  ],
   "workday": [
     {
       "name": "RBC",
@@ -212,20 +226,25 @@
       "cluster": "wd3",
       "site": "Ledcor_External",
       "country_facet": null
+    },
+    {
+      "name": "Recurrent Energy",
+      "tenant": "recurrentenergy",
+      "cluster": "wd12",
+      "site": "RecurrentEnergy"
     }
   ],
   "phenom": [
     {
-      "name": "City of Edmonton",
-      "base": "https://recruitment.edmonton.ca",
-      "default_location": "Edmonton, AB"
+      "name": "Bell",
+      "base": "https://jobs.bell.ca/ca/en"
+    },
+    {
+      "name": "Just Eat Takeaway / SkipTheDishes",
+      "base": "https://careers.justeattakeaway.com/global/en"
     }
   ],
   "successfactors": [
-    {
-      "name": "Rogers",
-      "base": "https://jobs.rogers.com"
-    },
     {
       "name": "Scotiabank",
       "base": "https://jobs.scotiabank.com"
@@ -233,6 +252,11 @@
     {
       "name": "Canada Life",
       "base": "https://jobs.canadalife.com"
+    },
+    {
+      "name": "City of Toronto",
+      "base": "https://jobs.toronto.ca",
+      "default_location": "Toronto, ON"
     },
     {
       "name": "University of Toronto",
@@ -246,5 +270,24 @@
   ],
   "oracle": [],
   "jobvite": [],
-  "html": []
+  "html": [],
+  "taleo": [],
+  "wpjobs": [
+    {
+      "name": "David Aplin Group",
+      "base": "https://www.aplin.com",
+      "type": "job-listings"
+    },
+    {
+      "name": "Raise Recruiting",
+      "base": "https://raise.jobs",
+      "type": "matador-job-listings"
+    }
+  ],
+  "amazon": [
+    {
+      "name": "Amazon",
+      "country": "CAN"
+    }
+  ]
 }

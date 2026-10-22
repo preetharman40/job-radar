@@ -10,5 +10,5 @@ python3 job_radar.py \
   --min-score 8 \
   --max-age 30 \
   --notify --notify-min-score 15 \
-  --track --track-min-score 25 \
+  --track --track-min-score 15 \
   > /dev/null

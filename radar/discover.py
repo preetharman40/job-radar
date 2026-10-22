@@ -183,6 +183,226 @@ def fingerprint(url):
     return out
 
 
+# ------------------------------------------------------- posting url -> board --
+
+# An alert email links straight at the posting, and for most ATS products the
+# account token is right there in the path. That is what lets inbox.py grow the
+# board list: a company that emails you about one job hands you its whole board,
+# for free, with no probing and no guessing at name variants. It is also the only
+# expansion channel that is demand-driven - the companies that turn up are the
+# ones already sending you alerts for your titles in your geography.
+#
+# Three classes, and which one a URL falls into decides what happens next:
+#
+#   1. Invertible. The token IS a path segment, so the board is addable after a
+#      single confirming probe: greenhouse, lever, ashby, recruitee, rippling,
+#      smartrecruiters, jobvite, workday.
+#   2. Platform certain, token absent. A vanity careers domain carrying
+#      `gh_jid=` is Greenhouse without question - databricks.com and stripe.com
+#      both publish exactly that shape - and apply.workable.com/j/{id} names no
+#      account at all. These resolve with `discover.py --url` on the domain.
+#   3. Something else. Either not a third-party ATS, or one with no public JSON.
+#      manual_check.md exists for this class.
+#
+# Case is preserved deliberately. SmartRecruiters tokens appear uppercase in
+# posting URLs (jobs.smartrecruiters.com/ADVENS/743...) and its API is
+# case-sensitive, so lowercasing the token would produce a dead board that
+# looks fine in targets.json.
+
+# (platform, regex over "host/path"). First match wins, so the greenhouse embed
+# form is tried before the generic host rule.
+_INVERT = (
+    ("greenhouse",      r"^(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io/"
+                        r"(?!embed\b)([A-Za-z0-9._-]+)/jobs?/"),
+    ("lever",           r"^jobs\.lever\.co/([A-Za-z0-9._-]+)/"),
+    ("ashby",           r"^jobs\.ashbyhq\.com/([A-Za-z0-9._-]+)/"),
+    ("recruitee",       r"^([A-Za-z0-9-]+)\.recruitee\.com/"),
+    ("rippling",        r"^ats\.rippling\.com/([A-Za-z0-9._-]+)/jobs?/"),
+    ("smartrecruiters", r"^jobs\.smartrecruiters\.com/([A-Za-z0-9._-]+)/\d"),
+    ("jobvite",         r"^jobs\.jobvite\.com/([A-Za-z0-9._-]+)/job/"),
+)
+
+# Platform is certain, the account is not in the URL. Resolve with --url.
+_PARTIAL = (
+    ("greenhouse", r"[?&]gh_jid="),
+    ("greenhouse", r"greenhouse\.io/embed/job_app"),
+    ("workable",   r"^apply\.workable\.com/j/"),
+    ("icims",      r"\.icims\.com/"),
+    ("taleo",      r"\.taleo\.net/"),
+    ("dayforce",   r"\.dayforcehcm\.com/"),
+    ("njoyn",      r"njoyn\.com/"),
+    ("eightfold",  r"eightfold\.ai/"),
+    # Avature is reachable (job_radar has an adapter), but the account token is
+    # never in the posting URL: tenants serve from a vanity domain such as
+    # jobs.ea.com while the real tenant is ea.avature.net, and the adapter wants
+    # the locale-scoped careers ROOT, not a token. So this is a lead, not an
+    # inversion - .../careers/JobDetail/ is the shape to look for.
+    ("avature",    r"\.avature\.net/|/careers/JobDetail/"),
+    ("phenom",     r"[?&]ref=phenom|phenompeople"),
+)
+
+# Workday hands over tenant, cluster and site in one go, and unlike the token
+# platforms its targets.json entry is a dict. The locale segment is optional:
+# rbc.wd3.myworkdayjobs.com/en-US/RBC/job/... and .../RBC/job/... both occur.
+_TT = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9-]*)\.(?:[a-z]{2}\.)?teamtailor\.com/", re.I)
+
+_WD = re.compile(
+    r"^([A-Za-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com/"
+    r"(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)", re.I)
+
+# The query-string token forms. ?for= is greenhouse's embed parameter.
+_Q_TOKEN = (("greenhouse", "for"),)
+
+
+def board_from_url(url):
+    """Invert a public posting URL into a targets.json entry.
+
+    Returns (platform, target, note). `target` is a bare token string for the
+    token platforms and a dict for workday - exactly what targets.json holds for
+    that platform, so the caller can append it without reshaping. On failure
+    platform is "" and note says why, because "why not" is the useful half of
+    the output: it routes a URL to --url, to manual_check.md, or to the bin.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return "", None, "empty"
+    if "//" not in raw:
+        raw = "https://" + raw
+    try:
+        pr = urllib.parse.urlparse(raw)
+    except Exception as e:
+        return "", None, f"unparseable: {type(e).__name__}"
+    host = (pr.netloc or "").split("@")[-1].split(":")[0]
+    # Not host.lstrip("www.") - lstrip strips any leading w/./ character and
+    # would turn "wwa.example.com" into "a.example.com".
+    if host.lower().startswith("www."):
+        host = host[4:]
+    if not host:
+        return "", None, "no host"
+    hp = host + (pr.path or "/")
+
+    m = _WD.match(hp)
+    if m:
+        tenant, cluster, site = m.group(1).lower(), m.group(2).lower(), m.group(3)
+        return "workday", {"name": tenant, "tenant": tenant,
+                           "cluster": cluster, "site": site}, "tenant from url"
+
+    # Teamtailor puts the tenant in the subdomain, so a single posting URL
+    # yields the whole board. The region segment is part of it and must be kept:
+    # commonsku is commonsku.na.teamtailor.com, while European tenants have no
+    # region at all, so the base is rebuilt from the real host rather than
+    # assembled from the tenant name. Returns the dict shape targets.json holds.
+    m = _TT.match(hp)
+    if m:
+        return "teamtailor", {"name": m.group(1).lower(),
+                              "base": f"https://{m.group(0).split('/')[0]}"}, \
+            "tenant from subdomain"
+
+    for platform, rx in _INVERT:
+        m = re.match(rx, hp, re.I)
+        if m:
+            return platform, m.group(1), "token from url path"
+
+    q = urllib.parse.parse_qs(pr.query or "")
+    for platform, key in _Q_TOKEN:
+        v = (q.get(key) or [""])[0].strip()
+        if v and re.fullmatch(r"[A-Za-z0-9._-]+", v):
+            return platform, v, f"token from ?{key}="
+
+    for platform, rx in _PARTIAL:
+        if re.search(rx, hp + "?" + (pr.query or ""), re.I):
+            return "", None, (f"{platform}, but the account is not in the URL - "
+                              f"run: discover.py --url https://{host}/")
+    return "", None, f"no ATS signature in the URL - run: discover.py --url https://{host}/"
+
+
+def probe_board(platform, target):
+    """Count postings a candidate board returns. 0 means do not add it.
+
+    PROBES covers four platforms with one cheap request. For the rest, borrow
+    the radar's own adapter, so a candidate is validated by exactly the code
+    that will later poll it - a token that probes fine with a hand-rolled
+    request but throws inside fetch_smartrecruiters is worse than no token at
+    all, because it lands in targets.json and shows up as a board_health error
+    every half hour. Returns -1 when the platform cannot be validated here.
+    """
+    if platform in PROBES and isinstance(target, str):
+        try:
+            return PROBES[platform](target)
+        except Exception:
+            return 0
+    jr = _radar()
+    fn = getattr(jr, "fetch_" + platform, None) if jr else None
+    if not fn:
+        return -1
+    t = dict(target) if isinstance(target, dict) else target
+    if isinstance(t, dict):
+        # Workday/SuccessFactors/Oracle adapters are keyword-driven and return
+        # nothing without a query, so a live tenant would look dead.
+        t.setdefault("_query", "engineer")
+    try:
+        return len(fn(t))
+    except Exception:
+        return 0
+
+
+def _radar():
+    """Import job_radar lazily, and only once.
+
+    discover.py has to keep working when the engine does not - diagnosing a
+    broken adapter is exactly when you reach for it - so this never raises.
+    """
+    if _radar.mod is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "job_radar", os.path.join(HERE, "job_radar.py"))
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+            _radar.mod = mod
+        except Exception:
+            _radar.mod = False
+    return _radar.mod or None
+
+
+_radar.mod = None
+
+
+def add_boards(targets_path, found):
+    """Append confirmed boards to targets.json. Returns the list actually added.
+
+    Writes through a temp file and os.replace: targets.json is read by every
+    cron tick, and a sweep that starts mid-write gets a truncated file and
+    sweeps nothing.
+    """
+    tg = json.load(open(targets_path))
+    added = []
+    for platform, target in found:
+        lst = tg.setdefault(platform, [])
+        if isinstance(target, dict):
+            if any(isinstance(x, dict)
+                   and x.get("tenant") == target.get("tenant")
+                   and x.get("site") == target.get("site") for x in lst):
+                continue
+        elif target in lst:
+            continue
+        lst.append(target)
+        added.append((platform, target))
+    if not added:
+        return []
+    for platform in {p for p, _ in added}:
+        lst = tg[platform]
+        if all(isinstance(x, str) for x in lst):
+            tg[platform] = sorted(set(lst), key=str.lower)
+    tmp = targets_path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(tg, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, targets_path)
+    return added
+
+
 # ---------------------------------------------------------------------- cli --
 
 def main():

@@ -1,18 +1,50 @@
 # radar/
 
-Scripts only. **The full manual is one level up: `../README.md`.**
+Scripts only. **The full manual is one level up: [`../README.md`](../README.md).**
 
-    cd ~/devops/jobs/radar && ./daily.sh
+```bash
+cd ~/devops/jobs/radar
+python3 job_radar.py --seed     # first run ever: record state, print nothing
+./daily.sh                      # from then on: what is new
+python3 serve.py                # web view on :8737
+```
 
 | Script | Purpose |
 |---|---|
-| `daily.sh` | The one command you run each morning |
-| `job_radar.py` | The engine — polls 374 boards, filters, scores, reports |
-| `discover.py` | Identify one company's ATS · `--verify` prunes dead boards |
-| `harvest.py` | Add boards in bulk from company names |
-| `hunt.py` | Add Workday / SuccessFactors tenants |
+| `job_radar.py` | The engine — 20 ATS adapters, 469 boards, filters, scoring, output |
+| `fast.sh` | Cron lane 1: the 60 productive boards, every 5 min |
+| `daily.sh` | Cron lane 2: all 469 boards, every 30 min |
+| `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
+| `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
+| `backup.sh` | Daily snapshot of the three unregeneratable files |
+| `board_health.py` | Boards that quietly stopped returning jobs |
+| `verify_tracked.py` | Are the tracked postings still open |
+| `ratecheck.py` | Did the Workday burst cap hold |
+| `purge_expired.py` | Delete dead postings — keeps anything already applied to |
+| `prune_live.py` | Bound the `live` table — 60-day retention, weekly via cron |
+| `discover.py` | Fingerprint one company's ATS · `--verify` prunes dead boards |
+| `harvest.py` | Bulk: company names → boards |
+| `hunt.py` | Workday / SuccessFactors tenants |
+| `agencies.txt` | Curated staffing-firm list, input for `harvest.py` |
 | `canada_employers.py` | Which companies can legally employ you in Canada |
-| `targets.json` | 374 boards + 85 DevOps-vendor tags |
-| `seen.sqlite3` | Local state — delete and re-`--seed` to reset |
+| `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot, and `--boards` turns each alert into new targets. Runs daily 19:52 with `--notify` |
+| `hn.py` | Hacker News "Who is hiring?" |
+| `signals.py` | Funding rounds, before the requisition exists |
+
+| Data | |
+|---|---|
+| `targets.json` | 469 boards + 85 DevOps-vendor tags |
+| `fast.json` | The productive subset — generated, not hand-edited |
+| `seen.sqlite3` | Local memory. Delete and re-`--seed` to reset. |
+| `.ntfy_topic` | Push topic — **this string is a password** |
+| `inbox.json` | IMAP **app password** |
+
+Two traps worth knowing before you run anything:
+
+- **`--all` without `--track` consumes postings** into `seen`, so cron will
+  never notify you about them again.
+- **Never start both cron lanes on the same minute.** The Workday burst
+  semaphore is per process; colliding lanes caused 285 rate-limit errors in a
+  day. They are offset to `:07/:37` deliberately.
 
 Every script takes `--help`. No dependencies, Python 3.8+.
