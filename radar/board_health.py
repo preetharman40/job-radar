@@ -33,6 +33,15 @@ import job_radar as jr  # noqa: E402
 # How many consecutive zero samples before it counts as a regression. One zero
 # could be a blip; three in a row on a board with history is a broken parser.
 ZEROES_BEFORE_ALERT = 3
+# A board whose best-ever count was 1 or 2 going quiet is a small employer with
+# nothing open, not a broken adapter. Alerting on those teaches you to ignore
+# the monitor - 35 of the tracked boards have a best_count of 1-2, so each would
+# eventually fire the same false alarm. greenhouse/community (Rome Community
+# Partners: one posting, never produced a match) was the first to do it.
+MIN_BEST_TO_ALERT = 3
+# A deleted board token 404s forever. Three strikes is enough to tell that from
+# a transient network failure.
+ERRORS_BEFORE_ALERT = 3
 DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html")
 
 
@@ -99,37 +108,75 @@ def main():
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     prior = {b: (best, z) for b, best, z in
              conn.execute("SELECT board, best_count, zeroes FROM board_health")}
-    regressed, new_zero = [], 0
+    regressed, broken, new_zero = [], [], 0
+    prior_err = {b: e for b, e in
+                 conn.execute("SELECT board, COALESCE(errors,0) FROM board_health")}
     for src, name, n, err in results:
         key = f"{src}/{name}"
         best, zeroes = prior.get(key, (0, 0))
-        if n is None:                      # fetch error - not a parser problem
+        if n is None:
+            # A fetch error used to `continue` - deliberately, so one network
+            # blip could not look like a dead parser. But a board whose token
+            # has been deleted answers 404 forever, and `continue` meant it was
+            # never counted, never alerted, and silently polled for weeks. Four
+            # Greenhouse boards (amplitude, civicplus, enthought, linkedin) sat
+            # 404ing and were only found by reading the sweep's footer by hand.
+            # Count consecutive errors instead and alert once it is clearly not
+            # a blip. A single bad run still resets on the next success.
+            errs = prior_err.get(key, 0) + 1
+            if errs >= ERRORS_BEFORE_ALERT:
+                broken.append((key, err or "fetch error", errs))
+            conn.execute("INSERT INTO board_health(board,platform,last_count,"
+                         "best_count,zeroes,checked,errors) VALUES(?,?,?,?,?,?,?) "
+                         "ON CONFLICT(board) DO UPDATE SET errors=excluded.errors,"
+                         "checked=excluded.checked",
+                         (key, src, 0, best, zeroes, now, errs))
             continue
         if n > 0:
             best, zeroes = max(best, n), 0
         else:
             zeroes += 1
             new_zero += 1
-            if best > 0 and zeroes >= ZEROES_BEFORE_ALERT:
+            if best >= MIN_BEST_TO_ALERT and zeroes >= ZEROES_BEFORE_ALERT:
                 regressed.append((key, best, zeroes))
-        conn.execute("INSERT INTO board_health VALUES(?,?,?,?,?,?) "
+        # Name the columns. A bare VALUES(...) broke the moment `errors` was
+        # added to the table.
+        conn.execute("INSERT INTO board_health"
+                     "(board,platform,last_count,best_count,zeroes,checked,errors) "
+                     "VALUES(?,?,?,?,?,?,0) "
                      "ON CONFLICT(board) DO UPDATE SET last_count=excluded.last_count,"
                      "best_count=excluded.best_count, zeroes=excluded.zeroes,"
-                     "checked=excluded.checked",
+                     "checked=excluded.checked, errors=0",
                      (key, src, n, best, zeroes, now))
     conn.commit()
 
-    print(f"  sampled {len(results)} boards · {new_zero} returned zero · "
+    n_err = sum(1 for r in results if r[2] is None)
+    print(f"  sampled {len(results)} boards · {n_err} fetch errors · "
+          f"{new_zero} returned zero · "
           f"{len(regressed)} regressed")
     for key, best, z in regressed:
         print(f"  !! REGRESSED {key} - used to return {best}, now 0 "
               f"for {z} consecutive checks")
-    if regressed and a.notify:
+    if broken:
+        print(f"  !! {len(broken)} board(s) failing to fetch for "
+              f"{ERRORS_BEFORE_ALERT}+ consecutive checks - the token is "
+              f"probably gone, prune them:")
+        for k, e, n in broken[:12]:
+            print(f"     {k:34} {e} (x{n})")
+
+    if (regressed or broken) and a.notify:
         topic = jr.ntfy_topic()
         if topic:
-            body = "\n".join(f"{k} (was {b})" for k, b, _ in regressed[:10])
-            jr.notify([{"score": 0, "title": f"{len(regressed)} board(s) stopped returning jobs",
-                        "company": "board health", "location": body[:60], "age": None,
+            lines = [f"{k} (was {b})" for k, b, _ in regressed[:6]]
+            lines += [f"{k} ERR {e}" for k, e, _ in broken[:6]]
+            what = []
+            if regressed:
+                what.append(f"{len(regressed)} stopped returning jobs")
+            if broken:
+                what.append(f"{len(broken)} failing to fetch")
+            jr.notify([{"score": 0, "title": "board health: " + ", ".join(what),
+                        "company": "board health",
+                        "location": "; ".join(lines)[:60], "age": None,
                         "kw": [], "family": "devops", "url": ""}], topic)
     return 0
 

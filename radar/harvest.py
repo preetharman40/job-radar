@@ -216,7 +216,10 @@ def main():
     if a.names:
         names += a.names
     if a.file:
-        names += [l.strip() for l in open(a.file) if l.strip()]
+        # Skip blanks and `#` comments. A curated list is worth annotating,
+        # and without this the header comment itself became a probe token.
+        names += [l.strip() for l in open(a.file)
+                  if l.strip() and not l.lstrip().startswith("#")]
     if a.wiki:
         got = names_from_wikipedia(a.wiki, a.limit)
         print(f"  {len(got)} names from {a.wiki}")

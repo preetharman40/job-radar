@@ -5,7 +5,7 @@ verified reason — not because nobody tried. Budget ~10 minutes, once a week,
 same cadence as the radar. Links go straight to a filtered search, so this is
 click-and-scan, not a hunt.
 
-Last verified: 2026-09-18
+Last verified: 2026-10-21
 
 ---
 
@@ -46,6 +46,7 @@ sitemap-diffing fallback (§2 of the guide) doesn't reach them.
 | UHN | https://www.uhn.ca/corporate/Careers | sitemap exists, 2 URLs, no jobs |
 | SickKids | https://www.sickkids.ca/en/careers-volunteer/careers/ | Toronto |
 | Ontario Public Service | https://www.gojobs.gov.on.ca/Search.aspx | Custom portal; huge IT org |
+| Dexter Talent | https://dextertalent.com/ | Staffing agency; surfaced a Calgary Senior Cloud Engineer via LinkedIn alert 2026-10-21. Fingerprinted: HTTP 200, no ATS signature of any of the 19 platforms. Agencies mostly sit on recruiting CRMs (Bullhorn, JobAdder) that publish no public feed — see the agency finding in ARCHITECTURE.md. |
 
 ---
 

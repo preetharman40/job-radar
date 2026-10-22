@@ -88,30 +88,35 @@
     "zscaler"
   ],
   "greenhouse": [
+    "appnovation",
     "beyondtrust",
-    "braze",
-    "censys",
+    "chainguard",
+    "dropbox",
     "elastic",
     "gitlab",
     "globalrelay",
-    "instacart",
-    "jfrog",
-    "mercury",
+    "later",
+    "okta",
     "pagerduty",
-    "stackadapt"
+    "stay22",
+    "tailscale",
+    "zscaler"
   ],
   "lever": [
+    "crypto",
     "eqbank",
-    "magnetforensics",
     "pointclickcare",
-    "waabi"
+    "sophos",
+    "telesat"
   ],
   "ashby": [
     "1password",
-    "clickhouse",
+    "airbyte",
+    "camunda",
+    "coder",
     "cohere",
     "docker",
-    "jobber",
+    "influxdata",
     "klue",
     "lightspeedhq",
     "sentry",
@@ -123,12 +128,12 @@
     "mlabs"
   ],
   "smartrecruiters": [
-    "AmericanIronandMetal",
     "AristaNetworks",
+    "Dexterra",
+    "EgisGroup",
     "GDMSI",
     "Medfar",
-    "REXEL1",
-    "Scalian"
+    "Ubisoft2"
   ],
   "workday": [
     {
@@ -223,24 +228,23 @@
       "country_facet": null
     },
     {
-      "name": "AIMCo",
-      "tenant": "aimco",
-      "cluster": "wd10",
-      "site": "AIMCoCareers"
+      "name": "Recurrent Energy",
+      "tenant": "recurrentenergy",
+      "cluster": "wd12",
+      "site": "RecurrentEnergy"
     }
   ],
   "phenom": [
     {
-      "name": "City of Edmonton",
-      "base": "https://recruitment.edmonton.ca",
-      "default_location": "Edmonton, AB"
+      "name": "Bell",
+      "base": "https://jobs.bell.ca/ca/en"
+    },
+    {
+      "name": "Just Eat Takeaway / SkipTheDishes",
+      "base": "https://careers.justeattakeaway.com/global/en"
     }
   ],
   "successfactors": [
-    {
-      "name": "Rogers",
-      "base": "https://jobs.rogers.com"
-    },
     {
       "name": "Scotiabank",
       "base": "https://jobs.scotiabank.com"
@@ -250,6 +254,11 @@
       "base": "https://jobs.canadalife.com"
     },
     {
+      "name": "City of Toronto",
+      "base": "https://jobs.toronto.ca",
+      "default_location": "Toronto, ON"
+    },
+    {
       "name": "University of Toronto",
       "base": "https://jobs.utoronto.ca",
       "default_location": "Toronto, ON"
@@ -257,20 +266,28 @@
     {
       "name": "Celestica",
       "base": "https://careers.celestica.com"
-    },
-    {
-      "name": "Imperial Oil",
-      "base": "https://jobs.exxonmobil.com",
-      "default_location": "Canada"
-    },
-    {
-      "name": "Government of Alberta",
-      "base": "https://jobpostings.alberta.ca",
-      "default_location": "Alberta, Canada"
     }
   ],
   "oracle": [],
   "jobvite": [],
   "html": [],
-  "taleo": []
+  "taleo": [],
+  "wpjobs": [
+    {
+      "name": "David Aplin Group",
+      "base": "https://www.aplin.com",
+      "type": "job-listings"
+    },
+    {
+      "name": "Raise Recruiting",
+      "base": "https://raise.jobs",
+      "type": "matador-job-listings"
+    }
+  ],
+  "amazon": [
+    {
+      "name": "Amazon",
+      "country": "CAN"
+    }
+  ]
 }

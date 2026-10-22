@@ -44,10 +44,33 @@ RETRIES = 3
 PAGE_TIMEOUT = 35     # some careers pages are genuinely slow (Global Relay)
 
 # Text that means "this posting is closed", not "the server is unhappy".
+#
+# `not found` used to be a bare alternative here and it was wrong in the worst
+# possible way: it fired on EVERY amazon.jobs page, live or closed, because the
+# page ships this telemetry boilerplate -
+#   /Object Not Found Matching Id:\d+, MethodName:\w+, ParamCount:\d+/
+# so every Amazon posting was marked gone forever. The AFT req that prompted
+# the Amazon adapter sat at misses=50 - fifty consecutive "gone" verdicts,
+# never once seen open - while the page returned HTTP 200 with its real title.
+# It was one `purge_expired.py --yes` away from being deleted out of the
+# tracker as a dead link, along with a second live Amazon req.
+#
+# Two changes, because either alone is insufficient:
+#  1. `not found` now requires a noun it could plausibly be about, so a
+#     JavaScript error string no longer qualifies.
+#  2. The search runs on script- and style-stripped HTML (see _closed_text).
+#     Closed-posting language is something a human reads on the page; it does
+#     not live in a <script> block, and matching inside one is always a bug.
 CLOSED = re.compile(
     r"no longer (accepting|available|open)|position (has been )?(filled|closed)|"
-    r"posting (has )?(expired|closed)|job (is )?no longer|not found|"
+    r"posting (has )?(expired|closed)|job (is )?no longer|"
+    r"(job|posting|position|page|vacancy|requisition) not found|"
     r"this job is closed", re.I)
+
+
+def _closed_text(html):
+    """HTML with <script>/<style> removed, for CLOSED to search."""
+    return jr._SCRIPT.sub(" ", jr._COMMENT.sub(" ", html or ""))
 
 
 def db():
@@ -136,7 +159,7 @@ def _check_once(url):
     # Everything else: fetch the page and look for closed-posting language.
     try:
         html = jr._get_text(url, timeout=PAGE_TIMEOUT)
-        if CLOSED.search(html[:60000]):
+        if CLOSED.search(_closed_text(html)[:60000]):
             return "gone", "closed-posting text"
         return ("open", "page loads") if len(html) > 1500 else ("unknown", "thin page")
     except urllib.error.HTTPError as e:

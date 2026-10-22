@@ -113,10 +113,30 @@ SKILLS = {
 L_EXEC = re.compile(
     r"\b(staff|principal|distinguished|architect|director|head\s+of|"
     r"vp\b|vice\s+president|manager|lead\b|fellow)\b", re.I)
+# "Senior Associate" is a MID rank on the banking ladder - Analyst, Associate,
+# Senior Associate, then VP - not a senior engineer. L_SENIOR is tested before
+# L_ENTRY, so "Sr Associate Platform Engineer" came out `senior`, and the web
+# app's default view hides senior. A score-36 Scotiabank role was invisible
+# while its notification had already reached the phone, which is exactly the
+# "I got a push but cannot find it" report. Checked ahead of L_SENIOR.
+L_SENIOR_ASSOC = re.compile(r"\b(senior|sr\.?)\s+associate\b", re.I)
 L_SENIOR = re.compile(r"\b(senior|sr\.?|iii|iv)\b", re.I)
+# Engineering-ladder numerals: I is entry, II is MID, III/IV are senior.
+# "ii" sat in L_ENTRY until 2026-10-22, so every "Engineer II" came out
+# entry-level and collected the +4 entry bonus in score() that belongs to
+# genuinely junior reqs. commonsku's DevOps Engineer II scored 43 as entry
+# and scores 41 as mid, which is the more honest number for a role a rung
+# up the ladder. A numeral never overrides a seniority WORD: L_SENIOR runs
+# first, so "Senior Software Engineer II" stays senior, and "Specialist
+# II-IC ... (New or Recent Graduate)" stays entry on `graduate`. Of the 12
+# "II" titles seen so far, 9 move entry -> mid and all 9 read correctly as
+# mid - one of them literally says "Intermediate Infrastructure Analyst".
+# Bare digits are deliberately NOT handled: "Engineer 2" already falls to
+# the mid default, while a bare \b1\b would also match requisition numbers
+# that some boards append to the title.
 L_ENTRY = re.compile(
     r"\b(junior|jr\.?|associate|entry[\s-]?level|graduate|new\s+grad|"
-    r"early\s+career|tier\s*1|t1|l1|level\s*1|\bi\b|\bii\b)\b", re.I)
+    r"early\s+career|tier\s*1|t1|l1|level\s*1|\bi\b)\b", re.I)
 L_INTERN = re.compile(r"\b(intern|internship|co-?op|student|placement)\b", re.I)
 
 
@@ -126,6 +146,8 @@ def level_of(title):
         return "intern"
     if L_EXEC.search(t):
         return "exec"
+    if L_SENIOR_ASSOC.search(t):
+        return "mid"
     if L_SENIOR.search(t):
         return "senior"
     if L_ENTRY.search(t):
@@ -367,14 +389,39 @@ def _get_text(url, timeout=25):
 _TAG = re.compile(r"<[^>]+>")
 _ENT = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'",
         "&nbsp;": " ", "&rsquo;": "'", "&ndash;": "-", "&mdash;": "-"}
+_NUM_ENT = {"&#8211;": "-", "&#8212;": "-", "&#8217;": "'", "&#8216;": "'",
+            "&#8220;": '"', "&#8221;": '"', "&#160;": " ", "&#8230;": "...",
+            "&#x27;": "'", "&#x2019;": "'"}
+
+
+# <script> and <style> bodies are not markup - the tag stripper turns them into
+# prose. A Global Relay posting came back as 25,588 characters of Google Tag
+# Manager config and IE11 polyfills with the words "Kubernetes",
+# "responsibilities" and "qualifications" appearing exactly zero times; the real
+# description started past character 20,000. Anything reading these blobs - the
+# radar's skill scoring, gaps.py, tailor.py - was reading JavaScript.
+_SCRIPT = re.compile(r"(?is)<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>")
+_COMMENT = re.compile(r"(?s)<!--.*?-->")
 
 
 def strip_html(h):
     if not h:
         return ""
+    h = _SCRIPT.sub(" ", h)
+    h = _COMMENT.sub(" ", h)
     t = _TAG.sub(" ", h)
     for k, v in _ENT.items():
         t = t.replace(k, v)
+    # Numeric entities survived this stripper until now, so WordPress REST
+    # titles came through as "Business Analyst &#8211; Senior" - visible in the
+    # tracker and in push notifications. _ENT deliberately folds dashes and
+    # quotes to ASCII, so fold the numeric spellings the same way rather than
+    # letting html_unescape turn them into real en-dashes, then unescape
+    # whatever is left (&amp;#x27;, &hellip;, named entities not in _ENT).
+    for k, v in _NUM_ENT.items():
+        t = t.replace(k, v)
+    if "&" in t:
+        t = html_unescape(t)
     return re.sub(r"\s+", " ", t)
 
 
@@ -580,13 +627,79 @@ WD_QUERIES = ["devops", "site reliability", "platform engineer", "cloud engineer
 # A semaphore per tenant caps the burst without serialising it completely;
 # full serialisation would be far too slow, since one RBC query alone can take
 # 13s. Different tenants still run fully in parallel.
-# 6 halves the worst-case burst (13 concurrent -> 6) for about 10s of sweep
-# time; 3 costs 47s for little extra safety. Tuning this empirically is not
-# possible in isolation - Workday only throttles when something else is hitting
-# the same tenant at the same moment, so a quiet test returns 0 at every value.
-WD_TENANT_BURST = 6
+# This semaphore is PER PROCESS, which is the trap. fast.sh and daily.sh are
+# separate processes, so a cap of 6 allowed 6 concurrent requests each - 12 to
+# the same tenant whenever the two lanes overlapped. After the cron window was
+# widened to 7-19 daily, radar.log showed 285 rate-limit errors on Sunday alone,
+# clustered precisely at :01 and :31 (5.4 and 7.3 per sweep) while every other
+# cron slot sat near zero. Ledcor, Moneris and Interac took the worst of it, and
+# all three produce matches, so the throttling was costing real postings.
+#
+# Two fixes together: the lanes are now offset in cron (daily.sh at :07/:37) so
+# they never start at the same minute, and this drops to 3 - which measured 0
+# errors in testing, and leaves headroom of 6 even if the two lanes do collide.
+# The cost is about 47s on a full sweep, which a 30-minute cadence absorbs.
+WD_TENANT_BURST = 3
 _WD_SEM = {}
 _WD_SEM_LOCK = threading.Lock()
+
+# Workday hard-caps `limit` at 20 and answers HTTP 400 Bad Request above it -
+# loudly, unlike Amazon's result_limit=500 returning hits:0 or SmartRecruiters'
+# totalFound:0 - so paging is the only way to read a board past 20 rows.
+#
+# This used to be `while offset < 40`, a blind two-page ceiling, which silently
+# truncated every query with more than 40 Canadian hits. Measured on the day it
+# was fixed: Manulife lost rows on 4 of 13 queries (automation engineer 61,
+# support engineer 59, platform engineer 50, systems engineer 41) and RBC on 6
+# of 13 (support engineer 93, modern workplace 80, platform engineer 70, systems
+# engineer 65, automation engineer 60, cloud engineer 42). A req whose title and
+# description miss all 13 WD_QUERIES terms was unreachable regardless, but one
+# that merely ranked 41st for a broad term was being dropped for no reason.
+#
+# Paging to `total` costs less than it looks, because the old code also fetched
+# a pointless second page whenever total was 21+: Manulife goes 18 -> 22
+# requests and RBC 22 -> 31. It adds no burst pressure either, since _wd_sem is
+# held across the whole function, so extra pages lengthen one slot rather than
+# widening concurrency against a tenant that rate-limits per tenant.
+# The list call collapses a multi-location requisition to the literal string
+# "2 Locations" / "3 Locations", with no city anywhere in the row. That string
+# classifies as MULTI and is KEPT, which is the right default - it might include
+# Canada - but it means a req open only in Bratislava and Madrid arrives looking
+# like a candidate, and the digest shows "2 Locations" where a city belongs.
+#
+# The detail call (already fetched by the hydrate pass, so this costs nothing
+# extra) carries the real set: jobPostingInfo.location is the primary and
+# .additionalLocations is the rest. So the placeholder is repaired in hydrate
+# and the geography fields derived from it in pass 1 are recomputed, rather than
+# guessing a city out of the externalPath slug - a slug cannot be split
+# reliably, since the hyphen is both the separator and part of real names
+# ("Toronto-Ontario" vs "Los-Angeles-Del-Rey" vs "Saint-Laurent").
+WD_NLOC = re.compile(r"^\s*\d+\s+Locations?\s*$", re.I)
+
+WD_PAGE = 20
+# 300 rows per query, overridable per target with "max_pages".
+#
+# Sized from the deepest query on each large tenant: TD Bank 123 ("platform
+# engineer"), RBC 93, BMO 84, Thomson Reuters 67, Manulife 61 - so 7 pages
+# covers every tenant whose search actually discriminates, and 15 leaves room.
+#
+# CIBC is the one board that exceeds it, and deliberately is not chased. Its
+# searchText works (devops -> 5, a nonsense term -> 0) but "linux" matches 489
+# of its 490 Canadian reqs, because the word sits in CIBC's posting boilerplate
+# rather than in 489 Linux jobs - page one of that query is Mobile Mortgage
+# Advisors. Raising the global ceiling to 25 to swallow it would add ~130
+# requests a sweep to read retail-banking listings that title_match rejects at
+# tier 0, while the DevOps-titled CIBC reqs are already reachable through the
+# cheap "devops" query. So CIBC reports a truncation every sweep and that is the
+# correct outcome, not a bug to silence - and if a tenant ever genuinely needs
+# deeper paging, give that one target "max_pages" instead of moving this.
+WD_MAX_PAGES = 15
+
+# Queries that hit WD_MAX_PAGES with rows still unread. Silent truncation is the
+# bug being fixed here, so hitting the new ceiling is recorded and surfaced in
+# the run footer instead of being swallowed a second time.
+WD_TRUNCATED = []
+_WD_TRUNC_LOCK = threading.Lock()
 
 
 def _wd_sem(tenant):
@@ -612,9 +725,18 @@ def fetch_workday(t):
         name = t.get("name", tenant)
         query = t.get("_query", "")
 
-        out, offset = [], 0
-        while offset < 40:            # 2 pages per query
-            d = _req(api, {"appliedFacets": applied, "limit": 20,
+        # An explicit per-target max_pages is a DELIBERATE shallow read, so it
+        # must not be reported as accidental truncation. PwC is the case this
+        # exists for: it has no country facet, so every query searches 3,859
+        # global reqs and four of them hit the ceiling. Warning about that every
+        # half hour would train the reader to ignore WD_TRUNCATED, which is the
+        # register that caught CIBC. Only the global default warns.
+        want = t.get("max_pages")
+        max_pages = int(want or WD_MAX_PAGES)
+        shallow_by_choice = bool(want)
+        out, offset, total = [], 0, None
+        for _ in range(max_pages):
+            d = _req(api, {"appliedFacets": applied, "limit": WD_PAGE,
                            "offset": offset, "searchText": query})
             posts = d.get("jobPostings", [])
             if not posts:
@@ -627,10 +749,24 @@ def fetch_workday(t):
                                j.get("postedOn", ""), wd_age(j.get("postedOn")),
                                f"{j.get('title','')} {loc} {j.get('remoteType','')}",
                                hyd=("workday", f"{base}/wday/cxs/{tenant}/{site}{path}")))
-            # `total` is reported only on page 1; later pages say 0.
-            if offset == 0 and d.get("total", 0) <= 20:
+            # `total` is reported only on page 1; later pages say 0, so capture
+            # it once and page to it instead of guessing a ceiling.
+            if total is None:
+                total = d.get("total") or 0
+            offset += WD_PAGE
+            # A short page is the end of the result set whatever `total` says -
+            # checked first so a tenant that omits or zeroes `total` still pages
+            # correctly rather than stopping after one page.
+            if len(posts) < WD_PAGE:
                 break
-            offset += 20
+            if total and offset >= total:
+                break
+        else:
+            if total and total > offset and not shallow_by_choice:
+                with _WD_TRUNC_LOCK:
+                    WD_TRUNCATED.append(
+                        f"workday/{name} · {query!r}: read {offset} of {total} "
+                        f"({max_pages} pages)")
         return out
 
 
@@ -702,6 +838,7 @@ def fetch_phenom(t):
                            " ".join([j.get("title", ""), loc,
                                      j.get("category", "") or "",
                                      (j.get("descriptionTeaser") or "")[:1500]]),
+                           hyd=("phenom", f"{base}/job/{jid}/"),
                            updated=reposted if reposted != created else ""))
         frm += 10
         if total and frm >= total:
@@ -886,6 +1023,409 @@ def fetch_jobvite(t):
         out.append(job("jobvite", name, title, loc or t.get("default_location", ""),
                        full, "", None, f"{title} {loc}",
                        hyd=("jobvite", full)))
+    return out
+
+
+# --- Job Bank (Government of Canada) ----------------------------------------
+# The federal board, and the only source here that is neither an ATS product nor
+# an employer's own site. No JSON, no RSS (tried /jobsearch/rss and
+# /sitemap.xml - both 404), so the search results page is parsed. The markup is
+# server-rendered and stable: one <article id="article-{id}"> per posting with
+# .noctitle, .date, .business and .location in a definition list.
+#
+# robots.txt is `User-agent: * / Crawl-delay: 5` - fully permissive and the only
+# host here that asks for a delay, so it gets one. Requests are serialised
+# through _jb_wait() with a 5s minimum gap, shared by the list AND hydrate
+# passes, because the courtesy is per host and not per code path. That is why
+# this is a single task issuing its queries in sequence rather than one task per
+# query like Workday: fanning it out would mean parallel hits on a host that
+# explicitly asked us not to.
+#
+# Three traps, all of which would have been silent:
+#  1. jsessionid is IN THE PATH, not a query parameter -
+#     /jobsearch/jobposting/50534243;jsessionid=656BB06A...jobsearch76 - and it
+#     rotates per visit. Left in, every sweep would see a brand-new URL for the
+#     same posting, so `seen` would never match and the same job would notify
+#     forever. JB_SESS strips it, leaving /jobsearch/jobposting/{id}.
+#  2. Dates are localised English month names ("October 06, 2026"), the exact
+#     trap documented for Amazon: strptime("%B") is locale-dependent and cron
+#     runs with a minimal environment, so it would work by hand and fail on
+#     every scheduled sweep. _amz_date already maps the months by hand, so it is
+#     reused rather than reimplemented.
+#  3. The location cell carries a screen-reader label, so strip_html yields
+#     "Location Toronto (ON)". The leading word has to come off or the string
+#     stops classifying.
+#
+# Measured 2026-10-21: "devops" returns 5 results Canada-wide (the page's own
+# results-summary agrees, so that is the whole set, not a page), "site
+# reliability engineer" and "cloud infrastructure" return 0, "linux
+# administrator" returns 10, and NONE of them had an Alberta posting. Job Bank
+# is overwhelmingly trades and service work - a location-only query returns
+# cooks and diesel mechanics - so this board is kept for completeness and
+# because its inventory changes, not because it is expected to carry the search.
+JB_BASE = "https://www.jobbank.gc.ca"
+# "systems administrator" was in this list for one run and is deliberately out.
+# It was the single biggest source of rows and almost all of them were the IT
+# sysadmin work this search is explicitly not looking for: 14 of the 17
+# Infra-adjacent matches it produced were "network system administrator" or
+# "information technology (it) system administrator" at scores 11-13, four of
+# them the same employer posting the same role four times, and one crossed the
+# tracking threshold at 15 and would have been filed. Job Bank's title
+# vocabulary is NOC-derived, so that query maps onto help-desk and desktop work
+# rather than platform work. The DevOps-shaped queries below find the real roles
+# on this board without it.
+JB_QUERIES = ["devops", "site reliability", "cloud engineer", "linux",
+              "platform engineer"]
+JB_DELAY = 5.0
+
+JB_ROW = re.compile(r'<article id="article-\d+".*?</article>', re.S)
+JB_LINK = re.compile(r'href="(/jobsearch/jobposting/[^"]+)"')
+JB_TITLE = re.compile(r'class="noctitle">(.*?)</span>', re.S)
+JB_DATE = re.compile(r'class="date">(.*?)</li>', re.S)
+JB_BIZ = re.compile(r'class="business">(.*?)</li>', re.S)
+JB_LOC = re.compile(r'class="location">(.*?)</li>', re.S)
+JB_SAL = re.compile(r'class="salary">(.*?)</li>', re.S)
+JB_SESS = re.compile(r";jsessionid=[^?#]*")
+
+_JB_LOCK = threading.Lock()
+_JB_LAST = [0.0]
+
+
+def _jb_wait():
+    """Honour robots.txt Crawl-delay: 5 across every Job Bank request."""
+    with _JB_LOCK:
+        gap = time.time() - _JB_LAST[0]
+        if gap < JB_DELAY:
+            time.sleep(JB_DELAY - gap)
+        _JB_LAST[0] = time.time()
+
+
+def fetch_jobbank(t):
+    name = t.get("name", "Job Bank")
+    queries = t.get("queries") or JB_QUERIES
+    out, seen = [], set()
+    for q in queries:
+        _jb_wait()
+        url = (f"{JB_BASE}/jobsearch/jobsearch?sort=M&searchstring="
+               + urllib.parse.quote(q))
+        try:
+            h = _get_text(url)
+        except Exception:
+            continue
+        for row in JB_ROW.findall(h):
+            lk = JB_LINK.search(row)
+            ti = JB_TITLE.search(row)
+            if not lk or not ti:
+                continue
+            path = JB_SESS.sub("", lk.group(1)).split("?")[0]
+            full = JB_BASE + path
+            if full in seen:
+                continue
+            seen.add(full)
+            title = strip_html(ti.group(1)).strip()
+            if not title:
+                continue
+            loc = strip_html(JB_LOC.search(row).group(1)) if JB_LOC.search(row) else ""
+            # strip_html leaves the screen-reader label in front of the city
+            loc = re.sub(r"^\s*Location\s+", "", loc).strip()
+            comp = strip_html(JB_BIZ.search(row).group(1)).strip() \
+                if JB_BIZ.search(row) else ""
+            raw_date = strip_html(JB_DATE.search(row).group(1)).strip() \
+                if JB_DATE.search(row) else ""
+            posted = _amz_date(raw_date) or ""
+            sal = strip_html(JB_SAL.search(row).group(1)).strip() \
+                if JB_SAL.search(row) else ""
+            out.append(job("jobbank", comp or name, title, loc, full,
+                           posted, days_ago(posted),
+                           " ".join(filter(None, [title, loc, comp, sal])),
+                           hyd=("jobbank", full)))
+    return out
+
+
+# --- UltiPro / UKG Recruiting ------------------------------------------------
+# UKG's board is a JSON POST endpoint, not a REST GET:
+#   POST {board}/JobBoardView/LoadSearchResults
+#   {"opportunitySearch": {"Top": N, "Skip": M, "QuerySort": [],
+#     "OpportunityFilter": {...}}}
+# and `board` is the whole prefix including the company code and the board GUID,
+# e.g. https://recruiting.ultipro.ca/HAV5100HBANK/JobBoard/<guid>. The GUID is
+# not derivable - it has to be read off the employer's careers page - and the
+# host is .ca or .com depending on which UKG region the tenant sits in, so the
+# base belongs in targets.json verbatim rather than being assembled.
+#
+# Paging advances by len(opportunities), NOT by the requested Top. `Top` was
+# honoured on the tenant tested (Top=5 gave 5, Top=1000 gave all 17), but if a
+# tenant ever capped it server-side, advancing Skip by the asked-for size would
+# step straight over the rows that were not returned - a silent hole in the
+# middle of the board rather than a short read at the end. `totalCount` is
+# returned on every page here (unlike Workday, which gives it only on page one),
+# so it is the authoritative stop.
+#
+# LOCATION TRAP: do not build the location from `LocalizedLocationId`. It is a
+# bare province code, and bare codes do not classify - measured, "AB" and "ON"
+# both land in OTHER and would be DROPPED, while "Calgary, AB, Canada" and
+# "Ontario" classify correctly. Every entry carries a full nested `Address`, so
+# city + State.Code + Country.Name is used instead. Note Country.Code is the
+# three-letter "CAN", which is why Country.NAME is read rather than the code.
+#
+# BriefDescription is a 100-800 char teaser, not the posting, so unlike wpjobs,
+# amazon and teamtailor this DOES need a hydrate pass. The detail page embeds
+# the full text in a JSON "Description" field (9,101 chars on the role this was
+# built against).
+UKG_TOP = 50
+UKG_MAX_PAGES = 12
+UKG_DESC = re.compile(r'"Description"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def _ukg_loc(locs):
+    out = []
+    for L in locs or []:
+        a = (L or {}).get("Address") or {}
+        st = a.get("State") or {}
+        co = a.get("Country") or {}
+        one = ", ".join(x for x in (a.get("City"),
+                                    st.get("Code") or st.get("Name"),
+                                    co.get("Name") or co.get("Code")) if x)
+        # Fallback only if the address is empty: the localized DESCRIPTION is a
+        # province name ("Ontario"), which classifies; the localized ID is a
+        # bare code ("ON"), which does not.
+        if not one:
+            one = (L or {}).get("LocalizedDescription") or ""
+        if one:
+            out.append(one)
+    return " / ".join(dict.fromkeys(out))
+
+
+def fetch_ultipro(t):
+    board = t["board"].rstrip("/")
+    name = t.get("name", board)
+    out, skip, total = [], 0, None
+    for _ in range(UKG_MAX_PAGES):
+        try:
+            d = _req(board + "/JobBoardView/LoadSearchResults",
+                     {"opportunitySearch": {
+                         "Top": UKG_TOP, "Skip": skip, "QuerySort": [],
+                         "OpportunityFilter": {
+                             "FilterTerm": "", "SearchText": "", "Keyword": "",
+                             "OpportunityId": None, "Locations": [],
+                             "Departments": [], "PostedDates": []}}})
+        except Exception:
+            break
+        ops = d.get("opportunities") or []
+        if not ops:
+            break
+        if total is None:
+            total = d.get("totalCount") or 0
+        for o in ops:
+            title = (o.get("Title") or "").strip()
+            if not title:
+                continue
+            loc = _ukg_loc(o.get("Locations"))
+            posted = str(o.get("PostedDate") or "")[:10]
+            oid = o.get("Id")
+            out.append(job("ultipro", name, title, loc,
+                           f"{board}/OpportunityDetail?opportunityId={oid}",
+                           posted, days_ago(posted),
+                           " ".join(filter(None, [
+                               title, loc, o.get("JobCategoryName") or "",
+                               o.get("RequisitionNumber") or "",
+                               o.get("BriefDescription") or ""])),
+                           hyd=("ultipro",
+                                f"{board}/OpportunityDetail?opportunityId={oid}")))
+        skip += len(ops)
+        if total and skip >= total:
+            break
+    return out
+
+
+# --- Teamtailor -------------------------------------------------------------
+# The best-shaped platform in this file. `{tenant}.teamtailor.com/jobs.json` is
+# a JSON Feed (jsonfeed.org 1.1) and each item carries everything needed in one
+# request: a real ISO `date_published`, the full `content_html` description
+# inline, and a schema.org JobPosting under `_jobposting` with a structured
+# PostalAddress. So like `wpjobs` and `amazon` this needs **no hydrate pass**,
+# and unlike `avature` it has genuine dates, so --max-age works normally.
+#
+# robots.txt allows it: only /app/, /messages/, /messenger/, /facebook/tab/ and
+# /jobs/internal/ are disallowed for *, and the host advertises
+# `Content-Signal: search=yes, ai-input=yes` (ai-train=no, which this is not).
+#
+# THE TRAP, and it would have silently cost Alberta postings: `addressCountry`
+# is the ISO code, and bare "CA" does not read as Canada to classify_location -
+# it only survives when the city itself is in the classifier's Canadian city
+# list. Measured: "Toronto, CA" classifies CA/ON, but "Lethbridge, CA",
+# "Medicine Hat, CA", "Grande Prairie, CA" and "Nisku, CA" all land in OTHER
+# and are DROPPED, while the same cities with ", Canada" classify correctly as
+# CA. That is the Amazon Edmonton-suburb failure wearing a different hat - a
+# real Alberta req invisible because of how its country was spelled - so the
+# code expands the ISO code to a country name before handing it over. Codes
+# that are not in the map pass through unchanged, which is harmless: "SE" and
+# "DE" reach OTHER either way.
+TT_ISO = {"CA": "Canada", "US": "United States", "GB": "United Kingdom",
+          "IE": "Ireland", "AU": "Australia", "NZ": "New Zealand",
+          "SE": "Sweden", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+          "DE": "Germany", "NL": "Netherlands", "FR": "France", "ES": "Spain",
+          "IT": "Italy", "PL": "Poland", "IN": "India", "SG": "Singapore"}
+
+# `addressRegion` is not always a region. Teamtailor's own board files Stockholm
+# under region "Sweden" and Chicago under "North America", and pasting that into
+# the location string is not merely untidy - it CHANGES THE BUCKET. Measured:
+# "Chicago, North America, United States" classifies NA-REMOTE and is KEPT,
+# because "North America" reads as a remote-anywhere-in-NA signal, so an on-site
+# Illinois job would have been shown as a remote opportunity. Continents and a
+# region that just repeats the country are dropped for that reason.
+TT_SKIP_REGION = frozenset((
+    "north america", "south america", "latin america", "central america",
+    "americas", "europe", "asia", "africa", "oceania", "antarctica",
+    "middle east", "emea", "apac", "latam", "anz", "nordics", "worldwide",
+    "global", "remote"))
+
+TT_PER_PAGE = 100
+# 1,000 postings. `per_page` was honoured up to 500 on test tenants and paging
+# ends with an EMPTY page (per_page=3 over 5 jobs gives 3, then 2, then 0).
+# The loop therefore stops on an empty page and on seeing no new ids - never on
+# a SHORT page, because a server that silently capped per_page below the asked
+# value would make every full page look short and end the sweep after one. That
+# is precisely how the Workday 40-row cap hid itself.
+TT_MAX_PAGES = 10
+
+
+def fetch_teamtailor(t):
+    base = t["base"].rstrip("/")
+    name = t.get("name", base)
+    out, seen = [], set()
+    for page in range(1, TT_MAX_PAGES + 1):
+        try:
+            d = _req(f"{base}/jobs.json?per_page={TT_PER_PAGE}&page={page}")
+        except Exception:
+            break
+        items = d.get("items") or []
+        if not items:
+            break
+        fresh = 0
+        for it in items:
+            key = it.get("id") or it.get("url")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            fresh += 1
+            jp = it.get("_jobposting") or {}
+            posted = str(it.get("date_published") or jp.get("datePosted") or "")[:10]
+            locs = []
+            for L in (jp.get("jobLocation") or []):
+                a = (L or {}).get("address") or {}
+                cc = (a.get("addressCountry") or "").strip()
+                country = TT_ISO.get(cc.upper(), cc)
+                region = (a.get("addressRegion") or "").strip()
+                if region.lower() in TT_SKIP_REGION or \
+                        region.lower() == country.lower() or \
+                        region.lower() == cc.lower():
+                    region = ""
+                parts = [a.get("addressLocality"), region, country]
+                one = ", ".join(x for x in parts if x)
+                if one:
+                    locs.append(one)
+            loc = " / ".join(dict.fromkeys(locs))
+            body = strip_html(it.get("content_html") or jp.get("description") or "")
+            title = strip_html(it.get("title") or jp.get("title") or "").strip()
+            if not title:
+                continue
+            out.append(job("teamtailor", name, title, loc,
+                           it.get("url", ""), posted, days_ago(posted),
+                           f"{title} {loc} {body[:8000]}"))
+        if not fresh:
+            break
+    return out
+
+
+# --- Avature --------------------------------------------------------------
+# Avature is the first adapter here with no JSON endpoint AND no date anywhere.
+# Greenhouse, Lever, Ashby, Oracle and the rest hand over a publication date;
+# Jobvite withholds it from the list but puts schema.org "datePosted" on the
+# posting page. Avature has neither: no JSON-LD, no datePosted, no date in the
+# markup of either the result row or the posting page. So every Avature posting
+# is reported with `posted=""` and `age=None`, i.e. "age unknown", which is the
+# honest answer and is what `--max-age` is written to tolerate. The cost is
+# real and worth stating: a req that has sat open for a year looks exactly like
+# one published this morning, so stale postings cannot be suppressed the way
+# Fortinet's 393-day-old DevOps req was. Inventing a date from first-seen would
+# be worse - it would read as publication and quietly age out real postings.
+#
+# Rows are server-rendered and the markup is stable:
+#   <article class="article article--result ...">
+#     <a class="link link_result" href="https://jobs.ea.com/.../JobDetail/Slug/216407">
+#     <div class="article__header__text__subtitle">
+#        Vancouver, Canada - Role ID 216407 - Regular Employee - EA Studios
+#
+# The subtitle is bullet-separated and the segments before "Role ID" are all
+# locations - a posting open in several offices lists each one, and the extras
+# use a different field order than the primary ("Vancouver, Canada, British
+# Columbia" vs "Vancouver, Canada"). They are joined with " / " the way the
+# Ashby adapter joins secondary locations, so a req that is Austin-primary but
+# also open in Vancouver still classifies as CA rather than US-ONLY. The
+# segments after "Role ID" are the employment type and the department
+# ("CT - Infrastructure & Platform"), both of which are kept in the blob
+# because they score.
+#
+# Page size is fixed server-side at 20 - jobRecordsPerPage=100 and =200 both
+# still return 20 - so the only lever is jobOffset, and pagination stops as
+# soon as a page comes back short rather than walking to a fixed ceiling.
+
+AV_ROW = re.compile(r'<article class="article article--result.*?</article>', re.S)
+AV_LINK = re.compile(r'<a class="link link_result" href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+AV_SUB = re.compile(r'<div class="article__header__text__subtitle">(.*?)</div>', re.S)
+AV_ROLE_ID = re.compile(r"^Role ID\b", re.I)
+
+AV_QUERIES = ["devops", "site reliability", "infrastructure", "platform",
+              "cloud", "build engineer", "release engineer", "linux"]
+
+AV_PAGE = 20          # Avature ignores jobRecordsPerPage; 20 is the server's size
+AV_MAX_PAGES = 4      # 80 rows per query, and it stops early on a short page
+
+
+def fetch_avature(t):
+    base = t["base"].rstrip("/")
+    name = t.get("name", base)
+    q = t.get("_query", "")
+    out, seen = [], set()
+    for page in range(AV_MAX_PAGES):
+        url = (f"{base}/SearchJobs/?jobRecordsPerPage={AV_PAGE}"
+               f"&jobOffset={page * AV_PAGE}")
+        if q:
+            url += "&search=" + urllib.parse.quote(q)
+        try:
+            h = _get_text(url)
+        except Exception:
+            break
+        rows = AV_ROW.findall(h)
+        for row in rows:
+            m = AV_LINK.search(row)
+            if not m:
+                continue
+            full = html_unescape(m.group(1)).strip()
+            title = strip_html(m.group(2)).strip()
+            if not title or full in seen:
+                continue
+            seen.add(full)
+            sub = AV_SUB.search(row)
+            locs, extra = [], []
+            if sub:
+                parts = [x.strip() for x in strip_html(sub.group(1)).split("\u2022")]
+                hit_id = False
+                for seg in parts:
+                    if not seg:
+                        continue
+                    if AV_ROLE_ID.match(seg):
+                        hit_id = True
+                        continue
+                    (extra if hit_id else locs).append(seg)
+            loc = " / ".join(locs)
+            out.append(job("avature", name, title, loc, full,
+                           "", None,
+                           " ".join([title, loc] + extra),
+                           hyd=("avature", full)))
+        if len(rows) < AV_PAGE:
+            break
     return out
 
 
@@ -1121,6 +1661,187 @@ def fetch_taleo(t):
     return out
 
 
+# WordPress job plugins cap per_page at 100 and serve newest-first by default,
+# so three pages is the whole of both boards we poll (Aplin 301, Raise 308) with
+# room to grow. Paging past the end is an HTTP 400, not an empty list.
+WP_PER_PAGE = 100
+WP_MAX_PAGES = 4
+
+# Matador exposes its taxonomies as bare term IDs in the record, but WordPress
+# also emits readable slugs in class_list - `matador-localities-toronto`,
+# `matador-regions-ontario`, `matador-workplaces-hybrid`. That is the only place
+# the location is human-readable without a second request per taxonomy.
+_WP_CLS = re.compile(r"^matador-(localities|regions|countries|workplaces)-(.+)$")
+
+
+def _wp_location(j):
+    """Location, from whichever place this site's plugin keeps it."""
+    # WP Job Manager (Aplin): a plain string in post meta.
+    loc = ((j.get("meta") or {}).get("_job_location") or "").strip()
+    if loc:
+        return loc
+    # Matador (Raise): rebuild it from the class slugs.
+    parts = {}
+    for c in j.get("class_list") or []:
+        m = _WP_CLS.match(c)
+        if m:
+            parts.setdefault(m.group(1), m.group(2).replace("-", " ").title())
+    loc = ", ".join(filter(None, [parts.get("localities"), parts.get("regions")]))
+    if not loc:
+        loc = parts.get("countries", "")
+    wp = (parts.get("workplaces") or "").lower()
+    if wp in ("remote", "hybrid") and wp not in loc.lower():
+        loc = f"{wp.title()}{' - ' + loc if loc else ''}"
+    return loc
+
+
+def fetch_wpjobs(t):
+    """Staffing agencies run their boards on WordPress, not on a corporate ATS.
+
+    Fingerprinting 36 Canadian IT staffing firms turned up zero Greenhouse,
+    Lever, Ashby or Workday boards: agencies live on recruiting CRMs (Bullhorn,
+    JobDiva, iCIMS) whose public faces are JS search pages with no feed. The
+    exceptions are the ones that publish through a WordPress plugin, because
+    WordPress ships a REST API and the plugins register their job post type on
+    it. That makes this one adapter worth more than the platform it names.
+
+    Two traps, both of which cost a 404 before they were understood:
+
+    1. The endpoint is the post type's `rest_base`, NOT its name. Aplin's type
+       is `job_listing` but its route is `/wp/v2/job-listings`; Raise's is
+       `matador-job-listings`. Guessing the type name returns HTTP 404
+       `rest_no_route`. Read {base}/wp-json/wp/v2/types to find the real one -
+       look for the entry whose key or rest_base mentions job.
+    2. Asking for a page past the end is HTTP 400 `rest_post_invalid_page_number`,
+       not an empty array, so the paging loop has to treat a hard failure after
+       the first page as "that was the end" rather than as a broken board.
+
+    The full description arrives inline in content.rendered, so unlike every
+    other adapter here this one needs no hydrate pass.
+    """
+    base = t["base"].rstrip("/")
+    name = t.get("name", base)
+    rb = t.get("type", "job-listings")
+    out = []
+    for page in range(1, WP_MAX_PAGES + 1):
+        try:
+            rows = _req(f"{base}/wp-json/wp/v2/{rb}"
+                        f"?per_page={WP_PER_PAGE}&page={page}"
+                        f"&orderby=date&order=desc")
+        except Exception:
+            if page == 1:
+                raise
+            break
+        if not isinstance(rows, list) or not rows:
+            break
+        for j in rows:
+            title = strip_html((j.get("title") or {}).get("rendered", "")).strip()
+            if not title:
+                continue
+            loc = _wp_location(j)
+            posted = str(j.get("date") or "")[:10]
+            desc = strip_html((j.get("content") or {}).get("rendered", ""))
+            out.append(job("wpjobs", name, title, loc, j.get("link", ""),
+                           posted, days_ago(posted),
+                           " ".join([title, loc, desc[:8000]]),
+                           updated=str(j.get("modified") or "")[:10]))
+        if len(rows) < WP_PER_PAGE:
+            break
+    return out
+
+
+# amazon.jobs caps result_limit at 100 and pages with offset. Asking for more
+# does NOT clamp: result_limit=500 returns {"hits": 0, "jobs": []}, which is
+# byte-identical to a country with no openings. Never raise AMZ_PER_PAGE above
+# 100. Eight pages covers Amazon Canada (425 reqs on 2026-10-17) with headroom.
+AMZ_PER_PAGE = 100
+AMZ_MAX_PAGES = 8
+
+# posted_date arrives as "September 25, 2026", and sometimes space-padded to a
+# fixed width - "September  1, 2026". strptime("%B %d, %Y") would read it, but
+# %B is locale-dependent and cron runs with a minimal environment where LC_TIME
+# is not guaranteed to be English, so the date would silently become None on
+# exactly the runs that matter. Map the months by hand instead.
+_AMZ_MONTHS = {m: i for i, m in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"), 1)}
+_AMZ_DATE = re.compile(r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})")
+
+
+def _amz_date(s):
+    """"September 25, 2026" -> "2026-09-25". days_ago() needs ISO."""
+    m = _AMZ_DATE.search(s or "")
+    if not m:
+        return ""
+    mon = _AMZ_MONTHS.get(m.group(1).lower())
+    return f"{int(m.group(3)):04d}-{mon:02d}-{int(m.group(2)):02d}" if mon else ""
+
+
+def fetch_amazon(t):
+    """Amazon runs its own ATS, so no amount of token harvesting reaches it.
+
+    This is the first adapter here for an in-house ATS rather than a third-party
+    product, and it exists because of a measured miss: "DevOps Engineer, AFT" in
+    Toronto (job 10560828, posted 2026-09-25) scores 16-19, above the notify
+    threshold, and the radar never saw it - Amazon was not in targets.json at
+    all. It surfaced on LinkedIn instead, as a paid syndication.
+
+    The endpoint is better than most: a real country facet, structured
+    city/state/country_code, a genuine posted_date, and the full description
+    inline - so like `wpjobs` this needs no hydrate pass.
+
+    Two traps:
+
+    1. result_limit is capped at 100 and exceeding it fails SILENTLY. See
+       AMZ_PER_PAGE above.
+    2. posted_date is a localised English string, not ISO. See _amz_date.
+
+    `country` is an ISO 3166 alpha-3 facet (CAN), not the alpha-2 used elsewhere
+    in this file. `query` is optional and normally empty: the whole country is
+    only ~425 reqs, so there is no reason to filter server-side and risk its
+    relevance ranking hiding something the local title rules would have kept.
+    """
+    name = t.get("name", "Amazon")
+    country = t.get("country", "CAN")
+    query = t.get("query", "")
+    out, seen = [], set()
+    for page in range(AMZ_MAX_PAGES):
+        d = _req("https://www.amazon.jobs/en/search.json"
+                 f"?base_query={urllib.parse.quote(query)}&loc_query="
+                 f"&country={urllib.parse.quote(country)}"
+                 f"&result_limit={AMZ_PER_PAGE}&offset={page * AMZ_PER_PAGE}")
+        rows = d.get("jobs") or []
+        if not rows:
+            break
+        for j in rows:
+            path = j.get("job_path") or ""
+            jid = str(j.get("id") or j.get("id_icims") or path)
+            title = (j.get("title") or "").strip()
+            if not path or not title or jid in seen:
+                continue
+            seen.add(jid)
+            # city/state are the structured pair; normalized_location is the
+            # display string and is the only one populated for virtual reqs.
+            loc = (", ".join(filter(None, [j.get("city"), j.get("state")]))
+                   or j.get("normalized_location") or j.get("location") or "")
+            posted = _amz_date(j.get("posted_date"))
+            desc = " ".join(strip_html(j.get(k) or "") for k in
+                            ("description", "basic_qualifications",
+                             "preferred_qualifications"))
+            # `team` is an object, not a string - its readable part is
+            # `label`. Joining it raw raises TypeError on the first posting.
+            team = (j.get("team") or {}).get("label") or ""
+            out.append(job("amazon", name, title, loc,
+                           "https://www.amazon.jobs" + path,
+                           posted, days_ago(posted),
+                           " ".join([title, loc, team,
+                                     j.get("job_category") or "",
+                                     j.get("job_family") or "", desc[:8000]])))
+        if len(rows) < AMZ_PER_PAGE:
+            break
+    return out
+
+
 ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "ashby": fetch_ashby, "recruitee": fetch_recruitee,
             "rippling": fetch_rippling, "workday": fetch_workday,
@@ -1128,7 +1849,10 @@ ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "oracle": fetch_oracle, "jobvite": fetch_jobvite,
             "html": fetch_html, "workable": fetch_workable,
             "smartrecruiters": fetch_smartrecruiters,
-            "taleo": fetch_taleo}
+            "taleo": fetch_taleo, "wpjobs": fetch_wpjobs,
+            "amazon": fetch_amazon, "avature": fetch_avature,
+            "teamtailor": fetch_teamtailor, "ultipro": fetch_ultipro,
+            "jobbank": fetch_jobbank}
 
 
 # ---------------------------------------- pass 2: hydrate only the finalists --
@@ -1158,6 +1882,16 @@ def hydrate(j):
             d = _req(kind[1])
             ji = d.get("jobPostingInfo") or {}
             j["blob"] += " " + strip_html(ji.get("jobDescription", ""))[:8000]
+            if WD_NLOC.match(j.get("location") or ""):
+                locs = [ji.get("location") or ""]
+                locs += [x for x in (ji.get("additionalLocations") or []) if x]
+                real = " / ".join(dict.fromkeys(x for x in locs if x))
+                if real:
+                    j["location"] = real
+                    bucket, keep = classify_location(real)
+                    j["bucket"], j["geo_keep"] = bucket, keep
+                    j["provinces"] = sorted(provinces_of(real))
+                    j["arrangement"] = arrangement(real, j.get("blob", ""))
             if ji.get("startDate"):
                 j["posted"] = ji["startDate"]
                 exact = days_ago(ji["startDate"])
@@ -1172,6 +1906,33 @@ def hydrate(j):
                 (secs.get(k) or {}).get("text", "") for k in
                 ("jobDescription", "qualifications", "additionalInformation")
             ))[:8000]
+        elif kind[0] == "phenom":
+            # Phenom was the only platform with no hydrate branch, so every
+            # Phenom row scored on the listing page's teaser - about 400
+            # characters - and matched zero resume keywords. Five boards were
+            # affected, City of Edmonton and Bell among them. The job page
+            # carries the full text twice: in the phApp.ddo blob and in a
+            # schema.org JobPosting block. Prefer the blob, fall back to JSON-LD.
+            h = _get_text(kind[1])
+            desc = ""
+            m = re.search(r'"description"\s*:\s*"((?:[^"\\]|\\.){200,})"', h)
+            if m:
+                try:
+                    desc = json.loads(f'"{m.group(1)}"')
+                except Exception:
+                    desc = m.group(1)
+            if not desc:
+                for mm in re.finditer(
+                        r'application/ld\+json[^>]*>(.*?)</script>', h, re.S):
+                    try:
+                        d = json.loads(mm.group(1))
+                        d = d[0] if isinstance(d, list) else d
+                        if d.get("@type") == "JobPosting" and d.get("description"):
+                            desc = d["description"]
+                            break
+                    except Exception:
+                        continue
+            j["blob"] += " " + strip_html(desc)[:8000]
         elif kind[0] == "jobvite":
             h = _get_text(kind[1])
             m = JV_DATE.search(h)
@@ -1180,6 +1941,35 @@ def hydrate(j):
                 j["age"] = days_ago(m.group(1))
             body = re.search(r'class="jv-job-detail-description".*?</div>', h, re.S)
             j["blob"] += " " + strip_html(body.group(0) if body else h)[:8000]
+        elif kind[0] == "avature":
+            # No date to recover here - unlike Jobvite, the posting page has no
+            # datePosted either - so this pass only enriches the blob. The
+            # description lives in article__content__view; fall back to the
+            # whole page rather than returning nothing if the class is renamed.
+            h = _get_text(kind[1])
+            m = re.search(r'class="article__content__view"[^>]*>(.*)', h, re.S)
+            j["blob"] += " " + strip_html(m.group(1) if m else h)[:8000]
+        elif kind[0] == "jobbank":
+            # Same 5s courtesy as the list pass - the delay is per host, so the
+            # hydrate pass shares the limiter rather than having its own.
+            _jb_wait()
+            h = _get_text(kind[1])
+            m = re.search(r'class="job-posting-detail-requirements".*', h, re.S) or \
+                re.search(r'id="jobDescription".*', h, re.S)
+            j["blob"] += " " + strip_html(m.group(0) if m else h)[:8000]
+        elif kind[0] == "ultipro":
+            # The list call gives only a teaser. The detail page embeds the real
+            # posting in a JSON "Description" string, so decode it as JSON
+            # rather than hand-unescaping, then strip the HTML inside it.
+            h = _get_text(kind[1])
+            m = UKG_DESC.search(h)
+            body = h
+            if m:
+                try:
+                    body = json.loads(m.group(1))
+                except Exception:
+                    body = m.group(1)
+            j["blob"] += " " + strip_html(body)[:8000]
         elif kind[0] == "successfactors":
             h = _get_text(kind[1])
             m = re.search(r'<div[^>]*class="[^"]*jobdescription[^"]*"[^>]*>(.*?)'
@@ -1436,13 +2226,24 @@ def notify(jobs, topic, limit=6):
             " · posted today" if j["age"] == 0 else f" · {j['age']}d old")
         body = (f"{j['company']} · {j['location'][:60]}{age}\n"
                 f"matched: {', '.join(j['kw'][:6]) or '—'}")
+        # Publish as JSON, not via HTTP headers. urllib encodes headers as
+        # latin-1, so a single en-dash in a title killed the push outright:
+        #   UnicodeEncodeError: 'latin-1' codec can't encode character '\u2013'
+        #   - Software Engineer - MLOPS
+        # Canadian titles are full of en-dashes and French accents
+        # ("Specialiste DevOps"), so this was not an edge case - it was a
+        # standing hole that dropped matching jobs with no push at all. A JSON
+        # body is UTF-8 end to end and has no such limit.
         req = urllib.request.Request(
-            f"https://ntfy.sh/{topic}",
-            data=body.encode("utf-8"),
-            headers={"Title": f"[{j['score']}] {j['title'][:80]}",
-                     "Priority": prio,
-                     "Tags": tag,
-                     "Click": j["url"],
+            "https://ntfy.sh/",
+            data=json.dumps({"topic": topic,
+                             "title": f"[{j['score']}] {j['title'][:80]}",
+                             "message": body,
+                             "priority": {"urgent": 5, "high": 4,
+                                          "default": 3}[prio],
+                             "tags": [tag],
+                             "click": j["url"]}).encode("utf-8"),
+            headers={"Content-Type": "application/json",
                      "User-Agent": UA["User-Agent"]},
             method="POST")
         try:
@@ -1460,10 +2261,14 @@ def notify(jobs, topic, limit=6):
                           for j in rest[:14])
         try:
             urllib.request.urlopen(urllib.request.Request(
-                f"https://ntfy.sh/{topic}", data=body.encode("utf-8"),
-                headers={"Title": f"+{len(rest)} more matches",
-                         "Priority": "low", "Tags": "mag",
-                         "User-Agent": UA["User-Agent"]}, method="POST"), timeout=12)
+                "https://ntfy.sh/",
+                data=json.dumps({"topic": topic,
+                                 "title": f"+{len(rest)} more matches",
+                                 "message": body, "priority": 2,
+                                 "tags": ["mag"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "User-Agent": UA["User-Agent"]}, method="POST"),
+                timeout=12)
             sent += 1
         except Exception as e:
             failed.append(f"{type(e).__name__}: {e} — roll-up")
@@ -1570,6 +2375,9 @@ def main():
             elif src == "jobvite":
                 for q in JV_QUERIES:
                     tasks.append((src, {**tok, "_query": q}, fn))
+            elif src == "avature":
+                for q in AV_QUERIES:
+                    tasks.append((src, {**tok, "_query": q}, fn))
             elif src == "taleo":
                 for q in tok.get("queries") or [["category", "177"]]:
                     tasks.append((src, {**tok, "_query": tuple(q)}, fn))
@@ -1629,6 +2437,14 @@ def main():
     with cf.ThreadPoolExecutor(a.workers) as ex:
         shortlist = list(ex.map(hydrate, shortlist))
 
+    # Rows that arrived as "N Locations" only have a real location after hydrate,
+    # so the geography filter is re-applied to the corrected value. Everything
+    # else keeps the verdict pass 1 already reached (geo_keep defaults True).
+    before_geo = len(shortlist)
+    shortlist = [j for j in shortlist
+                 if j.get("geo_keep", True) and j["bucket"] in buckets]
+    dropped_geo = before_geo - len(shortlist)
+
     if provs:
         # Keep the wanted provinces, plus anything naming no province at all -
         # those are remote or unclear, never "definitely somewhere else".
@@ -1683,7 +2499,12 @@ def main():
     L = [f"# Job Radar — {'ALL MATCHES' if a.all else 'NEW SINCE LAST RUN'} — {now[:16]}Z",
          f"### {headline}",
          f"_{len(show)} shown · {len(hits)} matched · {len(jobs)} scanned · "
-         f"{len(tasks)} boards · levels={a.level} · families={a.family}_", ""]
+         f"{len(tasks)} boards · levels={a.level} · families={a.family}"
+         # Worth showing: these are rows that looked like candidates until their
+         # real cities were resolved, so a sudden jump means a board started
+         # collapsing its locations rather than that the search got narrower.
+         + (f" · {dropped_geo} dropped once \"N Locations\" resolved"
+            if dropped_geo else "") + "_", ""]
 
     by_fam = {}
     for j in show:
@@ -1733,6 +2554,11 @@ def main():
     if errors:
         L += ["---", "**Dead boards — run `discover.py --verify --add`:**"] + \
              [f"- {e}" for e in errors]
+    if WD_TRUNCATED:
+        L += ["---", "**Workday queries truncated — postings were not read. "
+                     "Give the target a higher `max_pages` if the term is "
+                     "selective there:**"] + \
+             [f"- {w}" for w in sorted(WD_TRUNCATED)]
 
     out = "\n".join(L)
     print(out)

@@ -23,16 +23,15 @@ for f in applications.md radar/seen.sqlite3 radar/targets.json; do
   cp -p "$f" "$DEST/$name.$STAMP.bak"
 done
 
-# Retention is per-file, because the files are worth very different amounts.
-# applications.md is irreplaceable and ~90KB, so keep a long tail of it.
-# seen.sqlite3 is 11MB and rising (it grew 4.7 -> 11MB the day 96 boards were
-# added) and it is fully regenerable with `job_radar.py --seed`, so keeping 30
-# copies would burn ~330MB of a disk that is already 97% full for something we
-# can rebuild. A week is enough to undo a bad day.
+# Keep 30 of each. seen.sqlite3 is the big one (11MB and rising - it grew
+# 4.7 -> 11MB the day 96 boards were added), so 30 copies is roughly 330MB.
+# That was worth trimming to 7 when the root filesystem was 97% full; after the
+# disk was grown from 98G to 246G it is noise against 145G free, and a longer
+# tail buys more room to recover from a bad day.
 keep() { ls -1t "$DEST"/"$1".*.bak 2>/dev/null | tail -n +"$2" | xargs -r rm -f; }
 keep applications.md 31
 keep targets.json     31
-keep seen.sqlite3      8
+keep seen.sqlite3     31
 
 printf '%s  %s files, %s\n' "$(date '+%F %H:%M')" \
   "$(ls -1 "$DEST" | wc -l)" "$(du -sh "$DEST" | cut -f1)"
