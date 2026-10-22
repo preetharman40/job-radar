@@ -1,0 +1,72 @@
+# agencies.txt - IT staffing firms and systems integrators that place DevOps
+# contractors in Canada. Input for harvest.py / hunt.py / discover.py.
+#
+# Why these are worth polling: a large share of LinkedIn's Canadian DevOps
+# volume is agency-posted, and we had zero of these boards. Alberta IT contract
+# work in particular runs through S.i. Systems, Agilus and Aplin.
+#
+#   python3 harvest.py --file agencies.txt            # 6 token platforms
+#   python3 hunt.py    --file agencies.txt             # Workday / SuccessFactors
+#
+# --- national IT staffing ---
+S.i. Systems
+Procom
+Robert Half
+Randstad Canada
+Randstad Digital
+Hays Canada
+Insight Global
+Experis
+ManpowerGroup
+Akkodis
+Vaco
+Lannick
+Altis Recruitment
+Altis Technology
+Motion Recruitment
+Tundra Technical Solutions
+Eagle Professional Resources
+Ian Martin Group
+Brainhunter
+Stafflink
+Kelly Services
+Adecco Canada
+Apex Systems
+Aerotek
+Beacon Hill Staffing
+Compunnel
+Mindlance
+Diverse Lynx
+Maarut
+Quantum Technology Recruitment
+Recruiting in Motion
+Lorien
+Harvey Nash
+# --- Alberta / Edmonton-Calgary focused ---
+Agilus Work Solutions
+David Aplin Group
+Summit Search Group
+Cenera
+Higher Landing
+Bow River Recruiting
+# --- systems integrators and consultancies with Canadian DevOps req volume ---
+Slalom
+Deloitte Canada
+Capgemini
+Cognizant
+Infosys
+Wipro
+Tata Consultancy Services
+HCLTech
+LTIMindtree
+Tech Mahindra
+Mphasis
+Hexaware
+Persistent Systems
+Zensar
+Birlasoft
+Thoughtworks
+EPAM Systems
+Globant
+Nagarro
+Encora
