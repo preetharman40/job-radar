@@ -487,7 +487,17 @@ def main():
     ap.add_argument("--md")
     ap.add_argument("--track", action="store_true",
                     help="append high scorers to applications.md")
-    ap.add_argument("--track-min-score", type=int, default=25)
+    # Was 25 until 2026-10-22, which meant --track was decorative: the
+    # structural cap described below puts mail-derived scores in the
+    # 10-20 band, so almost nothing ever cleared 25 and the mail lane
+    # tracked nothing. Worse, cron ran --notify WITHOUT --track, so an
+    # alert-mail role buzzed the phone and was then never written
+    # anywhere the web app reads - the "lots of jobs in my alerts that I
+    # cannot find on the radar" report. Tracking now matches notifying:
+    # if a role is worth a push it is worth a row. Noise is held back by
+    # title_match (tier 0 titles never reach scoring at all), not by
+    # this number.
+    ap.add_argument("--track-min-score", type=int, default=12)
     ap.add_argument("--notify", action="store_true",
                     help="push new alert-mail roles to your phone via ntfy")
     # Email scores are STRUCTURALLY capped and this threshold reflects that
@@ -709,7 +719,15 @@ def main():
                   f"{a.notify_min_score} to push")
 
     if a.track and fresh:
-        payload = [{**r, "company": r["source"], "posted": "", "age": None,
+        # The EMPLOYER, falling back to the source only when the digest
+        # did not name one - the same rule --notify uses above. This
+        # said r["source"] unconditionally until 2026-10-22, so every
+        # mail-sourced row entered the tracker as "Linkedin.com" and the
+        # web app showed 116 jobs with no employer. The phone alert had
+        # the right name all along, which is why a role could be read on
+        # the phone and not found by company in the app.
+        payload = [{**r, "company": r.get("company") or r["source"],
+                    "posted": "", "age": None,
                     "updated": "", "url": r["url"], "title": r["title"]}
                    for r in fresh if r["score"] >= a.track_min_score]
         if payload:
