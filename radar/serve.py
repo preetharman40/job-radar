@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import queue
+import ipaddress
 import re
 import socket
 import sqlite3
@@ -154,6 +155,16 @@ def parse(path):
             "url": f.get("Apply", ""),
             "level": f.get("Level", ""),
             "ats": f.get("ATS", ""),
+            # A mail-sourced row carries the mail DOMAIN as its ATS
+            # ("linkedin.com"); a board row carries a platform key
+            # ("workday"). The dot is the marker. It matters because a
+            # mail row is scored from a ~200-char digest snippet and a
+            # board row from a 5,000+ char JD, so the two numbers are
+            # NOT comparable - the same req scored 14 from mail and 43
+            # from its own description. The UI marks these and gives
+            # them their own filter instead of inflating the score by a
+            # made-up factor; there is no honest multiplier to apply.
+            "snippet": "." in f.get("ATS", ""),
             "matched": f.get("Resume keywords matched", ""),
             "checks": b.get("checks", []),
             "prose": b.get("prose", []),
@@ -273,9 +284,98 @@ class Watcher(threading.Thread):
                     q.put("reload")
 
 
+# ------------------------------------------------------------------ guards --
+#
+# This server has no login and it writes to applications.md, so the only thing
+# standing between a web page you happen to visit and your tracker is these
+# two checks. Both were missing until 2026-10-22, and both holes were
+# demonstrated against the running service:
+#
+#   POST, body as text/plain, bogus Origin  -> accepted and executed
+#   GET /api/jobs with Host: evil.example   -> 200, 205 KB of job data
+#
+# WHY A CONTENT-TYPE CHECK IS NOT ENOUGH. A cross-origin fetch() sending
+# application/json triggers a CORS preflight, and the preflight fails here
+# (there is no do_OPTIONS, so it 501s), so that route is already closed. But an
+# ordinary HTML form with enctype="text/plain" is a "simple request": no
+# preflight, sent straight through, and its body can be shaped to parse as
+# valid JSON. That is the hole, and only an Origin check closes it.
+#
+# WHY THE HOST CHECK MATTERS SEPARATELY. "LAN only, do not port-forward it" was
+# the stated mitigation, and without Host validation it is not true: an
+# attacker's domain that re-resolves to this machine's address (DNS rebinding)
+# reaches the service from a page you are browsing, with no port forward
+# anywhere. Checking Host is what makes "LAN only" real.
+
+MAX_BODY = 64 * 1024          # a real POST here is ~200 bytes
+
+# Names that mean "this machine". avahi is running on this box, so the phone
+# reaches it as <hostname>.local and that spelling has to be allowed or the
+# app 403s on the device it was built for.
+def _default_allowed_names():
+    h = socket.gethostname().lower().rstrip(".")
+    names = {"localhost", "localhost.localdomain", h, h + ".local"}
+    short = h.split(".")[0]
+    names.update({short, short + ".local"})
+    return names
+
+
+def _split_host(value):
+    """-> hostname, lowercased, port and brackets removed. '' if unusable."""
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    if v.startswith("["):                       # [::1]:8737
+        return v[1:].split("]")[0]
+    # Only strip a trailing :port, never a colon inside a bare IPv6 literal.
+    if v.count(":") == 1:
+        v = v.split(":")[0]
+    return v.rstrip(".")
+
+
+def _host_allowed(value, extra):
+    """True if this Host header names this machine or a private address.
+
+    Private-range literals are allowed because that is how the LAN reaches it.
+    Note what this does NOT cover: Tailscale and other CGNAT addresses live in
+    100.64.0.0/10, which is not private, so reaching the app over a VPN needs
+    --allow-host rather than a code change.
+    """
+    host = _split_host(value)
+    if not host:
+        return False                            # HTTP/1.1 requires Host
+    if host in extra or host in _default_allowed_names():
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False                            # an unknown NAME -> rebinding
+    return ip.is_loopback or ip.is_private or ip.is_link_local
+
+
+def _origin_ok(origin, host_header):
+    """True if there is no browser origin, or it matches the host asked for.
+
+    A browser sends Origin on same-origin POSTs too, and it always equals the
+    host the page was loaded from - so comparing the two needs no hardcoded
+    address and works for localhost, the LAN IP and <hostname>.local alike.
+    An absent Origin means a non-browser client (curl, a script), which cannot
+    be driven by a hostile page and so is not a CSRF vector. Literal "null" -
+    a sandboxed iframe or a file:// page - is refused.
+    """
+    o = (origin or "").strip()
+    if not o:
+        return True
+    if o.lower() == "null":
+        return False
+    rest = o.split("://", 1)[-1] if "://" in o else o
+    return _split_host(rest) == _split_host(host_header) and bool(host_header)
+
+
 # ------------------------------------------------------------------ server --
 
-def make_handler(path, watcher):
+def make_handler(path, watcher, allow_hosts=()):
+    allowed = {h.strip().lower().rstrip(".") for h in allow_hosts if h.strip()}
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -293,9 +393,35 @@ def make_handler(path, watcher):
             self.end_headers()
             self.wfile.write(body)
 
+        def _guard(self, writing):
+            """-> None if the request may proceed, else a sent response."""
+            host = self.headers.get("Host")
+            if not _host_allowed(host, allowed):
+                return self._send(403, "application/json",
+                                  json.dumps({"error": "host not allowed",
+                                              "host": (host or "")[:80],
+                                              "hint": "start serve.py with "
+                                                      "--allow-host <name>"}))
+            if writing and not _origin_ok(self.headers.get("Origin"), host):
+                return self._send(403, "application/json",
+                                  '{"error":"cross-site request refused"}')
+            return None
+
         def do_POST(self):
+            if self._guard(writing=True) is not None:
+                return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._send(400, "application/json",
+                                  '{"error":"bad content-length"}')
+            if n > MAX_BODY:
+                # Read nothing. self.rfile.read(n) on an attacker-chosen length
+                # allocates that many bytes before anything is validated.
+                return self._send(413, "application/json",
+                                  json.dumps({"error": "body too large",
+                                              "max": MAX_BODY}))
+            try:
                 payload = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 return self._send(400, "application/json", '{"error":"bad json"}')
@@ -319,6 +445,12 @@ def make_handler(path, watcher):
                        json.dumps({"ok": ok, "msg": msg}))
 
         def do_GET(self):
+            # Reads are guarded too: /api/jobs hands over the whole tracker,
+            # which is the half of the rebinding attack that needs no write.
+            # Origin is NOT checked here - EventSource and plain navigation
+            # must keep working - so Host alone carries the read side.
+            if self._guard(writing=False) is not None:
+                return
             if self.path.startswith("/api/jobs"):
                 self._send(200, "application/json; charset=utf-8",
                            json.dumps(parse(path)),
@@ -376,12 +508,17 @@ def main():
     ap.add_argument("--host", default="0.0.0.0",
                     help="0.0.0.0 = reachable on your LAN; 127.0.0.1 = this machine only")
     ap.add_argument("--port", type=int, default=8737)
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="extra Host header to accept, repeatable. Needed for "
+                         "a VPN address (Tailscale is 100.64.0.0/10, which is "
+                         "not a private range) or a reverse-proxy name.")
     a = ap.parse_args()
 
     path = os.path.abspath(a.file)
     w = Watcher(path)
     w.start()
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(path, w))
+    srv = ThreadingHTTPServer((a.host, a.port),
+                              make_handler(path, w, a.allow_host))
     srv.daemon_threads = True
 
     n = len(parse(path).get("jobs", []))
@@ -390,6 +527,9 @@ def main():
     if a.host == "0.0.0.0":
         print(f"  on your LAN  : http://{lan_ip()}:{a.port}/")
         print("  (LAN only — no auth, do not port-forward this)")
+    names = sorted(_default_allowed_names() |
+                   {h.strip().lower() for h in a.allow_host if h.strip()})
+    print(f"  accepts Host : {', '.join(names)}, + private/loopback IPs")
     print("  ctrl-c to stop")
     try:
         srv.serve_forever()
