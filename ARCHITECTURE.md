@@ -909,3 +909,161 @@ from harvesting: it arrived in a LinkedIn job-alert email and was surfaced by
 `inbox.py`, then the posting URL inverted straight into a target. That is the
 whole intended path from alert mail to polled board, working end to end for the
 first time.
+
+---
+
+## `insightglobal` — the agency board that *is* pollable, and a wrong verdict
+
+"Staffing agencies: the platforms they are actually on" above concluded that
+agencies are structurally hard: their names defeat token guessing, and the ones
+with real boards post through their own sites. Insight Global is the
+counter-example that fits that conclusion rather than contradicting it. It was
+found by a human — a recruiter pointed it out, 2026-10-23 — and its board is
+not an ATS product at all. Like `amazon`, it is an **in-house ATS**, so
+`harvest.py` and `discover.py --company` can never fingerprint it; it belongs
+with "the rest of the in-house class", not with the agency-token experiment.
+
+### The verdict that was wrong, and why
+
+The board was first investigated and reported as **unreachable**. That was
+wrong, and the way it was wrong is the useful part.
+
+`/jobs/` is an Angular SPA. Its runtime config names an API and a Microsoft
+Entra CIAM tenant, and every path probed under that API answered
+`401 WWW-Authenticate: Bearer` — `/my/jobs`, `/my/jobs/search`, GET, POST, even
+OPTIONS. A blanket 401 across an entire prefix reads exactly like a login wall,
+and it was reported as one. The bundle says otherwise:
+
+```js
+get jobsBasePath() {
+  return this.msalService.instance.getActiveAccount() ? "/my/jobs" : "/all/jobs"
+}
+```
+
+There are **two lanes**. `/my/` is the signed-in one and really is gated;
+`/all/` is anonymous and entirely open. The 401s were real but proved only that
+the wrong door had been knocked on. `/all/jobs/suggested` and `/all/locations`
+were both sitting in the grep output that produced the wrong verdict and were
+read straight past.
+
+The lesson is narrow and worth keeping: **an auth gate on one prefix is not
+evidence about the origin.** Before calling an SPA's data unreachable, find the
+base-path expression in the bundle rather than probing paths — a ternary on
+"is anyone signed in" is a common shape, and it is invisible to path guessing.
+
+Two other dead ends were real, and are why the first pass went looking for a
+scraper at all: the search route has **no SSR** (`/jobs/search/...` and every
+`/jobs/{id}` shape return the same 29,697-byte shell), and the **old board is
+decommissioned** — `insightglobal.com/jobs/find_a_job/.../job-433450/` style
+URLs, still indexed by search engines, now answer **HTTP 410 Gone**. Anything
+found for this employer in a search index is a ghost of that board.
+
+### The API
+
+| call | gives |
+|---|---|
+| `GET /all/jobs?filter.status=active&filter.locations=ON&page=1&size=50` | the list, plus `pageMetadata{size,number,totalElements,totalPages}` |
+| `GET /all/jobs/{requisitionId}` | the same row **plus `descriptionHtml`** |
+| `GET /all/jobs/{requisitionId}/details` | the same description under a different key — redundant, not fetched |
+
+Other accepted facets, from the bundle: `keyword`, `sort`, `filter.jobType`,
+`filter.includeOnlyRemoteWork`, `filter.minimumPayRateGreaterThan`,
+`filter.distance`. Nested filters flatten to dot notation (`filter.locations`)
+because the client builds params with a recursive flattener.
+
+`size` is **capped at 50 and clamps silently** — ask for 500 and the response
+says `"size": 50`. This is the `AMZ_PER_PAGE` trap again in a politer form: it
+does not fail, it just quietly returns less. Paging reads
+`pageMetadata.totalPages` rather than trusting the request.
+
+Human URL is `https://insightglobal.com/jobs/{requisitionId}` (the SPA's
+`:id` route), which is what the tracker links to.
+
+### Enumerate by province, not by keyword
+
+This is the first adapter here where **keyword search is the wrong axis**, and
+the numbers are not close. Measured 2026-10-23:
+
+| approach | requests | Canadian reqs found | truncation |
+|---|---|---|---|
+| 13 × `WD_QUERIES`, 6 pages each | 78 | 60 | heavy — `platform engineer` reported 1,486 hits, 300 read |
+| 13 × province via `filter.locations` | ~11 | **282 (all of them)** | none |
+
+The endpoint ORs loosely, so a two-word query matches most of the US
+inventory and the relevance ranking decides what survives. Enumerating
+provinces makes the server do the only filtering it is good at — geography —
+and leaves title filtering to `TITLE_RULES`, which is better at it than a
+remote ranker. Fewer requests, complete recall, and no truncation register to
+maintain.
+
+Full Canadian inventory at the time of writing: ON 192, BC 45, QC 25, AB 9,
+NS 4, MB 3, SK 2, NB 2 — **282 active**, six pages' worth.
+
+### `administrativeArea` is not country-safe
+
+The field looks like a province code and is not one. In this feed:
+
+| value | what it means |
+|---|---|
+| `CA` | **California** — 22 US cities carried it (San Diego, Irvine, San Jose…) |
+| `TG`, `KA`, `MH`, `AN` | Indian states (Telangana, Karnataka, Maharashtra, Andaman) |
+| `São Paulo`, `Rio de Janeiro` | Brazilian states, spelled out |
+
+So the country filter **must** be the server-side `filter.locations` facet,
+which is exact — `ON` returns Ontario only. Filtering this field locally would
+have swept 22 California jobs in as Canadian on the first run.
+`classify_location` reads `San Diego, CA` as `OTHER` and would have caught most
+of it one stage later, but the right place to be correct is in the fetch, before
+282 rows become 500. The province codes are safe to drive the facet from for a
+separate reason worth stating: **none of the 13 collides with a US state code**
+— Nebraska is `NE`, Pennsylvania is `PA`.
+
+`workRemote` is a real boolean, and the location string stays the client's city
+regardless, so the adapter appends `/ Remote` for those rows — without it a
+remote req reads as on-site and `arrangement()` never sees it. 26 of 282.
+
+### Offshore markers in the title: flagged, not dropped
+
+Staffing agencies sell offshore hiring, and Insight Global marks it in the
+**title** while filing the req at the client's Canadian address. `MLOps
+Engineer - INTL India` sits at `workAddress: Vancouver, BC` and scores **39** —
+well above the notify threshold — and its description mentions neither India
+nor Canada. The title is the only geographic signal that exists.
+
+`offshore_marker()` adds a `⚠️` line to the digest instead of filtering the row
+out. Three of 282 rows carry a marker, and the evidence is thin in both
+directions: `Marketing Campaign Manager (Intl.)` in Kanata is plausibly a
+Canadian role with an international remit, and silently hiding a Vancouver req
+on one title token is the worse error. The check requires a **country name**
+after `INTL` (or a bare `LATAM`/`EMEA`/`APAC`) *and* a Canadian location, so it
+stays quiet on `LATAM - Lead Data Engineer` in San Francisco, which is simply a
+US job. Run against all 295 titles then in the tracker: **zero** false flags.
+
+### Hydrate, and the `make_fast.py` invariant
+
+The list call carries no description, so this sets `hyd` and takes the JD from
+`/all/jobs/{id}` in pass 2 — one request per finalist, no HTML scraping, the
+same bargain `greenhouse` and `ashby` make. It is *not* in the no-hydrate class
+with `wpjobs`, `amazon` and `teamtailor`.
+
+`insightglobal` was added to `make_fast.py`'s `DICT_SRC` **in the same change**,
+and the both-ways diff against `targets.json` keys was run before the change was
+called done: 21 adapters, 21 entries, no gaps in either direction. `avature` and
+`teamtailor` each hit that omission silently; writing the invariant down was
+supposed to end it, and this is the first platform added since, so it is the
+first test of whether it did.
+
+**Measured (2026-10-23):** 282 reqs scanned → **7 matches**, in 20.5s with zero
+non-Canadian leakage and zero duplicate URLs. Top of the run: `Platform
+Engineer, Network Operations` (Vancouver) **44**, `Senior Kubernetes / Cloud
+Platform Engineer` (Markham, remote) **36**, `AI Platform Engineer` (Toronto)
+**21**. Mix across the Canadian inventory is 40 contract / 14 perm / 5
+contract-to-perm — agency-shaped, as expected, and the pay rates are published
+(`payRate.min`, hourly or salary) which most employer boards do not do.
+
+`robots.txt` was read before anything was fetched. It is unusually explicit —
+it names search and AI agents and states that "every public page is open",
+closing only `/wp-content/uploads/`, the WordPress admin, internal site search,
+and the job board's **logged-in** areas (`/jobs/applied`, `/jobs/saved`,
+`/jobs/profile`). `/all/jobs` is unauthenticated and not disallowed, and job
+search results and job pages are permitted by name.

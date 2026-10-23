@@ -96,18 +96,174 @@ TITLE_RULES = [
 ]
 
 # Straight off the resume. Ranks, never filters.
-SKILLS = {
-    "terraform": 3, "kubernetes": 3, "k8s": 2, "docker": 2, "aws": 2,
-    "github actions": 3, "jenkins": 2, "ci/cd": 2, "cicd": 1,
-    "grafana": 3, "loki": 3, "prometheus": 2, "observability": 2,
-    "python": 2, "bash": 2, "shell scripting": 1, "linux": 2,
-    "digitalocean": 2, "infrastructure as code": 2, "iac": 1,
-    "ansible": 1, "helm": 2, "argocd": 1, "argo cd": 1, "microservices": 1,
-    "incident": 2, "root cause": 2, "rca": 1, "mttr": 2, "on-call": 1,
-    "intune": 4, "workspace one": 4, "mdm": 3, "endpoint": 2,
-    "servicenow": 2, "jira": 1, "escalation": 2, "troubleshooting": 2,
-    "fastapi": 1, "playwright": 1, "pytest": 1, "rest api": 1,
-}
+#
+# One SKILL, one score, many spellings. This was a flat {phrase: weight} dict
+# until 2026-10-22, which carried three defects measured against the 177 rows
+# then in the tracker:
+#
+#  1. ALIASES DOUBLE-COUNTED. "kubernetes" and "k8s" were separate entries, so
+#     a JD reading "Kubernetes (K8s)" scored the one skill twice - and at two
+#     different weights (3 and 2), so the total depended on which spellings the
+#     recruiter happened to use. 37 rows double-counted infrastructure-as-code,
+#     6 kubernetes, 2 ci/cd: 45 of 177 rows were inflated by 1-2 points.
+#  2. NO WORD BOUNDARY. Matching was a plain `kw in blob`, so "aws" matched
+#     "laws" and "draws", "helm" matched "overwhelming", "iac" matched
+#     "maniac". Every form is now anchored on both sides.
+#  3. DISPLAY SORTED ALPHABETICALLY, then truncated to 10 - so the shown list
+#     was the first ten by name, not the ten that earned the score. No row was
+#     actually hiding a weight-3 skill when this was fixed, but it was one new
+#     keyword away from doing so.
+#
+# What is deliberately NOT here is as important as what is. A keyword earns a
+# place by DISCRIMINATING, not by being relevant: "automation", "monitoring",
+# "pipeline", "deployment", "scripting" and "cloud" appear in essentially every
+# DevOps JD, so scoring them would raise every role by the same amount and rank
+# nothing. They are in the resume and they are still omitted. Likewise absent
+# are azure and gcp - real skills, but not HIS, and rewarding a JD for
+# requiring them would promote the roles he is least able to land.
+#
+# (canonical name, weight, surface forms that mean it)
+SKILL_GROUPS = (
+    # --- the rare, highly diagnostic things: few JDs name these ----------
+    ("intune",          4, ("intune", "microsoft intune", "endpoint manager")),
+    ("workspace one",   4, ("workspace one", "workspace 1", "airwatch")),
+    ("loki",            3, ("loki",)),
+    ("grafana",         3, ("grafana",)),
+    ("mdm",             3, ("mdm", "mobile device management",
+                            "device management")),
+    ("terraform",       3, ("terraform", "terragrunt")),
+    ("github actions",  3, ("github actions", "gh actions",
+                            "github workflow", "github workflows")),
+    ("kubernetes",      3, ("kubernetes", "k8s", "kubectl", "eks", "aks",
+                            "gke", "openshift", "rancher")),
+    # --- core toolchain --------------------------------------------------
+    ("docker",          2, ("docker", "dockerfile", "containerization",
+                            "containerisation", "container image",
+                            "oci image", "podman")),
+    ("ci/cd",           2, ("ci/cd", "cicd", "ci cd", "continuous integration",
+                            "continuous delivery", "continuous deployment")),
+    ("jenkins",         2, ("jenkins", "jenkinsfile")),
+    ("aws",             2, ("aws", "amazon web services", "ec2", "s3",
+                            "cloudformation")),
+    ("digitalocean",    2, ("digitalocean", "digital ocean")),
+    ("linux",           2, ("linux", "ubuntu", "rhel",
+                            "red hat enterprise", "centos", "debian",
+                            "unix")),
+    ("bash",            2, ("bash", "shell scripting", "shell script",
+                            "sh scripting")),
+    ("python",          2, ("python", "python3")),
+    ("infrastructure as code", 2, ("infrastructure as code", "iac")),
+    ("prometheus",      2, ("prometheus", "promql", "alertmanager")),
+    ("helm",            2, ("helm", "helm chart", "helm charts")),
+    ("observability",   2, ("observability", "telemetry",
+                            "distributed tracing")),
+    # --- operations vocabulary: how he actually spent six years ----------
+    ("incident",        2, ("incident", "incident response",
+                            "incident management", "major incident")),
+    ("root cause",      2, ("root cause", "rca", "root cause analysis",
+                            "postmortem", "post-mortem")),
+    ("mttr",            2, ("mttr", "mean time to repair",
+                            "mean time to resolution")),
+    # "endpoint" alone matched "a REST endpoint", which is an API, not a
+    # managed device. A word boundary cannot fix that - the word really is
+    # there - so the form itself has to carry the meaning.
+    ("endpoint management", 2, ("endpoint management", "endpoint security",
+                                "endpoint protection", "device compliance")),
+    ("servicenow",      2, ("servicenow", "service now")),
+    ("escalation",      2, ("escalation", "escalations", "escalate")),
+    ("troubleshooting", 2, ("troubleshooting", "troubleshoot")),
+    # --- supporting, and genuinely in the resume -------------------------
+    ("ansible",         1, ("ansible",)),
+    ("argo cd",         1, ("argo cd", "argocd", "argo-cd")),
+    ("microservices",   1, ("microservices", "micro-services",
+                            "service mesh", "istio")),
+    ("on-call",         1, ("on-call", "on call", "pagerduty", "pager duty")),
+    ("jira",            1, ("jira", "confluence", "atlassian")),
+    ("rest api",        1, ("rest api", "rest apis", "restful",
+                            "rest endpoint", "rest endpoints")),
+    ("fastapi",         1, ("fastapi",)),
+    ("playwright",      1, ("playwright",)),
+    ("pytest",          1, ("pytest",)),
+    ("ms sql",          1, ("ms sql", "mssql", "sql server", "t-sql")),
+    ("vmware",          1, ("vmware", "esxi", "vsphere")),
+
+    # --- added 2026-10-22 from Harmanpreet_Singh_DevOps_Resume_Latest.docx --
+    #
+    # Weights here are MEASURED, not guessed. Each candidate was counted
+    # against a corpus of 135 real job descriptions pulled from the fast lane
+    # (mean 6,857 chars), and weighted by how much naming it DISCRIMINATES:
+    #
+    #     >=60% of JDs  ->  dropped, it ranks nothing
+    #     35-60%        ->  weight 1
+    #     12-35%        ->  weight 2
+    #     <12%          ->  weight 3, rare and his
+    #
+    # The controls are the proof the method works: "cloud" appears in 65% of
+    # JDs and "automation" in 63%, so both are omitted even though the resume
+    # names them - scoring them would add the same points to nearly every role
+    # and reorder nothing. "monitoring" (49%) and "pipeline" (43%) are out for
+    # the same reason at lower cost.
+    #
+    # Rarity is then CAPPED BY PROFICIENCY. The resume separates what he runs
+    # from what he lists under "Familiar with:" and "Learning", and a skill he
+    # is merely familiar with must not outrank one he operates daily however
+    # rare it is. ECS, GitOps and Kafka are 4-7% terms that would otherwise
+    # score 3; they are held at 1. GCP and Go are omitted outright - "Learning
+    # GCP" should not promote a GCP-heavy JD, and bare "go" is unmatchable.
+    ("llm",             2, ("llm", "large language model", "genai",
+                            "generative ai")),
+    ("ai platform",     3, ("ml platform", "ai platform", "mlops", "llmops",
+                            "real-time inference")),
+    ("iam",             2, ("iam", "least privilege", "least-privilege")),
+    ("alerting",        2, ("alerting",)),
+    ("runbook",         2, ("runbook", "sop", "knowledge base")),
+    ("disaster recovery", 2, ("disaster recovery", "business continuity")),
+    ("slo",             3, ("slo", "sli", "error budget",
+                            "service level objective")),
+    ("secrets management", 3, ("secrets management", "secret management")),
+    ("oauth",           3, ("oauth", "oauth2", "oidc")),
+    ("vpc",             3, ("vpc", "subnet", "elastic load balancing")),
+    ("rbac",            3, ("rbac", "role-based access")),
+    ("dns",             3, ("dns",)),
+    ("tls",             3, ("tls", "mtls")),
+    ("drift detection", 3, ("drift detection", "remote state",
+                            "state locking")),
+    ("dynamodb",        3, ("dynamodb",)),
+    ("sast",            3, ("sast", "dependency scanning",
+                            "vulnerability scanning")),
+    ("ingress",         3, ("ingress",)),
+    ("kustomize",       3, ("kustomize",)),
+    ("rolling deploys", 3, ("rolling update", "rolling deployment")),
+    ("defender",        3, ("microsoft defender", "defender for endpoint")),
+    ("ckad",            2, ("ckad", "cka")),
+    # held at 1 by proficiency, not by rarity - see the note above
+    ("ecs",             1, ("amazon ecs", "fargate")),
+    ("gitops",          1, ("gitops",)),
+    ("kafka",           1, ("kafka",)),
+    ("policy as code",  1, ("policy-as-code", "policy as code",
+                            "open policy agent")),
+)
+
+# Anchored on both sides so a form only matches as a whole token. \b is wrong
+# for forms that END in a non-word character, and several of these contain "/"
+# or "-", so the boundary is spelled out as "no alphanumeric either side".
+#
+# The trailing `s?` is not cosmetic. Anchoring alone made the matcher STRICTER
+# than the old substring test in one direction: "incident" stopped matching
+# "incidents", and JDs overwhelmingly write the plural ("manage incidents",
+# "resolve escalations", "harden endpoints"). Without it, fixing the false
+# positives would have introduced a crop of false negatives - six of the eight
+# largest score drops in the A/B were a lost plural, not a lost double-count.
+_SKILL_RX = tuple(
+    (canon, weight,
+     re.compile("|".join(r"(?<![a-z0-9])" + re.escape(f) + r"s?(?![a-z0-9])"
+                         for f in forms)))
+    for canon, weight, forms in SKILL_GROUPS)
+
+# Kept flat for hn.py, which ranks Hacker News "who is hiring" comments with
+# the same vocabulary. Every surface form maps to its group's single weight,
+# so the two lanes cannot disagree about what a skill is worth.
+SKILLS = {f: w for _, w, fs in SKILL_GROUPS for f in fs}
 
 # Levels --------------------------------------------------------------------
 L_EXEC = re.compile(
@@ -325,10 +481,13 @@ def score(title, company, tier, family, blob):
     s = tier * 3
     hits = []
     b = (blob or "").lower()
-    for kw, w in SKILLS.items():
-        if kw in b:
+    # One group scores once, however many of its spellings the JD uses, and
+    # the hit is recorded under the group's canonical name so the displayed
+    # list reads as skills rather than as whichever synonym appeared.
+    for canon, w, rx in _SKILL_RX:
+        if rx.search(b):
             s += w
-            hits.append(kw)
+            hits.append((w, canon))
 
     lvl = level_of(title)
     s += {"entry": 4, "mid": 2, "senior": -2, "exec": -10, "intern": -8}[lvl]
@@ -339,7 +498,10 @@ def score(title, company, tier, family, blob):
         if re.search(r"\b(kubernetes|linux|cloud|devops|platform|infra)\b",
                      (title or "").lower()):
             s += 2
-    return s, sorted(set(hits))[:10], lvl
+    # Heaviest first, name as the tie-break, so a truncated list is the
+    # ten skills that earned the score and not the first ten by name.
+    hits.sort(key=lambda h: (-h[0], h[1]))
+    return s, [c for _, c in hits][:10], lvl
 
 
 # --------------------------------------------------------------- transport ---
@@ -445,6 +607,32 @@ def job(src, company, title, loc, url, posted=None, age=None, blob="", hyd=None,
     return dict(source=src, company=company, title=title, location=loc or "",
                 url=url, posted=posted or "", age=age, blob=blob, hyd=hyd,
                 updated=updated or "", offices=[])
+
+
+# Offshore hiring markers that staffing agencies put in the TITLE while filing
+# the req at the client's Canadian address. Insight Global's "- INTL India"
+# convention is the case that prompted this: an MLOps Engineer scoring 39 -
+# well above the notify threshold - sat at workAddress Vancouver, BC, and its
+# description mentions neither India nor Canada, so the title is the only
+# geographic signal there is.
+#
+# Flagged rather than dropped, deliberately. "Marketing Campaign Manager
+# (Intl.)" in Kanata is plausibly a Canadian role with an international remit,
+# the evidence for the India one is a single title token, and silently hiding a
+# Vancouver req on that basis is the worse error. 3 of 282 rows carry a marker.
+OFFSHORE_TITLE = re.compile(
+    r"\bINTL\b[\s.\-]*(india|mexico|philippines|brazil|colombia|argentina|"
+    r"costa\s*rica|poland|romania)\b|\b(latam|emea|apac)\b", re.I)
+
+
+def offshore_marker(j):
+    """True when the title says offshore but the address says Canada."""
+    m = OFFSHORE_TITLE.search(j.get("title") or "")
+    if not m or classify_location(j.get("location") or "")[0] != "CA":
+        return None
+    return (f"title carries an offshore hiring marker ({m.group(0).strip()}) "
+            f"though the req is filed at a Canadian address - confirm where "
+            f"the role is actually hired before applying")
 
 
 def office_mismatch(j):
@@ -1842,6 +2030,95 @@ def fetch_amazon(t):
     return out
 
 
+# Insight Global - a staffing agency running its own job board, not an ATS
+# product, so harvest.py and discover.py --company can never fingerprint it.
+#
+# `size` is CAPPED AT 50 and silently clamps: ask for 500 and the response says
+# `"size": 50`. Reading pageMetadata.totalPages rather than trusting the request
+# is what keeps paging honest here.
+IG_BASE = "https://insightglobal.com"
+IG_PER_PAGE = 50
+IG_MAX_PAGES = 14          # 700 postings per province; ON, the busiest, is 192
+
+# Province codes, used as the server-side location facet (see fetch_insightglobal).
+# Not one of these collides with a US state code - Nebraska is NE, Pennsylvania
+# is PA - which is what makes the facet safe to drive from this list.
+IG_PROVINCES = ("ON", "BC", "AB", "QC", "MB", "SK", "NS", "NB",
+                "NL", "PE", "YT", "NT", "NU")
+
+
+def fetch_insightglobal(t):
+    """Enumerate the agency's Canadian reqs by province, not by keyword.
+
+    Two findings shaped this, both measured against the live API:
+
+    1. KEYWORD SEARCH IS THE WRONG AXIS HERE. The endpoint ORs loosely, so
+       `platform engineer` reports 1,486 results and `systems engineer` 1,567 -
+       mostly US - while the *entire* Canadian inventory is 282 reqs. Running
+       our 13 standard queries cost 78 requests, truncated most of them, and
+       still found only 60 Canadian rows. Enumerating the 13 provinces costs
+       ~11 requests, returns all 282, and lets TITLE_RULES do the filtering it
+       already does better than a remote relevance ranker. Fewer requests,
+       complete recall, no truncation register needed.
+
+    2. `administrativeArea` IS NOT COUNTRY-SAFE. In this data `CA` means
+       California - 22 US cities carried it - and the feed also contains Indian
+       state codes (TG, KA, MH, AN) and spelled-out Brazilian states. So the
+       country filter MUST be the server-side `filter.locations` facet, which is
+       exact: `ON` returns Ontario only, with no California leakage. Pattern
+       matching that field locally would have swept 22 California jobs in as
+       Canadian. classify_location() reads `San Diego, CA` as OTHER and would
+       have caught most of it downstream, but the right place to be correct is
+       here, before 282 rows become 500.
+
+    The list call carries no description - only the per-req summary endpoint
+    does - so this sets `hyd` and the full JD arrives in pass 2 for finalists
+    only, the same bargain greenhouse and ashby make.
+
+    `company` is the agency, not the client: these are placements and the client
+    is usually withheld ("A leading home healthcare organization"), so naming
+    Insight Global is the only honest label available.
+    """
+    name = t.get("name", "Insight Global")
+    provinces = t.get("provinces") or IG_PROVINCES
+    out, seen = [], set()
+    for prov in provinces:
+        for page in range(1, IG_MAX_PAGES + 1):
+            try:
+                d = _req(f"{IG_BASE}/all/jobs?size={IG_PER_PAGE}&page={page}"
+                         f"&filter.status=active&filter.locations={prov}")
+            except Exception:
+                break
+            rows = d.get("jobs") or []
+            if not rows:
+                break
+            for r in rows:
+                rid = r.get("requisitionId")
+                title = (r.get("jobTitle") or "").strip()
+                if not rid or not title or rid in seen:
+                    continue
+                seen.add(rid)
+                addr = r.get("workAddress") or {}
+                loc = ", ".join(x for x in (addr.get("locality"),
+                                            addr.get("administrativeArea")) if x)
+                # workRemote is a real boolean here, and the location string is
+                # the city regardless - so without this, a remote req reads as
+                # on-site in Toronto and arrangement() never sees "remote".
+                if r.get("workRemote"):
+                    loc = f"{loc} / Remote" if loc else "Remote"
+                posted = str(r.get("postedDate") or "")[:10]
+                # Contract vs Perm is the single most useful thing the list call
+                # knows that the title does not, and it is worth scoring on.
+                blob = " ".join([title, loc, r.get("jobType") or ""])
+                out.append(job("insightglobal", name, title, loc,
+                               f"{IG_BASE}/jobs/{rid}", posted, days_ago(posted),
+                               blob, hyd=("insightglobal", rid)))
+            meta = d.get("pageMetadata") or {}
+            if page >= (meta.get("totalPages") or page):
+                break
+    return out
+
+
 ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "ashby": fetch_ashby, "recruitee": fetch_recruitee,
             "rippling": fetch_rippling, "workday": fetch_workday,
@@ -1852,7 +2129,7 @@ ADAPTERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever,
             "taleo": fetch_taleo, "wpjobs": fetch_wpjobs,
             "amazon": fetch_amazon, "avature": fetch_avature,
             "teamtailor": fetch_teamtailor, "ultipro": fetch_ultipro,
-            "jobbank": fetch_jobbank}
+            "jobbank": fetch_jobbank, "insightglobal": fetch_insightglobal}
 
 
 # ---------------------------------------- pass 2: hydrate only the finalists --
@@ -1977,6 +2254,12 @@ def hydrate(j):
                           h, re.S | re.I)
             body = m.group(1) if m else h
             j["blob"] += " " + strip_html(body)[:8000]
+        elif kind[0] == "insightglobal":
+            # The SUMMARY endpoint already carries descriptionHtml, so there is
+            # no reason to fetch /details as well - it returns the same text
+            # under a different key. One request per finalist, no HTML scraping.
+            d = _req(f"{IG_BASE}/all/jobs/{kind[1]}")
+            j["blob"] += " " + strip_html(d.get("descriptionHtml") or "")[:8000]
         elif kind[0] == "ashby":
             _, tok, jid = kind
             d = _req("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting",
@@ -2544,9 +2827,9 @@ def main():
                   f"- {tagstr} · posted {age}",
                   f"- {j['url']}",
                   f"- matched: {', '.join(j['kw']) or '—'}"]
-            warn = office_mismatch(j)
-            if warn:
-                L.append(f"- ⚠️ {warn}")
+            for warn in (office_mismatch(j), offshore_marker(j)):
+                if warn:
+                    L.append(f"- ⚠️ {warn}")
             L.append("")
 
     if not show:

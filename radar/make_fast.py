@@ -15,7 +15,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling",
               "workable", "smartrecruiters")
 DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
-             "taleo", "wpjobs", "amazon", "avature", "teamtailor", "ultipro", "jobbank")
+             "taleo", "wpjobs", "amazon", "avature", "teamtailor", "ultipro", "jobbank",
+             "insightglobal")
 
 
 # Platforms that must NEVER enter the fast lane, whatever they produced.
