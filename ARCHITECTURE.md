@@ -1067,3 +1067,112 @@ closing only `/wp-content/uploads/`, the WordPress admin, internal site search,
 and the job board's **logged-in** areas (`/jobs/applied`, `/jobs/saved`,
 `/jobs/profile`). `/all/jobs` is unauthenticated and not disallowed, and job
 search results and job pages are permitted by name.
+
+## the location filter was silently dropping worldwide-remote work
+
+`classify_location` sorts every posting into a bucket and the sweep keeps only
+some of them. For most of this tool's life that list was `CA,NA-REMOTE,MULTI`,
+and the failure it caused was invisible precisely because it looked like
+correct behaviour: nothing errored, no board went quiet, the digest just never
+mentioned a whole class of job.
+
+Three wordings fell through to `OTHER`, which is dropped:
+
+| location string | old bucket | new bucket |
+|---|---|---|
+| `Remote, Global` · `Global Remote` · `Home based - Worldwide` | `OTHER` | **`GLOBAL`** |
+| `Americas Remote` | `OTHER` | **`NA-REMOTE`** |
+| `London / Dublin / Hungary / Toronto / Berlin` | `OTHER` | **`CA-OPTION`** |
+| `Calgary, Alberta / Atlanta, GA / Arizona` | `US-ONLY` | **`CA-OPTION`** |
+
+Each has its own cause. **Global remote** had no rule at all. **`Americas
+Remote`** did have one — `remote\s*[-,]?\s*americas?` — but only in that word
+order, so `Remote - Americas` classified and `Americas Remote` did not; that one
+regex hid Customer.io's entire Americas lane. **`CA-OPTION`** is the subtlest: a
+Canadian city in a multi-location req lost to the foreign veto, because
+`NOT_CANADA` saw Germany in the same string and threw the whole posting away.
+Judging each `/`-separated segment on its own fixes it, and `canadian_option`
+recurses exactly one level deep because a segment contains no separator.
+
+`GLOBAL` is kept deliberately narrow. A bare `Remote` or `Fully remote` does
+**not** qualify, because in practice those mean remote-within-the-US, and
+`work from anywhere in the United States` says so outright — the regex carries a
+negative lookahead for it. `Latin America Remote` is the mirror-image trap on
+the Americas rule: the reverse word order would have admitted it, so
+`AMERICAS_LATAM` vetoes latin/south/central explicitly.
+
+### vendor-family titles do not ride in on GLOBAL
+
+The first measured run of this change was wrong in a way worth recording.
+`GLOBAL` exists only because a req is open to the whole world, so it carries no
+evidence that *this role* suits you — and the vendor-family rules (support,
+sales, field, solutions engineer) are the loosest in `TITLE_RULES`. Admitted
+together, they put seven Canonical support and sales reqs **above every real SRE
+role in the same batch**: `Associate Linux Support Engineer` scored 24 while
+`Site Reliability / Gitops Engineer` scored 15. Support roles are excluded by
+request, so `NO_VENDOR_BUCKETS = {"GLOBAL"}` drops them. `CA-OPTION` is
+deliberately *not* in that set: a named Canadian city on the req is the same
+evidence `CA` has, where vendor-family already counts.
+
+### what it actually changed, measured over one full sweep
+
+56,524 postings, 505 boards:
+
+```
+bucket        before    after   delta
+CA             11400    11400      +0     <- bit-identical
+MULTI           1257     1257      +0     <- bit-identical
+NA-REMOTE        128      147     +19
+GLOBAL             0      148    +148
+CA-OPTION          0       15     +15
+OTHER          30189    30009    -180
+US-ONLY        13550    13548      -2
+```
+
+**Postings kept before and dropped after: 0.** The change is purely additive by
+construction — `shadow`/`classify_location` returns the existing verdict
+untouched whenever `keep` is already true, so nothing that reached the tracker
+before can be reclassified or lost. That also means no migration: unlike the
+scorer rebuild, no tracker row needs rescoring.
+
+20 postings are newly admitted with a matching title, 0 of them vendor-family.
+**Only 9 actually surface**, because `--max-age 30` suppresses the rest, and
+that is the honest number — the scoping pass that predicted 17 had not applied
+the age filter. The suppressed 11 are evergreen reqs nobody ever closes:
+Canonical's `Site Reliability / Gitops Engineer` is **2,678 days** old and its
+`Senior SRE / Gitops Engineer` 1,071, while Metabase's `Senior SRE/DevOps
+Engineer` is 2,359. Ashby boards supply no `posted` date before hydrate, so
+Supabase's rows carry `age=None` and pass — pre-existing behaviour, not
+something this change introduced.
+
+The nine: eight Supabase platform/SRE reqs (`Remote, Global`, scoring 29–45) and
+the ElevenLabs `Infrastructure Engineer` filed in **Toronto** at 29.
+
+### blast radius
+
+Two edits in one file. `bucket` is never written to `applications.md` and is
+never read by `serve.py` or `serve_page.html`, so the web app needed nothing;
+neither `daily.sh` nor `fast.sh` passes `--bucket`, so both inherit the new
+default. The only other place a bucket is recomputed is the Workday
+`N Locations` path inside `hydrate`, which calls `classify_location` and so
+picks up the new rules for free — the post-hydrate re-filter repeats the
+vendor-family condition so a Workday row cannot enter `GLOBAL` through it.
+
+### the class this does NOT fix
+
+Two Canada-eligible reqs stay invisible because their location field carries no
+Canadian signal at all, and only the JD does:
+
+- KoBold `Staff Client Platform Engineer` — filed `Remote - US`, JD reads
+  *"open to candidates residing anywhere in the United States or Canada"*.
+- Databento `Site Reliability Engineer` — filed `Remote / San Francisco / New
+  York / Salt Lake City`, JD reads *"100% remote, teammates living around the
+  globe and paid in their local currency"*.
+
+This cannot be fixed with a location rule, and it cannot be fixed cheaply with a
+JD rule either: the evidence lives in the description, descriptions are only
+hydrated for finalists, and finalists are chosen *after* the location filter
+runs. The pool is **286 US-ONLY postings carrying a tier-4 title**, so checking
+them means 286 extra fetches per sweep — far too much for a lane that fires
+every five minutes. If it is ever worth doing it belongs in a separate
+once-daily pass, not here.

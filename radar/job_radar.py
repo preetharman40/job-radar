@@ -354,13 +354,39 @@ CA_REGION_RE = _word_re([r for r in CA_REGIONS if len(r) > 2])
 # Wordings a Canadian resident can actually hold.
 NORTH_AMERICA = re.compile(
     r"north\s+america(n)?|remote\s*[-,]?\s*americas?\b|\bamer\b"
+    r"|north\s*(?:&|and|\+|/)\s*south\s+america"
     r"|u\.?s\.?a?\s*(or|/|&|and)\s*canada"
     r"|united\s+states\s+(or|and|/)\s+canada", re.I)
+# "Americas Remote" means the same thing as "Remote - Americas", but the regex
+# above only matches the second word order, so Customer.io's whole Americas
+# lane read as OTHER and was discarded. LATAM is the one case the reverse order
+# must NOT admit: "Latin America Remote" is not a role a Canadian can hold.
+AMERICAS_REMOTE = re.compile(r"americas?\s*[-,/]?\s*remote\b", re.I)
+AMERICAS_LATAM = re.compile(r"(?:latin|south|central)\s+americas?\s*[-,/]?\s*remote\b", re.I)
+# Wordings that mean "anywhere on earth", which includes Canada. Deliberately
+# narrow: a bare "Remote" or "Fully remote" is usually remote-within-the-US, and
+# "work from anywhere in the United States" says so outright, so neither counts.
+# Measured against one full sweep this moves 148 of 56,524 postings.
+GLOBAL_REMOTE = re.compile(
+    r"remote[\s,\-/(]*global(?![a-z])|global(?:ly)?[\s,\-]*remote(?![a-z])"
+    r"|\bworldwide\b|anywhere in the world"
+    r"|work from anywhere(?!\s+in\s+the\s+(?:us\b|u\.s|united\s+states))"
+    r"|remote\s*[-(]\s*anywhere", re.I)
 # Reached only after the Canada check fails, so a bare "United States" here
 # means the req really is US-only.
 US_ONLY = re.compile(
     r"united\s+states|\busa?\b|u\.s\.|us[\s-]+(only|based|remote)", re.I)
 MULTI_HINT = re.compile(r"\b\d+\s+locations?\b|\bmultiple locations\b", re.I)
+# GLOBAL exists only because a req is open to the whole world, so it carries no
+# evidence that THIS role suits you - and the vendor-family rules (support,
+# sales, field, solutions engineer) are the loosest ones we have. Admitting both
+# at once put seven Canonical support and sales reqs above every real SRE role
+# in the same batch: "Associate Linux Support Engineer" scored 24, the
+# "Site Reliability / Gitops Engineer" 15. Support roles are excluded by
+# request, so vendor titles have to earn their place somewhere geographic.
+# CA-OPTION is deliberately NOT in here: a named Canadian city on the req is the
+# same evidence CA has, where vendor-family already counts.
+NO_VENDOR_BUCKETS = {"GLOBAL"}
 
 # Province detection, so results can be filtered to where you actually live.
 # Word boundaries, for the same reason everything else here uses them.
@@ -430,6 +456,27 @@ US_STATE_CODE = re.compile(
     r"SD|ND|AK|VT|WY|HI|WV|FL)\b")
 
 
+_LOC_SPLIT = re.compile(r"\s*(?:/|;|\|)\s*")
+
+
+def canadian_option(loc):
+    """True when one segment of a multi-location req is plainly Canadian.
+
+    A req listing "London / Dublin / Hungary / Toronto / Berlin" offers Toronto
+    as a real choice, but the foreign veto below sees Germany and throws the
+    whole thing away - which is how an ElevenLabs Infrastructure Engineer req
+    filed in Toronto stayed invisible. Judged per segment instead, so a foreign
+    city in the same list cannot veto a Canadian one.
+
+    Recursion is bounded: segments contain no separator, so the nested call
+    takes the len < 2 exit immediately.
+    """
+    segs = [s.strip() for s in _LOC_SPLIT.split(loc or "") if s.strip()]
+    if len(segs) < 2:
+        return False
+    return any(classify_location(s) == ("CA", True) for s in segs)
+
+
 def classify_location(loc):
     """-> (bucket, keep). CA | NA-REMOTE | MULTI | US-ONLY | OTHER"""
     if not loc:
@@ -451,7 +498,14 @@ def classify_location(loc):
     # An ambiguous city counts only with a Canadian qualifier and no foreign one.
     if CA_AMBIG_RE.search(l) and has_region and not foreign:
         return "CA", True
-    if NORTH_AMERICA.search(l):
+    # A Canadian city offered as one option among many. Ahead of US_ONLY, which
+    # otherwise claims "Calgary, Alberta / Atlanta, GA / Arizona" (Benevity).
+    if canadian_option(loc):
+        return "CA-OPTION", True
+    if GLOBAL_REMOTE.search(l):
+        return "GLOBAL", True
+    if NORTH_AMERICA.search(l) or (AMERICAS_REMOTE.search(l)
+                                   and not AMERICAS_LATAM.search(l)):
         return "NA-REMOTE", True
     if MULTI_HINT.search(l):
         return "MULTI", True          # Workday collapses "3 Locations"
@@ -2617,8 +2671,8 @@ def main():
                     help="comma list of entry,mid,senior,exec,intern")
     ap.add_argument("--family", default="devops,adjacent,vendor",
                     help="comma list of devops,adjacent,vendor")
-    ap.add_argument("--bucket", default="CA,NA-REMOTE,MULTI",
-                    help="comma list of CA,NA-REMOTE,MULTI")
+    ap.add_argument("--bucket", default="CA,CA-OPTION,NA-REMOTE,MULTI,GLOBAL",
+                    help="comma list of CA,CA-OPTION,NA-REMOTE,MULTI,GLOBAL,US-ONLY,OTHER")
     ap.add_argument("--province", default="",
                     help="comma list of province codes e.g. AB,BC. Postings that "
                          "name no province (remote) are always kept")
@@ -2707,6 +2761,8 @@ def main():
         tier, fam = title_match(j["title"], j["company"])
         if tier == 0 or fam not in fams:
             continue
+        if fam == "vendor" and bucket in NO_VENDOR_BUCKETS:
+            continue
         if level_of(j["title"]) not in levels:
             continue
         if j["age"] is not None and j["age"] > a.max_age:
@@ -2725,7 +2781,9 @@ def main():
     # else keeps the verdict pass 1 already reached (geo_keep defaults True).
     before_geo = len(shortlist)
     shortlist = [j for j in shortlist
-                 if j.get("geo_keep", True) and j["bucket"] in buckets]
+                 if j.get("geo_keep", True) and j["bucket"] in buckets
+                 and not (j["family"] == "vendor"
+                          and j["bucket"] in NO_VENDOR_BUCKETS)]
     dropped_geo = before_geo - len(shortlist)
 
     if provs:

@@ -81,7 +81,7 @@ Two passes. The first is cheap and wide, the second is expensive and narrow.
   TITLE filter    ──── 21 regex rules → (weight, family)   no match = dropped
             │                                               ~1.2% survive
             ▼
-  LOCATION filter ──── CA / NA-REMOTE / MULTI kept
+  LOCATION filter ──── CA / CA-OPTION / NA-REMOTE / MULTI / GLOBAL kept
             │          US-ONLY / OTHER dropped
             ▼
   PASS 2   hydrate ──── fetch the FULL job description, but only for the
@@ -149,6 +149,8 @@ Tune the thresholds for your own search:
 --family vendor          only vendor support roles
 --province AB,BC         only these provinces
 --bucket CA              Canada-based only, drop US/Canada-ambiguous remote
+--bucket CA,CA-OPTION    Canada-based plus reqs offering a Canadian city
+                         among several (drops worldwide-remote)
 ```
 
 ---
