@@ -11,9 +11,9 @@ python3 serve.py                # web view on :8737
 
 | Script | Purpose |
 |---|---|
-| `job_radar.py` | The engine — 21 ATS adapters, 470 boards, filters, scoring, output |
+| `job_radar.py` | The engine — 21 ATS adapters, 505 boards, filters, scoring, output |
 | `fast.sh` | Cron lane 1: the 60 productive boards, every 5 min |
-| `daily.sh` | Cron lane 2: all 470 boards, every 30 min |
+| `daily.sh` | Cron lane 2: all 505 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
@@ -33,7 +33,7 @@ python3 serve.py                # web view on :8737
 
 | Data | |
 |---|---|
-| `targets.json` | 470 boards + 85 DevOps-vendor tags |
+| `targets.json` | 505 boards + 85 DevOps-vendor tags |
 | `fast.json` | The productive subset — generated, not hand-edited |
 | `seen.sqlite3` | Local memory. Delete and re-`--seed` to reset. |
 | `.ntfy_topic` | Push topic — **this string is a password** |
