@@ -33,7 +33,18 @@ DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
 # digest's producer list and the name match below cannot hit. That is luck, not
 # design - it would silently stop protecting us the day that field changed - so
 # the exclusion is written down.
-NEVER_FAST = ("jobbank",)
+# insightglobal is excluded for request VOLUME, not Crawl-delay. The adapter
+# enumerates 13 province codes through the locations facet, so one sweep of it
+# is ~11-13 requests even with the early breaks. The fast lane fires every 5
+# minutes for 13 hours, which is 156 runs a day, so putting it here would mean
+# roughly 1,700-2,000 requests a day at insightglobal.com from one residential
+# IP. That site is Cloudflare-fronted and already answers a MANAGED challenge on
+# /jobs and /companies - it actively polices automation, and the open /all/jobs
+# endpoint we depend on is exactly what we would lose first. robots.txt sets no
+# Crawl-delay, so this is a judgement about not being the reason it closes,
+# rather than a rule being honoured. The 30-minute lane already polls it 26
+# times a day, which is ample for a board whose reqs are not minutes-fresh.
+NEVER_FAST = ("jobbank", "insightglobal")
 
 
 def main():
