@@ -1096,6 +1096,93 @@ day, and `\S+` is not a name.
 
 ---
 
+## logging: the weekly cron was deleting the evidence
+
+`17 3 * * 0 find radar -maxdepth 1 -name '*.log' -size +5M -delete`.
+
+Not rotating. **Deleting.** Nothing had tripped it yet - the largest log was
+841K - but it was certain to: `verify.log` grows 21K/day and would have passed
+5MB in about **204 days**, `radar.log` in **362**, and at that moment every
+record of what the radar had ever done would have been removed, silently, by a
+cron job whose output nobody reads. A log you delete is a log you cannot
+analyse.
+
+Replaced with `logrotate` (already installed, run from the user's cron with its
+own `--state`, so no root): 12 weekly generations, compressed, date-stamped
+filenames rather than `.1/.2/.3` because reconstructing an incident means
+opening the week it happened, not counting backwards through generations.
+
+`copytruncate` for every log, including the cron ones that would not strictly
+need it. `serve.py` runs under systemd with `StandardOutput=append:`, which
+holds `web.log`'s descriptor open for the life of the process; renaming that
+file would leave the app writing to an inode nothing can find and the log would
+appear to simply stop - exactly the silent failure this is about. A separate
+stanza for it is impossible, because `*.log` already matches it and logrotate
+rejects a duplicate entry. The cost is a microsecond window between copy and
+truncate where a write can be lost, which on logs written a few times an hour
+is the right trade for never losing the file.
+
+### the prose logs cannot answer the questions you actually ask
+
+After something goes quietly wrong the questions are: when did this lane last
+*succeed*, which run did the 429s start in, is it getting slower, did it run at
+all on the 14th. Answering those from prose means regex archaeology over
+`radar.log`, and doing that archaeology by hand produced **three** wrong
+conclusions in `ratecheck.py` alone - a substring read as a status code, a UTC
+date read as a local day, and `\S+` read as a name.
+
+So `cronwrap.sh` now also appends one JSON record per run to `events.jsonl`:
+
+```json
+{"ts":"2026-10-27T17:42:10Z","label":"daily","rc":0,"secs":349,
+ "shown":0,"matched":213,"scanned":56391,"boards":1126,"http429":0,"tracebacks":0}
+```
+
+Deliberately a **second view, not a change to the first**: `radar.log`'s format
+is parsed by `ratecheck.py` and `make_fast.py`, and prefixing or reshaping it
+would break both. Python does the encoding rather than hand-assembled JSON,
+because a stray quote or newline in a job's output would otherwise produce a
+line nothing can parse - precisely the failure this is meant to remove. The
+whole block is best-effort and cannot change the job's exit status.
+
+The captured `tail` is stored **only** when `rc != 0` or a traceback appeared.
+The first version stored it on every run, because `rc` arrives from `argv` as a
+string and `"0" != 0` is True in Python - a type confusion of the same family
+as the regex errors above, caught by reading the output of a test rather than
+assuming it.
+
+`logq.py` queries it: `--days`, `--lane`, `--failures` (with tails), `--gaps`
+(lanes overdue for their cadence). It reads the rotated and compressed
+generations too, so rotation never shortens the window you can ask about -
+which would have been the same mistake as the `find -delete`.
+
+### closing the chain on the watchers themselves
+
+| failure | reported by |
+|---|---|
+| a lane errors out | `cronwrap.sh` -> phone, and `rc` in `events.jsonl` |
+| a lane never runs | `watchdog.sh` -> phone |
+| **the watchdog itself fails** | systemd `OnFailure=radar-alert@%n` -> phone |
+| the web app fails | systemd restarts it; a persistent failure -> same alert |
+| anything at all, after the fact | `logq.py`, 12 months of `events.jsonl` |
+
+The third row is the one that was missing. The whole scheme rested on a process
+whose own death was unreported - and `SuccessExitStatus=0 1` means the
+watchdog's "I found a problem" exit is not a unit failure, so only a genuine
+crash trips `OnFailure`. `alert.sh` pulls the last eight journal lines for the
+failed unit into the alert body, so the push says what happened rather than
+only that something did.
+
+The systemd units are covered by the journal rather than by `events.jsonl`:
+`/var/log/journal` exists, so the user journal is persistent across reboot and
+currently retains 25 days. `journalctl --user -u radar-watchdog` and
+`journalctl --user -u job-radar-web` are the equivalents of a lane's log.
+
+**What is still not covered:** a machine that is off, and a disk that is full.
+Neither can be reported by anything running on the machine.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that

@@ -110,3 +110,14 @@ env/
 *~
 .DS_Store
 Thumbs.db
+
+# Machine-readable run history from cronwrap.sh. Same class as the logs: a
+# captured failure tail can contain posting data and the first six characters
+# of the ntfy topic, which job_radar.py prints when it pushes. Rotated
+# generations match the same pattern.
+radar/events.jsonl
+radar/events.jsonl-*
+# logrotate's own state file, and the rotated logs themselves.
+radar/.logrotate.state
+radar/*.log-*
+radar/.watchdog_state

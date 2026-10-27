@@ -26,6 +26,9 @@ python3 serve.py                # web view on :8737
 | `cronwrap.sh` | Wraps a cron lane and pushes its failure to ntfy. A silent failure is a data gap |
 | `refresh_fast.sh` | Weekly `fast.json` rebuild from a full `--no-claim` sweep (Sun 05:10) |
 | `SUDO_SETUP.md` | The two root commands that let cron be restarted automatically |
+| `logq.py` | **Query the run history.** `--failures`, `--gaps`, `--lane X`. Reads `events.jsonl`, which `cronwrap.sh` appends one JSON record to per run |
+| `alert.sh` | systemd `OnFailure=` handler, so a crash in the *watchdog* is not silent |
+| `logrotate.conf` | 12 weekly generations, compressed. Replaced a cron job that **deleted** any log over 5MB |
 | `discover.py` | Fingerprint one company's ATS · `--verify` prunes dead boards |
 | `harvest.py` | Bulk: company names → boards |
 | `hunt.py` | Workday / SuccessFactors tenants |
