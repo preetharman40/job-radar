@@ -22,6 +22,10 @@ python3 serve.py                # web view on :8737
 | `ratecheck.py` | Did the Workday burst cap hold |
 | `purge_expired.py` | Delete dead postings — keeps anything already applied to |
 | `prune_live.py` | Bound the `live` table — 60-day retention, weekly via cron |
+| `watchdog.sh` | **Is the radar running at all?** systemd USER timer, every 15 min — outside cron, because cron is what it watches. Alerts to your phone |
+| `cronwrap.sh` | Wraps a cron lane and pushes its failure to ntfy. A silent failure is a data gap |
+| `refresh_fast.sh` | Weekly `fast.json` rebuild from a full `--no-claim` sweep (Sun 05:10) |
+| `SUDO_SETUP.md` | The two root commands that let cron be restarted automatically |
 | `discover.py` | Fingerprint one company's ATS · `--verify` prunes dead boards |
 | `harvest.py` | Bulk: company names → boards |
 | `hunt.py` | Workday / SuccessFactors tenants |

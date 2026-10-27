@@ -94,7 +94,6 @@
     "beyondtrust",
     "capco",
     "catonetworks",
-    "censys",
     "coconutsoftware",
     "dropbox",
     "elastic",
@@ -140,11 +139,13 @@
   "rippling": [],
   "workable": [],
   "smartrecruiters": [
+    "AccorHotel",
     "Dexterra",
     "EgisGroup",
     "GDMSI",
     "Medfar",
-    "SGS"
+    "SGS",
+    "Scalian"
   ],
   "workday": [
     {
@@ -224,6 +225,12 @@
       "cluster": "wd10",
       "site": "ubcstaffjobs",
       "country_facet": null
+    },
+    {
+      "name": "Desjardins",
+      "tenant": "desjardins",
+      "cluster": "wd10",
+      "site": "Desjardins"
     },
     {
       "name": "Interac",

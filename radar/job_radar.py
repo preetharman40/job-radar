@@ -2814,6 +2814,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter, description=__doc__)
     ap.add_argument("--all", action="store_true", help="show all matches, not just new")
     ap.add_argument("--seed", action="store_true", help="record state, print nothing")
+    ap.add_argument("--no-claim", action="store_true",
+                    help="do not record postings in `seen` (for reporting runs)")
     ap.add_argument("--min-score", type=int, default=8)
     ap.add_argument("--max-age", type=int, default=30, help="skip reqs older than N days")
     ap.add_argument("--level", default="entry,mid,senior",
@@ -2975,6 +2977,19 @@ def main():
     # inserted owns it.
     fresh = []
 
+    # A reporting run must not touch notification state. `--all` claims every
+    # match it shows, which is right for a normal sweep and wrong for a sweep
+    # whose only purpose is to produce a digest - the weekly fast.json refresh
+    # is exactly that. Without this flag the refresh would silently consume
+    # whatever was new that morning (the trap the README warns about: "--all
+    # without --track consumes postings into seen, so cron will never notify
+    # you about them again"), and adding --notify instead is worse, because
+    # notify() reads `show`, which under --all is every match - 181 of 213 on
+    # a measured sweep, all pushed to the phone at once.
+    if a.no_claim:
+        print(">> --no-claim: not recording anything in `seen`", file=sys.stderr)
+        a.notify = a.track = False
+
     def _claim():
         fresh.clear()
         for j in hits:
@@ -2985,7 +3000,9 @@ def main():
     # fresh is rebuilt from scratch on each attempt: a retry re-runs the
     # INSERTs after a rollback, so appending without clearing would count a
     # posting twice and notify twice.
-    if not db_write(conn, _claim, label="seen claim"):
+    if a.no_claim:
+        fresh = []
+    elif not db_write(conn, _claim, label="seen claim"):
         # The fetching is already done and the matches are real, so the digest
         # is still worth printing - but nothing was claimed, so suppress
         # notify/track rather than push alerts this run cannot dedupe. The next
