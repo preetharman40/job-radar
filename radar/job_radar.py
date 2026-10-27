@@ -2458,6 +2458,57 @@ class FileLock:
         self.fh.close()
 
 
+def db_write(conn, fn, tries=4, budget=75.0, label="write"):
+    """Run a write transaction against seen.sqlite3, retrying a lock.
+
+    `busy_timeout=30000` already makes SQLite wait 30 seconds for the write
+    lock. What it does not do is survive that wait expiring: the
+    OperationalError propagates and takes the entire run with it, including
+    every network fetch it had already done - 1,126 board requests for a full
+    sweep. On 2026-10-27 a long-running inbox.py backfill held the lock across
+    175 IMAP round-trips and killed four fast-lane runs, one daily sweep and
+    one verify_tracked run exactly that way, all of them after their work was
+    finished.
+
+    SQLite in WAL mode allows exactly one writer, so contention is a normal
+    condition here, not an error: five processes share this file (both poller
+    lanes, verify_tracked, board_health, inbox.py) and the only coordination
+    between them is cron's clock. A retry is the difference between "another
+    writer was busy for a moment" and "this sweep is lost".
+
+    Returns True on success, False when every attempt was blocked - the caller
+    decides whether that is fatal. Anything other than a lock is re-raised
+    immediately, because a real error should not be retried four times.
+
+    `budget` caps the TOTAL time spent waiting, which matters because each
+    attempt can itself block for busy_timeout (30s). Four unbounded attempts
+    would be ~129s, and the fast lane has a 5-minute cadence and already takes
+    ~148s, so an unlucky run could overrun into the next one and become the
+    contention it was waiting out. 75s keeps the worst case near 220s. A
+    verified 40s lock is survived comfortably inside that.
+    """
+    deadline = time.time() + budget
+    for i in range(tries):
+        try:
+            fn()
+            conn.commit()
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() and "busy" not in str(e).lower():
+                raise
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if i == tries - 1 or time.time() >= deadline:
+                print(f">> WARNING: {label} gave up after {i + 1} attempt(s) "
+                      f"and {budget:.0f}s - database stayed locked ({e})",
+                      file=sys.stderr)
+                return False
+            time.sleep(1.5 * (i + 1))
+    return False
+
+
 def atomic_write(path, text):
     """Write via temp file + rename so a reader never sees a half-written file."""
     d = os.path.dirname(os.path.abspath(path)) or "."
@@ -2903,24 +2954,46 @@ def main():
     # Record liveness for everything scanned, and stamp the sweep. Only a full
     # sweep (no --targets override) is authoritative about what is still up.
     if a.targets == TARGETS:
-        conn.executemany("INSERT INTO live(url,last_seen) VALUES(?,?) "
-                         "ON CONFLICT(url) DO UPDATE SET last_seen=excluded.last_seen",
-                         [(j["url"], now) for j in jobs])
-        conn.execute("INSERT INTO sweeps(ts) VALUES(?)", (now,))
-        conn.execute("DELETE FROM sweeps WHERE ts NOT IN "
-                     "(SELECT ts FROM sweeps ORDER BY ts DESC LIMIT 50)")
+        # Its own transaction, separate from the seen claims below. These two
+        # writes have different consequences: losing the liveness stamp costs
+        # one cycle of prune_live accuracy, while losing the seen claims means
+        # either no notification or a duplicate one. Keeping them apart means a
+        # blocked bulk write cannot take the claims down with it.
+        def _live():
+            conn.executemany(
+                "INSERT INTO live(url,last_seen) VALUES(?,?) "
+                "ON CONFLICT(url) DO UPDATE SET last_seen=excluded.last_seen",
+                [(j["url"], now) for j in jobs])
+            conn.execute("INSERT INTO sweeps(ts) VALUES(?)", (now,))
+            conn.execute("DELETE FROM sweeps WHERE ts NOT IN "
+                         "(SELECT ts FROM sweeps ORDER BY ts DESC LIMIT 50)")
+        db_write(conn, _live, label="live/sweeps stamp")
     # Claiming a posting must be atomic. The fast lane and the full sweep can
     # run in the same minute; when both read `seen` before either wrote, they
     # each decided the same job was new and both pushed a notification. Insert
     # first and let the row count decide - only the writer that actually
     # inserted owns it.
     fresh = []
-    for j in hits:
-        cur = conn.execute("INSERT OR IGNORE INTO seen VALUES(?,?,?,?)",
-                           (j["url"], j["title"], j["company"], now))
-        if cur.rowcount:
-            fresh.append(j)
-    conn.commit()
+
+    def _claim():
+        fresh.clear()
+        for j in hits:
+            cur = conn.execute("INSERT OR IGNORE INTO seen VALUES(?,?,?,?)",
+                               (j["url"], j["title"], j["company"], now))
+            if cur.rowcount:
+                fresh.append(j)
+    # fresh is rebuilt from scratch on each attempt: a retry re-runs the
+    # INSERTs after a rollback, so appending without clearing would count a
+    # posting twice and notify twice.
+    if not db_write(conn, _claim, label="seen claim"):
+        # The fetching is already done and the matches are real, so the digest
+        # is still worth printing - but nothing was claimed, so suppress
+        # notify/track rather than push alerts this run cannot dedupe. The next
+        # sweep claims them properly.
+        print(">> database stayed locked: showing results but NOT notifying "
+              "or tracking this run (the next sweep will)", file=sys.stderr)
+        fresh = []
+        a.notify = a.track = False
 
     if a.seed:
         print(f"Seeded {len(hits)} postings into {DB}.\n"

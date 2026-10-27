@@ -247,6 +247,7 @@ def main():
     results = [results_map[u] for u in urls]
 
     counts = {"open": 0, "gone": 0, "unknown": 0}
+    pending = []
     for url, (state, detail) in zip(urls, results):
         _, misses = prior.get(url, ("open", 0))
         if state == "open":
@@ -257,16 +258,23 @@ def main():
         final = "gone" if (state == "gone" and misses >= MISSES_BEFORE_GONE) else \
                 "open" if state == "open" else "checking"
         counts[state] += 1
-        if not a.dry_run:
-            conn.execute("INSERT INTO tracked_live VALUES(?,?,?,?,?) "
-                         "ON CONFLICT(url) DO UPDATE SET state=excluded.state, "
-                         "misses=excluded.misses, checked=excluded.checked, "
-                         "detail=excluded.detail",
-                         (url, final, misses, now, detail))
+        pending.append((url, final, misses, now, detail))
         if state != "open":
             print(f"  {state:8} misses={misses} {detail[:28]:30} {url[:60]}")
-    if not a.dry_run:
-        conn.commit()
+    # Collected first, written once, and retried on a lock. This used to write
+    # inside the loop and commit at the end, so a blocked write threw away the
+    # whole run - every HTTP check included. One of these died that way on
+    # 2026-10-27 while a backfill held the lock.
+    if not a.dry_run and pending:
+        def _save():
+            conn.executemany(
+                "INSERT INTO tracked_live VALUES(?,?,?,?,?) "
+                "ON CONFLICT(url) DO UPDATE SET state=excluded.state, "
+                "misses=excluded.misses, checked=excluded.checked, "
+                "detail=excluded.detail", pending)
+        if not jr.db_write(conn, _save, label="tracked_live"):
+            print("  !! could not save results - database stayed locked. The "
+                  "checks above are correct but miss counters did not advance.")
     print(f"\n  {counts['open']} open · {counts['gone']} not found · "
           f"{counts['unknown']} unclear   ({len(urls)} checked)")
     if skip:

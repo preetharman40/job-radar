@@ -79,6 +79,12 @@ def sample(task):
         return src, name, None, f"{type(e).__name__}"
 
 
+# Hours without a full sweep before board_health calls the poller dead. See the
+# reasoning where it is used: 11h is normal at 06:50, so 20h means an evening
+# of sweeps never happened.
+STALE_SWEEP_HOURS = 20
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true", help="show history, record nothing")
@@ -111,6 +117,7 @@ def main():
     regressed, broken, new_zero = [], [], 0
     prior_err = {b: e for b, e in
                  conn.execute("SELECT board, COALESCE(errors,0) FROM board_health")}
+    pend_err, pend_ok = [], []
     for src, name, n, err in results:
         key = f"{src}/{name}"
         best, zeroes = prior.get(key, (0, 0))
@@ -126,11 +133,7 @@ def main():
             errs = prior_err.get(key, 0) + 1
             if errs >= ERRORS_BEFORE_ALERT:
                 broken.append((key, err or "fetch error", errs))
-            conn.execute("INSERT INTO board_health(board,platform,last_count,"
-                         "best_count,zeroes,checked,errors) VALUES(?,?,?,?,?,?,?) "
-                         "ON CONFLICT(board) DO UPDATE SET errors=excluded.errors,"
-                         "checked=excluded.checked",
-                         (key, src, 0, best, zeroes, now, errs))
+            pend_err.append((key, src, 0, best, zeroes, now, errs))
             continue
         if n > 0:
             best, zeroes = max(best, n), 0
@@ -141,14 +144,31 @@ def main():
                 regressed.append((key, best, zeroes))
         # Name the columns. A bare VALUES(...) broke the moment `errors` was
         # added to the table.
-        conn.execute("INSERT INTO board_health"
-                     "(board,platform,last_count,best_count,zeroes,checked,errors) "
-                     "VALUES(?,?,?,?,?,?,0) "
-                     "ON CONFLICT(board) DO UPDATE SET last_count=excluded.last_count,"
-                     "best_count=excluded.best_count, zeroes=excluded.zeroes,"
-                     "checked=excluded.checked, errors=0",
-                     (key, src, n, best, zeroes, now))
-    conn.commit()
+        pend_ok.append((key, src, n, best, zeroes, now))
+
+    # Collected during the loop and written once here so the write can be
+    # retried on a lock. The other order - execute inside the loop, commit at
+    # the end - cannot be retried at all, because db_write rolls back before
+    # retrying and that would discard every row the loop had queued. This
+    # samples every board in targets.json before it writes, so a blocked
+    # commit used to throw the whole sample away.
+    def _save():
+        if pend_err:
+            conn.executemany(
+                "INSERT INTO board_health(board,platform,last_count,"
+                "best_count,zeroes,checked,errors) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(board) DO UPDATE SET errors=excluded.errors,"
+                "checked=excluded.checked", pend_err)
+        if pend_ok:
+            conn.executemany(
+                "INSERT INTO board_health"
+                "(board,platform,last_count,best_count,zeroes,checked,errors) "
+                "VALUES(?,?,?,?,?,?,0) "
+                "ON CONFLICT(board) DO UPDATE SET last_count=excluded.last_count,"
+                "best_count=excluded.best_count, zeroes=excluded.zeroes,"
+                "checked=excluded.checked, errors=0", pend_ok)
+    if not jr.db_write(conn, _save, label="board_health"):
+        print("  !! board_health could not save - database stayed locked")
 
     n_err = sum(1 for r in results if r[2] is None)
     print(f"  sampled {len(results)} boards · {n_err} fetch errors · "
@@ -164,12 +184,44 @@ def main():
         for k, e, n in broken[:12]:
             print(f"     {k:34} {e} (x{n})")
 
-    if (regressed or broken) and a.notify:
+    # Did the poller actually RUN? cronwrap.sh catches a lane that fails, but
+    # nothing catches a lane that never started - a crashed cron daemon, a
+    # machine that was asleep, a syntax error in a .sh that makes cron give up
+    # silently. Those produce no exit code to react to, and the symptom is the
+    # worst kind: the radar looks fine and quietly shows yesterday's jobs.
+    #
+    # This runs at 06:50, before the lanes start at 07:00, so the newest sweep
+    # should be from about 19:41 the previous evening - roughly 11 hours. 20
+    # hours means a full evening of sweeps is missing. Measured over the 31
+    # days to 2026-10-27 the daily lane recorded 26 sweeps every single day, so
+    # a gap this size is a real outage and not normal variance.
+    stale_hours = None
+    last = conn.execute("SELECT MAX(ts) FROM sweeps").fetchone()[0]
+    if last:
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(last)
+            stale_hours = age.total_seconds() / 3600.0
+        except Exception:
+            stale_hours = None
+    if stale_hours is None:
+        print("  !! no sweep has ever been recorded - has the poller run?")
+    elif stale_hours > STALE_SWEEP_HOURS:
+        print(f"  !! LAST FULL SWEEP WAS {stale_hours:.1f}h AGO "
+              f"(expected under {STALE_SWEEP_HOURS}h) - the poller is not running")
+    else:
+        print(f"  last full sweep {stale_hours:.1f}h ago")
+
+    stale = stale_hours is None or stale_hours > STALE_SWEEP_HOURS
+    if (regressed or broken or stale) and a.notify:
         topic = jr.ntfy_topic()
         if topic:
             lines = [f"{k} (was {b})" for k, b, _ in regressed[:6]]
             lines += [f"{k} ERR {e}" for k, e, _ in broken[:6]]
             what = []
+            if stale:
+                hrs = "never" if stale_hours is None else f"{stale_hours:.0f}h ago"
+                what.append(f"POLLER NOT RUNNING (last sweep {hrs})")
+                lines.insert(0, f"last sweep {hrs}")
             if regressed:
                 what.append(f"{len(regressed)} stopped returning jobs")
             if broken:

@@ -69,13 +69,44 @@ def main():
         fast[k] = [t for t in full.get(k, [])
                    if (t.get("name") or "").lower() in producers]
         kept += len(fast[k])
-    json.dump(fast, open(os.path.join(HERE, "fast.json"), "w"), indent=2)
+    # Refuse to shrink the fast lane drastically. make_fast.py derives the
+    # whole fast lane from one digest, so a digest that is truncated, from an
+    # incremental run rather than --all, or from a sweep that half failed
+    # produces a tiny producer list and a near-empty fast.json - and the fast
+    # lane would then poll almost nothing every 5 minutes while looking
+    # perfectly healthy. Nothing downstream would notice.
+    #
+    # digest.md is exactly that trap: daily.sh writes it on every run that
+    # found something, but those runs are incremental, so it lists only the NEW
+    # rows. Pointing this script at it looks right and is wrong.
+    path = os.path.join(HERE, "fast.json")
+    prev = 0
+    if os.path.exists(path):
+        old = json.load(open(path))
+        prev = sum(len(v) for k, v in old.items()
+                   if isinstance(v, list) and k != "devops_vendors")
+    if prev and kept < prev * 0.6:
+        print(f"  REFUSING to write: {kept} boards would replace {prev} - a "
+              f"drop of {100 - 100 * kept // prev}%.\n"
+              f"  That usually means the digest came from an incremental run "
+              f"rather than `--all`, or the sweep partly failed.\n"
+              f"  Re-run: python3 job_radar.py --all --level entry,mid,senior "
+              f"--md /tmp/who.md && python3 make_fast.py /tmp/who.md\n"
+              f"  Override by deleting fast.json first if the drop is real.",
+              file=sys.stderr)
+        return 1
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(fast, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
     total = sum(len(full.get(k, [])) for k in TOKEN_SRC + DICT_SRC)
-    print(f"  fast.json: {kept} boards of {total}")
+    print(f"  fast.json: {kept} boards of {total}"
+          + (f"  (was {prev})" if prev else ""))
     for k in TOKEN_SRC + DICT_SRC:
         if fast.get(k):
             print(f"    {k:16} {len(fast[k])}")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
