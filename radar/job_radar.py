@@ -359,10 +359,24 @@ NORTH_AMERICA = re.compile(
     r"|united\s+states\s+(or|and|/)\s+canada", re.I)
 # "Americas Remote" means the same thing as "Remote - Americas", but the regex
 # above only matches the second word order, so Customer.io's whole Americas
-# lane read as OTHER and was discarded. LATAM is the one case the reverse order
-# must NOT admit: "Latin America Remote" is not a role a Canadian can hold.
-AMERICAS_REMOTE = re.compile(r"americas?\s*[-,/]?\s*remote\b", re.I)
-AMERICAS_LATAM = re.compile(r"(?:latin|south|central)\s+americas?\s*[-,/]?\s*remote\b", re.I)
+# lane read as OTHER and was discarded.
+#
+# A bare "Americas" - no direction word, nothing to anchor on - is the same
+# hemisphere a third time, and two real wordings are written that way:
+# "Home Based - Americas" (74 postings in one sweep, the EOR phrasing) and a
+# plain "Americas" (every Resend req, including its Platform Engineer). Both
+# read as OTHER and were thrown away. Plural only, deliberately: an
+# unqualified singular "America" is vanishingly rare, while "Americana" is
+# both a Brazilian city and a Los Angeles mall, so matching the singular buys
+# nothing and risks those three strings.
+#
+# LATAM is the one case none of these may admit - "Latin America Remote" and
+# "Sao Paulo, Latin America, Brazil" are not roles you can hold - so the veto
+# no longer requires "remote" to be present either. It cannot swallow
+# "North & South America": NORTH_AMERICA claims that string first, above.
+AMERICAS = re.compile(r"americas?\s*[-,/]?\s*remote\b"
+                      r"|(?<![a-z])americas(?![a-z])", re.I)
+AMERICAS_LATAM = re.compile(r"(?:latin|south|central)\s+americas?|\blatam\b", re.I)
 # Wordings that mean "anywhere on earth", which includes Canada. Deliberately
 # narrow: a bare "Remote" or "Fully remote" is usually remote-within-the-US, and
 # "work from anywhere in the United States" says so outright, so neither counts.
@@ -504,7 +518,7 @@ def classify_location(loc):
         return "CA-OPTION", True
     if GLOBAL_REMOTE.search(l):
         return "GLOBAL", True
-    if NORTH_AMERICA.search(l) or (AMERICAS_REMOTE.search(l)
+    if NORTH_AMERICA.search(l) or (AMERICAS.search(l)
                                    and not AMERICAS_LATAM.search(l)):
         return "NA-REMOTE", True
     if MULTI_HINT.search(l):

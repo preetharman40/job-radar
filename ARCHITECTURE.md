@@ -1076,12 +1076,13 @@ and the failure it caused was invisible precisely because it looked like
 correct behaviour: nothing errored, no board went quiet, the digest just never
 mentioned a whole class of job.
 
-Three wordings fell through to `OTHER`, which is dropped:
+Four wordings fell through to `OTHER`, which is dropped:
 
 | location string | old bucket | new bucket |
 |---|---|---|
 | `Remote, Global` · `Global Remote` · `Home based - Worldwide` | `OTHER` | **`GLOBAL`** |
 | `Americas Remote` | `OTHER` | **`NA-REMOTE`** |
+| `Americas` · `Home Based - Americas` | `OTHER` | **`NA-REMOTE`** |
 | `London / Dublin / Hungary / Toronto / Berlin` | `OTHER` | **`CA-OPTION`** |
 | `Calgary, Alberta / Atlanta, GA / Arizona` | `US-ONLY` | **`CA-OPTION`** |
 
@@ -1099,7 +1100,20 @@ recurses exactly one level deep because a segment contains no separator.
 `work from anywhere in the United States` says so outright — the regex carries a
 negative lookahead for it. `Latin America Remote` is the mirror-image trap on
 the Americas rule: the reverse word order would have admitted it, so
-`AMERICAS_LATAM` vetoes latin/south/central explicitly.
+`AMERICAS_LATAM` vetoes latin/south/central — and `latam` — explicitly.
+
+The fourth wording is the same rule read one notch wider. `Americas Remote`
+was fixed by matching either word order, but both orders still need the word
+`remote` to be present, and two wordings in the wild do not supply it: a plain
+`Americas` (how **every Resend req** is filed, including its `Platform
+Engineer`) and `Home Based - Americas`, the EOR phrasing, which accounted for
+**74 postings in one sweep**. A bare `Americas` is matched **plural only**,
+because an unqualified singular `America` is vanishingly rare while
+`Americana` is both a Brazilian city and a Los Angeles mall — all three appear
+in real location fields, and the singular would have claimed them. Dropping
+the `remote` requirement from the veto too means `Americas (LATAM)` is still
+rejected; `North & South America` survives because `NORTH_AMERICA` claims that
+string one branch earlier.
 
 ### vendor-family titles do not ride in on GLOBAL
 
@@ -1147,6 +1161,30 @@ something this change introduced.
 
 The nine: eight Supabase platform/SRE reqs (`Remote, Global`, scoring 29–45) and
 the ElevenLabs `Infrastructure Engineer` filed in **Toronto** at 29.
+
+### the bare-Americas rule, measured on its own
+
+The same 56,524-posting snapshot, classifier before vs after that one rule:
+
+```
+NA-REMOTE        147 ->   221    +74
+OTHER          30009 -> 29935    -74
+```
+
+Every other bucket bit-identical, **0 kept before and dropped after**. All 74
+are Canonical `Home Based - Americas` rows and exactly **one** carries a
+matching title — `Telco Cloud Field Engineer`, vendor family, tier 3 — which
+`--max-age 30` suppresses anyway at **1,645 days** old. So the measurable gain
+is not in the snapshot at all: it is Resend, added after the snapshot was taken,
+whose entire board is filed `Americas` and whose `Platform Engineer` and
+`Security Engineer, Platform` were invisible for that reason alone.
+
+That single Canonical hit is worth recording for a second reason. `NA-REMOTE`
+is **not** in `NO_VENDOR_BUCKETS`, so vendor-family titles do count there. The
+snapshot's 147 pre-existing `NA-REMOTE` rows contain **zero** vendor postings
+and this rule adds one stale one, so the pressure that justified the `GLOBAL`
+gate does not exist in this bucket — gating `NA-REMOTE` too would retire a
+working bucket/family combination to fix nothing that happens.
 
 ### blast radius
 
