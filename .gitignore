@@ -121,3 +121,10 @@ radar/events.jsonl-*
 radar/.logrotate.state
 radar/*.log-*
 radar/.watchdog_state
+
+# flock lockfiles, one per lane, created by cronwrap.sh. Empty, machine-local.
+radar/.lane-*.lock
+# Undelivered ntfy pushes awaiting retry. Holds job titles, companies and
+# failure tails - same class as the logs, and not something to publish.
+radar/.pending_pushes.jsonl
+radar/.pending_pushes.jsonl.tmp
