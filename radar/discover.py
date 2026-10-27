@@ -19,7 +19,9 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -30,11 +32,26 @@ UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "Accept": "*/*", "Content-Type": "application/json"}
 
 
+# A board that does not exist answers 404, and retrying it twice with 1.5s and
+# 3.0s of backoff turns a definitive "no" into 4.5 wasted seconds. That is the
+# whole cost of brute-probing names: a miss fires every variant against every
+# platform and nearly all of them 404, so an employer with no board took ~30s
+# to rule out and 200 employers would have taken 95 minutes. Only transport
+# blips and the statuses that mean "ask again" are worth a second attempt.
+RETRY_STATUS = frozenset((408, 425, 429, 500, 502, 503, 504))
+
+
 def _fetch(url, data=None, timeout=15, raw=False, retries=2):
     last = None
     for attempt in range(retries + 1):
         try:
             return _fetch_once(url, data, timeout, raw)
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_STATUS:
+                raise
+            last = e
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
         except Exception as e:
             last = e
             if attempt < retries:
@@ -94,11 +111,53 @@ PROBES = {"greenhouse": p_greenhouse, "lever": p_lever,
           "ashby": p_ashby, "recruitee": p_recruitee}
 
 
-def variants(name):
-    n = re.sub(r"[^a-z0-9]+", "", name.lower())
-    d = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    base = {n, d, n + "inc", n + "hq", n + "technologies", n + "labs",
-            n + "software", n + "ai", "the" + n}
+# Legal suffixes carry no information for a board token and actively PREVENT a
+# hit. LinkedIn renders the employer exactly as registered - "Tecsys Inc.",
+# "Interac Corp.", "Porter Airlines Inc." - so every variant built from that
+# string is tecsysinc/tecsys-inc and the real board, if there is one, is
+# `tecsys`. Stripped repeatedly because "Foo Pvt Ltd" carries two.
+#
+# Only true legal suffixes are stripped, never descriptive words. Taking
+# "Solutions" off "Enterprise Solutions Inc" would probe `enterprise`, which is
+# a live Recruitee DEMO account answering HTTP 200 with sample postings - see
+# _recruitee_note in targets.json for the five that got added that way.
+LEGAL_SUFFIX = re.compile(
+    r"[\s,]*\b(?:inc|llc|l\.l\.c|ltd|ltda|limited|corp|corporation|co|company"
+    r"|llp|lp|plc|gmbh|s\.a|sa|srl|pvt|pte|bv|nv|ag|ab|oy|a/s|as|sas|kk)\b\.?[\s.]*$",
+    re.I)
+
+
+def variants(name, tier=1):
+    """Board-token guesses for a company name, likeliest tier first.
+
+    Tier 1 is the plain concatenation, the dashed form, and the same two with
+    any legal suffix removed. Tier 2 adds the embellishments.
+
+    Tiering is measured, not assumed: of the 12 boards this found from a
+    fortnight of job-alert mail - maintainx, cresta, shyftlabs, trolley,
+    smiledigitalhealth, facilityos, reflow, bosonai, coconutsoftware,
+    layerzerolabs, practicebetter, nasdaq - ALL TWELVE answered on the bare
+    concatenation. Not one needed a dash or a suffix. So probing tier 2 only
+    when tier 1 comes up empty cuts the common case from ~32 requests per
+    employer to ~12 without losing a single known hit, and it narrows the
+    false-positive surface: every extra guess is another chance to land on a
+    demo account that answers 200 with sample data.
+    """
+    def toks(s):
+        return (re.sub(r"[^a-z0-9]+", "", s.lower()),
+                re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-"))
+
+    bare = name
+    while True:
+        stripped = LEGAL_SUFFIX.sub("", bare).strip()
+        if stripped == bare or not stripped:
+            break
+        bare = stripped
+    base = set(toks(name)) | set(toks(bare))
+    if tier >= 2:
+        n = re.sub(r"[^a-z0-9]+", "", bare.lower())
+        base |= {n + "inc", n + "hq", n + "technologies", n + "labs",
+                 n + "software", n + "ai", n + "io", n + "app", "the" + n}
     return sorted(x for x in base if 2 < len(x) < 40)
 
 
@@ -347,6 +406,191 @@ def probe_board(platform, target):
         return 0
 
 
+# ------------------------------------------------- employer -> board lookup --
+
+# One minimum gap per PLATFORM, not one global gap and not a worker cap.
+# Brute-probing name variants is the only thing here that fires dozens of
+# requests at one host in a few seconds, and an unpaced run of it is what
+# produced a burst of HTTP 429s from Ashby during an earlier expansion pass.
+# The gap is per-platform so four hosts still progress in parallel.
+#
+# Ashby is deliberately NOT given a number here: it defers to the radar's own
+# _ashby_wait, so the probe and the sweep share ONE budget for
+# jobs.ashbyhq.com. Setting it to 0 on the reasoning that "fetch_ashby paces
+# itself" was wrong and worth recording - the scan does not go through
+# fetch_ashby at all, it goes through p_ashby, which is this file's own
+# request. That left ~500 unpaced requests aimed at the one host in
+# targets.json already known to rate-limit by volume.
+PROBE_GAP = {"greenhouse": 0.35, "lever": 0.35, "recruitee": 0.35}
+_GAP_LOCK = threading.Lock()
+_GAP_LAST = {}
+
+
+def _probe_wait(platform):
+    if platform == "ashby":
+        jr = _radar()
+        if jr and hasattr(jr, "_ashby_wait"):
+            jr._ashby_wait()
+            return
+    gap = PROBE_GAP.get(platform, 0.35)
+    if not gap:
+        return
+    with _GAP_LOCK:
+        wait = gap - (time.time() - _GAP_LAST.get(platform, 0.0))
+        if wait > 0:
+            time.sleep(wait)
+        _GAP_LAST[platform] = time.time()
+
+
+def board_postings(platform, target):
+    """Every posting a candidate board returns, or None if it cannot be read.
+
+    Returns the postings rather than a count because an employer resolved from
+    a job-alert email comes with a piece of evidence nothing else here has -
+    the TITLE that put it in the mail - and checking that title against the
+    board is what separates the real employer from a lookalike token. A count
+    cannot do that. Uses the radar's own adapter for the same reason
+    probe_board does: a token validated by different code than the code that
+    will poll it is not validated.
+    """
+    jr = _radar()
+    fn = getattr(jr, "fetch_" + platform, None) if jr else None
+    if not fn:
+        return None
+    _probe_wait(platform)
+    try:
+        return fn(target)
+    except Exception:
+        return []
+
+
+def _norm_title(s):
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def title_overlap(mail_titles, board_titles):
+    """The title from the email, if it is still listed on this board.
+
+    Containment in either direction, because the two sources trim differently:
+    the mail said "Cloud Engineer" where Smile Digital Health's board says
+    "Cloud Engineer, Automation (Remote Ontario)", and the mail said
+    "Infrastructure Engineer" where Cresta's board says "Infrastructure
+    Engineer/SRE". An 8-character floor on the shorter string keeps "SRE" or
+    "Dev Ops I" from matching half the internet.
+    """
+    nb = [(_norm_title(t), t) for t in board_titles]
+    for mt in mail_titles:
+        a = _norm_title(mt)
+        if len(a) < 8:
+            continue
+        for b, raw in nb:
+            if len(b) < 8:
+                continue
+            if a in b or b in a:
+                return mt, raw
+    return None, None
+
+
+def resolve_employer(name, mail_titles, have=None, tier2=True):
+    """Find and vet the ATS board of one employer named in a job-alert email.
+
+    This is the half of the mail pipeline that board_from_url cannot do. A
+    LinkedIn alert links only to linkedin.com/jobs/view/{id}, so there is no
+    ATS token anywhere in the message and the employer's own board has to be
+    found from its NAME - which is why 135 of 345 tracked rows are linkedin.com
+    URLs with no board behind them.
+
+    A name probe plus HTTP 200 is NOT proof of identity, so every hit is vetted
+    on two independent signals before this calls it verified:
+
+      1. IDENTITY - the title from the email is still listed on the board.
+         Strong because it is specific to this situation: the employer is in
+         the mail BECAUSE of that req. This is the check that rejected
+         greenhouse/nasdaq, whose two postings were an AVP and a sysadmin and
+         contained nothing resembling the "DevOps Cloud Engineer" that was
+         mailed - a satellite board or a different entity.
+      2. VALUE - the board carries at least one title the radar's rules match.
+         Measured on the board itself, deliberately NOT on the alert's title:
+         an employer worth polling can easily turn up in one week's mail under
+         a Sales req, and dropping Autodesk on that basis would be the
+         expensive mistake. It is also what keeps a seniors' home that mailed
+         one "Second Cook" out of targets.json.
+
+    Returns (verdict, platform, target, postings, evidence). Verdicts:
+      verified        both checks pass - safe to add
+      no-target-roles identity confirmed, but nothing the rules would ever match
+      unverified      live board, but the mailed title is not on it
+      dead            nothing answered
+    """
+    jr = _radar()
+    have = have or {}
+
+    # Two passes on purpose. The SCAN uses the cheap single-request probes in
+    # PROBES, because ruling a name out is most of the work - a miss fires
+    # every variant at every platform - and those probes neither retry a 404
+    # nor build job records. Only the winner is then read through the radar's
+    # own adapter, which is the one that has to agree with what the sweep will
+    # see. One expensive call per employer instead of up to 36.
+    hits, done = [], set()
+    for tier in (1, 2):
+        if tier == 2 and (hits or not tier2):
+            break
+        pairs = [(p, t) for t in variants(name, tier) for p in PROBES
+                 if t not in have.get(p, ()) and (p, t) not in done]
+        done |= set(pairs)
+        with cf.ThreadPoolExecutor(8) as ex:
+            def scan(pt):
+                _probe_wait(pt[0])
+                try:
+                    return PROBES[pt[0]](pt[1])
+                except Exception:
+                    return 0
+            for (p, t), n in zip(pairs, ex.map(scan, pairs)):
+                if n > 0:
+                    hits.append((n, p, t))
+    if not hits:
+        return "dead", None, None, [], None
+    # Prefer the board with the most postings when a name answers on more than
+    # one platform: a company that migrated ATS often leaves the old token
+    # answering with a handful of stale reqs.
+    hits.sort(reverse=True)
+    _n, p, t = hits[0]
+    posts = board_postings(p, t) or []
+    if not posts:
+        return "dead", p, t, [], None
+    titles = [j.get("title", "") for j in posts]
+    mt, bt = title_overlap(mail_titles, titles)
+    # title_match's second argument is the COMPANY, not the platform: it is
+    # what decides is_vendor, and a vendor-family title only counts at a
+    # vendor. The adapters set each posting's company to the board token, which
+    # is exactly what the sweep passes, so pass the same thing here - judging
+    # the board by different inputs than the sweep uses is how a token gets
+    # added that then behaves differently in production.
+    # The value check requires a matching title in a location the radar would
+    # KEEP, not merely a matching title somewhere. Both halves are the tool's
+    # own existing definitions, so this asks exactly "would this board ever
+    # have shown me a row" rather than inventing a second rule set.
+    #
+    # Measured on the first five boards this resolved from mail: ashby/ramp
+    # carries 173 postings, 25 of them Canadian and 3 with matching titles -
+    # but the matching three are all New York and San Francisco, so the
+    # intersection is empty and a title-only test would have added it for
+    # nothing. ashby/cerebras has 7 in the intersection. Without the location
+    # half, a nightly auto-add drifts toward exactly the board bloat that
+    # "Coverage is an allowlist" warns about. A board that misses today is
+    # re-probed once stale_days elapse, so a US company that later opens a
+    # Toronto infra req is picked up then.
+    co = posts[0].get("company") or t
+    matched = [x for x in posts
+               if jr and jr.title_match(x.get("title", ""), co)[0]
+               and jr.classify_location(x.get("location") or "")[1]] if jr else []
+    if not mt:
+        return "unverified", p, t, posts, None
+    if not matched:
+        return "no-target-roles", p, t, posts, (mt, bt)
+    return "verified", p, t, posts, (mt, bt)
+
+
 def _radar():
     """Import job_radar lazily, and only once.
 
@@ -492,13 +736,23 @@ def main():
     if a.company:
         tg = json.load(open(a.targets)) if a.add else None
         found = []
-        pairs = [(src, v) for name in a.company for v in variants(name)
+        # tier 2 explicitly, so this keeps probing the embellished variants it
+        # always did - the mail pipeline is the caller that wants tier 1 only.
+        # Paced through _probe_wait and 8 workers rather than 25 unpaced: a
+        # multi-name run is dozens of requests per host in a few seconds, and
+        # an unpaced one of those is what drew a burst of 429s from Ashby.
+        pairs = [(src, v) for name in a.company for v in variants(name, 2)
                  for src in PROBES]
-        with cf.ThreadPoolExecutor(25) as ex:
-            futs = {ex.submit(PROBES[s], t): (s, t) for s, t in pairs}
-            for f in cf.as_completed(futs):
-                s, t = futs[f]
-                n = f.result()
+
+        def scan(pt):
+            _probe_wait(pt[0])
+            try:
+                return PROBES[pt[0]](pt[1])
+            except Exception:
+                return 0
+
+        with cf.ThreadPoolExecutor(8) as ex:
+            for (s, t), n in zip(pairs, ex.map(scan, pairs)):
                 if n:
                     print(f"  HIT {s:12} {t:22} {n} postings")
                     found.append((s, t))
