@@ -376,6 +376,195 @@ obvious lever and nearly the worst one.**
 
 ---
 
+## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
+
+`inbox.py --boards` has always read ATS account tokens out of the links in an
+alert email. That works for mail sent *by* an ATS, and it cannot work at all
+for the sender that dominates the channel. A LinkedIn digest links only to
+`linkedin.com/jobs/view/{id}` — there is no Greenhouse token, no Lever token,
+no careers host anywhere in the message — so `board_from_url` has nothing to
+read. The measured consequence: **135 of 345 tracked rows (39%) are LinkedIn
+URLs**, each one a posting with no board behind it, which is why a role could
+be read on the phone and then never be found in the web app by company.
+
+The employer's **name** is the only handle such a message gives. Turning that
+name into a board is `discover.resolve_employer`, and `inbox.py --employers`
+runs it over every employer the mail names.
+
+This is the one expansion channel that escapes the verdict in *Coverage is an
+allowlist* above — "adding boards is the obvious lever and nearly the worst
+one". Brute expansion sweeps 425 Amazon reqs to find one match. This is
+**demand-driven**: the employers that turn up are the ones already mailing
+about these titles in this geography, so the Canada density is far higher than
+anything a remote-jobs directory produces. The first 11 boards it found run
+trolley 23/26 Canadian, smiledigitalhealth 12/16, shyftlabs 17/25,
+coconutsoftware 3/3, layerzerolabs 6/7, maintainx 98/197.
+
+### a name probe plus HTTP 200 is not identity, so there are two checks
+
+An earlier expansion pass added four boards that answered 200 under a
+plausible name and belonged to somebody else. A token is only vetted here when
+it passes both of:
+
+1. **Identity — the title from the email is still listed on the board.** This
+   evidence is specific to this channel and available nowhere else in the
+   tool: the employer is in the mail *because of that requisition*, so a board
+   still carrying it is that employer's board and not a lookalike. It is what
+   rejected `greenhouse/nasdaq`, which answers 200 with two postings — an AVP
+   and a sysadmin — and nothing resembling the mailed `DevOps Cloud Engineer`.
+   Matching is containment in either direction, because the two sources trim
+   differently (the mail said `Cloud Engineer`, Smile Digital Health's board
+   says `Cloud Engineer, Automation (Remote Ontario)`), with an 8-character
+   floor so `SRE` cannot match half the internet.
+2. **Value — the board carries a matching title in a location the radar would
+   keep.** Measured on the board's own contents, deliberately *not* on the
+   alert's title: an employer worth polling can easily appear in one week's
+   mail under a Sales req, and dropping Autodesk on that basis would be the
+   expensive mistake — the same reasoning that makes `all_job_links` ignore
+   the title filter. It is also what keeps a seniors' home that mailed one
+   `Second Cook` out of `targets.json`.
+
+   Both halves are the tool's own existing definitions — `title_match` and
+   `classify_location` — so the test asks exactly "would this board ever have
+   shown me a row" rather than inventing a second rule set. The location half
+   is not decoration. `ashby/ramp` carries 173 postings, 25 of them Canadian
+   and 3 with matching titles, but the matching three are all New York and San
+   Francisco, so the intersection is empty; a title-only test would have added
+   it for nothing. `ashby/cerebras` has 7 in the intersection. Without the
+   location half an auto-adding nightly job drifts into exactly the board
+   bloat that *Coverage is an allowlist* warns about, and because a miss is
+   re-probed once `stale_days` elapses, a US company that later opens a
+   Toronto infra req is picked up then rather than never.
+
+   `title_match`'s second argument is the **company**, not the platform — it
+   is what decides `is_vendor`, and a vendor-family title only counts at a
+   vendor. The adapters set each posting's company to the board token, which
+   is what the sweep passes, so this passes the same thing. Judging a board by
+   different inputs than the sweep uses is how a token gets added that then
+   behaves differently in production.
+
+Only `verified` — both checks — is ever added. `unverified` and
+`no-target-roles` are reported and left alone.
+
+The two checks also catch a trap this repo has already paid for once.
+`recruitee/accenture` resolves from the mail, answers HTTP 200 and returns 2
+postings — and it is the **demo account** documented in `_recruitee_note`, one
+of five that were added on the strength of a status code in an earlier pass and
+later removed. Identity rejects it, because `Senior Marketer (Sample)` is not
+the title that was mailed.
+
+The identity check has one honest failure mode: **mail is days old and a req
+can close before the probe runs.** MaintainX verified on
+`Site Reliability Engineer` one afternoon and failed the same check 40 minutes
+later, because the board had gone 197 → 195 postings and that req was one of
+the two. The mitigation is to pass *every* title the employer appeared under,
+not one — MaintainX re-verified immediately on
+`Infrastructure Developer, Platform Engineering`.
+
+### the logo `alt` is where the employer name actually lives
+
+A digest glues the company onto the end of the title with no delimiter —
+`Infrastructure Engineer ElevenLabs` — and the old subtraction rule could only
+recover it when the title had its own anchor to subtract. The employer name is
+present as a *field* in exactly one place: the `alt` of its logo image, inside
+that job's own segment.
+
+Measured over **349 records from 65 digests** across a fortnight:
+
+| | before | after |
+|---|---|---|
+| records parsed | 349 | 349 |
+| with an employer name | 305 | **348** |
+| titles the rules match | 226 | **232** |
+| records lost | — | **0** |
+
+Used as a fallback rather than a replacement: on all 305 the subtraction rule
+already got right the two agree, differing only by a trailing period. The rule
+is not wrong, just incomplete.
+
+Naming the employer then unlocked two things that were impossible without it.
+The company can be **cut off the end of the title**, so `DevOps Analyst TMX
+Group` is filed as `DevOps Analyst` — a title carrying the employer's name
+scores against the wrong blob. And where every anchor in a segment was chrome,
+the title can be recovered by subtracting the company off the row instead,
+which is how adidas' `Platform & Site Reliability Engineer`, BDO's `DevOps
+Engineer - New Grad (January 2027)` and four more stopped being filed under
+`Learn why we included this.`
+
+That last bug is worth recording for how it was fixed. Blocklisting the junk
+anchor by name fixed six rows and immediately mis-titled eight others as
+`Help`, then as `Manage recommendations` — the account footer falls inside the
+last segment and every one of its links is a plausible 4-to-140-character
+string. The durable fix is structural: **consider only anchors whose href
+points at this segment's own job id.** A footer link never does, so LinkedIn
+cannot add a seventh one and break it again.
+
+### the request budget is the design constraint
+
+Probing names is the only thing in the tool that fires dozens of requests at
+one host in seconds, and an unpaced run of it has drawn 429s from Ashby
+before. Three measures keep it affordable:
+
+- **Tiered variants.** Tier 1 is the plain concatenation, the dashed form, and
+  both with any legal suffix stripped; tier 2 adds `+inc`, `+hq`, `+labs` and
+  the rest. Of the 12 boards this channel has found, **all twelve answered on
+  tier 1** — not one needed a dash or a suffix. Tier 2 is ~80% of the requests
+  (48 per miss against 12), so the nightly run stops at tier 1 and
+  `--employer-deep` turns it on for a backfill. Stripping the legal suffix is
+  what makes `Tecsys Inc.` probe `tecsys` at all; only true suffixes are
+  stripped, never descriptive words, because taking `Solutions` off
+  `Enterprise Solutions Inc` would probe `enterprise`, a live Recruitee *demo*
+  account (see `_recruitee_note`).
+- **A 404 is an answer, not a blip.** `discover._fetch` retried every failure
+  twice with 1.5s and 3.0s of backoff, which turned a definitive "no board"
+  into 4.5 wasted seconds — and a miss 404s on nearly every variant. Ruling an
+  employer out took **~30s before, ~4s after**; only `408/425/429/5xx` are
+  retried now. `job_radar._req` deliberately keeps retrying everything, because
+  there a blip silently drops a whole board from a 1,100-task sweep.
+- **Everything is cached** in `employer_board`, keyed on the name. A fortnight
+  of mail names ~200 distinct employers; re-probing all of them nightly would
+  be thousands of requests a day at four hosts to re-learn what it already
+  knew. A miss is re-probed after 60 days — a company without a board today may
+  have one next quarter — and a hit never needs re-probing, because the board
+  either entered `targets.json` or is reported again from cache for free.
+
+The scan and the title fetch are also split: the cheap single-request probes in
+`PROBES` rule names out, and only the winning token is read through the
+radar's own adapter, which is the one that has to agree with what the sweep
+will later see. One expensive call per employer instead of up to 36.
+
+### "no board found" must not mean "not already polled"
+
+A name probe covers the four platforms whose account names are guessable, so a
+tenant-based board always comes back dead. The first run of the report believed
+that and listed **RBC, BMO, Manulife, Scotiabank, TMX Group, PwC Canada,
+Interac, Strathcona Resources, Amazon and Insight Global** under "no board
+under any name variant" — every one of them a board the radar had been polling
+for weeks on Workday, SuccessFactors, Phenom or an in-house adapter. The report
+was telling you to go hunt careers URLs for boards you already had.
+
+The already-polled test therefore runs against every platform in
+`targets.json`, matching the employer name and its legal-suffix-stripped form
+against both the string tokens and the `name` of every dict target. It matches
+on those two forms and never on a prefix: `Interac Corp` has to reach the
+Workday target named `Interac`, but `BMO Capital Markets` stays listed as
+missing rather than being silently credited to `BMO`. Over-claiming here
+*hides* a board worth adding, which is the more expensive of the two errors.
+
+### what it cannot reach
+
+Every enterprise it misses, it misses structurally. `--company` probing covers
+Greenhouse, Lever, Ashby and Recruitee, whose account names are *guessable from
+a company name*. Workday, SuccessFactors, Taleo and Oracle are **tenant-based**
+— Loblaw's Workday tenant is `myview` — so no token guess can ever find them.
+BMO, WestJet, Tecsys, CI Financial, Tangerine, Porter Airlines, Roche, Alstom,
+Broadridge, Livingston, OCS, MDA Space and Stikeman Elliott all came back dead
+for that reason and not because they are unreachable. Each needs one
+`discover.py --url <careers page>`, which costs a single request but requires
+the careers URL — the one input this pipeline cannot derive.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
