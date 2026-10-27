@@ -1068,6 +1068,49 @@ and the job board's **logged-in** areas (`/jobs/applied`, `/jobs/saved`,
 `/jobs/profile`). `/all/jobs` is unauthenticated and not disallowed, and job
 search results and job pages are permitted by name.
 
+## Ashby rate-limits by volume, so the fix is a gap and not a worker cap
+
+Growing the Ashby list from **55 to 95 boards** in one day broke boards that had
+worked for months. Every sweep from that point answered `HTTP 429` for 6-14 of
+them, rotating with whichever ones the thread pool reached after the limit
+tripped, and **7 of the 16 casualties were pre-existing** boards — `slant`,
+`solace`, `synthetic`, `telus-digital`, `thinkific`, `trulioo`, `wealthsimple`.
+Nothing was wrong with any of them: asked serially, all 95 answer 200. So the
+digest's **"Dead boards"** footer was reporting live boards, which is the
+dangerous part — that footer is the signal `discover.py --verify` acts on.
+
+The instinct is to cap concurrency, and it is wrong. 55 boards through the same
+24-worker pool never tripped the limit, so what Ashby counts is requests per
+window rather than simultaneous connections, and a semaphore does not reduce
+volume. A minimum gap does, and `_jb_wait` was already the precedent.
+
+Picking the value took two measurements, and the first was wrong:
+
+| gap | test | result |
+|---|---|---|
+| 0.4s | one sweep, 95 boards | 95/95, 2,484 postings, 37.9s |
+| 0.4s | a second sweep immediately after | **failed partway** |
+| 0.8s | two sweeps back to back | 95/95 both, **zero 429s** |
+
+That the *second* 0.4s run failed is the whole lesson: the bucket is depleted by
+sustained rate, not just by the opening burst, so a value that survives one
+sweep in isolation proves very little. It refills quickly — every board answered
+200 again within two minutes — and Ashby sends no `Retry-After` or rate headers,
+so the shape can only be inferred by probing it.
+
+0.8s costs a 76s serialised chain on the 30-minute lane and ~11s on the fast
+lane's 14 Ashby boards, both running alongside the other platforms rather than
+adding to them. The two back-to-back sweeps are ~190 requests over ~160s of
+continuous load, which is harsher than the worst real overlap: the fast lane at
+`:35` running into the 30-minute lane at `:37`, about 109 requests in ~87s.
+
+Both passes take the gate, because `hydrate` asks the same host once per
+finalist. `board_health.py` inherits it for free by calling `jr.ADAPTERS` — which
+matters, because it polls every board at 06:50 with its own 12-worker pool, and
+its entire job is to alert when a board returns nothing. Without the gate it
+would have rate-limited itself and pushed a false "stopped returning jobs"
+alert for a dozen healthy Ashby boards.
+
 ## the location filter was silently dropping worldwide-remote work
 
 `classify_location` sorts every posting into a bucket and the sweep keeps only
