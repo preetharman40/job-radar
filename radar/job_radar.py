@@ -65,15 +65,53 @@ VENDORS = set()   # filled from targets.json at startup
 
 TITLE_RULES = [
     # --- family: devops -------------------------------------------------
-    (r"\b(devops|dev-ops)\b",                                   4, "devops"),
+    # Covers "dev ops" with a space and the whole devsecops family. Measured
+    # on 205 distinct titles from a fortnight of real alert mail: 15
+    # infra-shaped titles scored tier 0, and SIX were caught by widening this
+    # one rule - "DevSecOps Engineer", "Senior DevSecOps Engineer", "Cloud
+    # Security DevSecOps Engineer", "Azure DevSecOps Architect", "Dev Ops I"
+    # and "Dev Ops II, Public Cloud". A tier-0 title never reaches scoring at
+    # all, so these were invisible rather than ranked low.
+    #
+    # `ops` keeps its word boundary so "operations" cannot match, and bare
+    # "secops" is deliberately excluded - that is a SOC analyst title, and
+    # analyst roles are out by request. Costs 21 extra postings across a
+    # 56,524-posting snapshot, nearly all of them genuine DevSecOps reqs.
+    (r"\b(dev[\s-]?sec[\s-]?ops|dev[\s-]?ops)\b",                 4, "devops"),
     (r"\b(sre|site\s+reliability)\b",                           4, "devops"),
     (r"\bplatform\s+engineer",                                  4, "devops"),
     (r"\b(cloud|infrastructure|infra)\s+"
      r"(engineer|developer|specialist|analyst|administrator)",  4, "devops"),
-    (r"\bkubernetes\s+engineer",                                4, "devops"),
+    # Adjacency with at most one word between, which is what "Kubernetes
+    # (K8S) / HPC Engineer" needs - four characters of punctuation and one
+    # token sit between the platform and the role noun. Bounded deliberately:
+    # the unbounded "kubernetes anywhere AND engineer anywhere" form admitted
+    # 19 postings, mostly "Senior Software Engineer - Python/Golang -
+    # Kubernetes" coding roles, while this one admits exactly 1 extra posting
+    # in 56,524 and still rescues the title it was written for.
+    (r"\b(kubernetes|k8s)\b[\s/()\[\],.-]*"
+     r"(?:[a-z0-9]+[\s/()\[\],.-]+)?engineer",                  4, "devops"),
+    # "Platform Administration Lead", "Data Platform Operations Engineer".
+    # The power-platform lookbehind is load-bearing: "Power BI & Power
+    # Platform Administrator" is an M365 reporting role, and it arrived in the
+    # same fortnight of mail as the titles above. Requiring the role noun
+    # (operations ENGINEER, or administrator/administration) rather than a
+    # bare "platform operations" is what keeps out "Sr Program Manager, GTM
+    # Platform Operations" and the support-engineer variants - the loose form
+    # admitted 32 postings of which 22 were program-manager or support roles.
+    # "Manager, AMS/SAP Platform Administration and Support" still matches but
+    # is harmless: level_of reads it as exec, which is -10.
+    (r"(?<!power )\bplatform\s+"
+     r"(?:operations?\s+engineer|administrat(?:or|ion))\b",     4, "devops"),
     (r"\b(reliability|observability)\s+engineer",               4, "devops"),
     (r"\bmlops\b",                                              3, "devops"),
-    (r"\bcloud\s+(operations|ops)\b",                           3, "devops"),
+    # A gap is allowed between "cloud" and "operations" because vendors put
+    # their product name there: "VMware Cloud Foundation (VCF) Operations
+    # Engineer". Admits 0 extra postings in the 56,524-posting snapshot, so
+    # the widening is free - the title it rescues came through alert mail from
+    # a board the radar does not poll.
+    (r"\bcloud\s+(operations|ops)\b"
+     r"|\bcloud\b[a-z0-9\s()&./-]{0,26}\boperations?\s+engineer", 3, "devops"),
 
     # --- family: adjacent (infra work that hires from support) ----------
     (r"\b(build|release|automation|tooling)\s+engineer",        3, "adjacent"),

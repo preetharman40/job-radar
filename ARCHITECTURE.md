@@ -565,6 +565,144 @@ the careers URL — the one input this pipeline cannot derive.
 
 ---
 
+## title rules: a tier-0 title is invisible, not merely ranked low
+
+`title_match` is the gate. A title it scores 0 never reaches `score()` at all,
+so a recall gap there is categorically worse than a weighting gap - the posting
+does not appear anywhere, at any threshold.
+
+Measured on 205 distinct titles from a fortnight of real alert mail: 111 were
+infra-shaped and **15 scored tier 0**. The causes were specific, not diffuse:
+
+| missed title | why |
+|---|---|
+| `DevSecOps Engineer` and 4 variants | `\b(devops\|dev-ops)\b` cannot match *devsec*ops |
+| `Dev Ops I`, `Dev Ops II, Public Cloud` | the space form was absent |
+| `Kubernetes (K8S) / HPC Engineer` | `\bkubernetes\s+engineer` demands adjacency |
+| `Platform Administration Lead` | only `platform engineer` existed |
+| `VMware Cloud Foundation (VCF) Operations Engineer` | `cloud operations` demands adjacency |
+| `Software Engineer - Infrastructure` and similar | the rule needs `infrastructure` BEFORE the role noun |
+
+Adding rules is monotonic - `title_match` returns the best tier among all
+matching rules, so a new rule can only raise a title, never lower one. The A/B
+over the 56,524-posting snapshot confirms it: **0 titles lost a tier.**
+
+### the broad fix was wrong, and only measurement showed it
+
+The obvious rule for the last row is "`infrastructure` anywhere AND a role noun
+anywhere". It admits **268 postings, 194 distinct titles** - and the additions
+are `Specialist, Infrastructure Planning`, `MEP Engineer - Building &
+Infrastructure`, `Engineer in Training I Infrastructure Planning`, `GIS Industry
+Solutions Specialist - Infrastructure`, `Manager, AMS/SAP Platform
+Administration`, `Sr Program Manager, GTM Platform Operations`, and a wave of
+`Senior Java Engineer - Core / Infra - Elasticsearch`. Civil engineering, SAP,
+GIS sales, programme management and backend software - almost none of it this
+search. Constraining it to adjacent-reverse order still admitted 56.
+
+So that rule was **dropped**, and the three that survived were each measured on
+their own against the same snapshot:
+
+| rule | extra postings admitted | verdict |
+|---|---|---|
+| `dev[\s-]?sec[\s-]?ops\|dev[\s-]?ops` | 21 | kept - nearly all real DevSecOps reqs |
+| kubernetes/k8s within one word of `engineer` | **1** | kept - the unbounded form admitted 19 coding roles |
+| `platform (operations engineer\|administrat…)` | 14 | kept - requiring the role noun kept out 22 PM/support roles |
+| `cloud …(≤26 chars)… operations engineer` | **0** | kept - free; the title it rescues arrives by mail |
+| `infrastructure` + role noun anywhere | 268 | **dropped** |
+
+Net: **36 newly matched, 0 lost**, and 9 of the 36 also clear the location and
+level filters - `Data Platform Operations Engineer` at Scotiabank Toronto,
+`Senior AI Platform Operations Engineer` at EQ Bank, `Senior IT Platform
+Administrator` at Desjardins, `Dev Ops` reqs at Conga and David Aplin.
+
+Two details that matter for anyone widening these further. The
+`(?<!power )` lookbehind on the platform rule is load-bearing: `Power BI & Power
+Platform Administrator` is an M365 reporting role and it arrived in the same
+fortnight of mail as the titles above. And `Manager, AMS/SAP Platform
+Administration and Support` still matches, harmlessly - `level_of` reads
+`Manager` as exec, which is -10.
+
+---
+
+## body negative signals: measured, and NOT implemented
+
+The plan was to penalise two things the scorer cannot see, because `level_of`
+reads seniority from the title and nothing read the description at all: US
+security clearance or citizenship requirements, and demands for far more
+experience than the profile has. Both were abandoned on measurement, and the
+reason is recorded here so it is not re-attempted.
+
+**US clearance is not what the pattern was finding.** A loose regex
+(`security clearance|ts/sci|top secret|secret clearance|us citizen|…`) flagged
+10 of the 135 hydrated JDs at a median score of 23 - above the notify threshold
+of 15, which looked like a real problem. Reading the matches, **all ten are
+Canadian**: five say "ability to obtain and maintain a **Canadian government**
+security clearance", one requires **Reliability** status, one "reliability
+status security clearance", and one wants an active Top Secret clearance in
+**Ottawa**. These are Government-of-Canada and Ottawa defence roles - desirable
+in a Canadian search, not disqualifying - and one of them is the
+highest-scoring posting in the corpus at **50**. Penalising them would have
+demoted the best match in the corpus.
+
+A tightened, genuinely US-specific pattern (`U.S. citizen`, `TS/SCI`, `public
+trust`, `ITAR`, `green card`, `authorized to work in the United States` without
+a nearby `canada`) matches **0 of 135**. Six JDs carry Canadian clearance
+language and none of them trip it, which is the control that proves the
+tightening works - but with no positives there is nothing to score.
+
+**Experience demands point the wrong way.** JDs demanding 10+ years alongside
+the word "experience" score a median of **29** against a corpus median of
+**27**. Asking for more years correlates with a slightly *better* keyword match
+here, because those are the deep infrastructure reqs. Senior titles are already
+handled where they belong, by `level_of`, at -2.
+
+The honest conclusion is that on the corpus available, body negative signals
+are a solution to a problem that is not there. The eligibility question is real
+but it lives in the **US-ONLY pile that the location filter already drops**,
+not in the postings that survive it.
+
+### two claims that measurement killed
+
+Recorded because both sound obviously true and both are false here.
+
+**There is no length bias.** `r(blob length, score) = +0.06`, and the median
+score is identical - 25.0 - in the shortest and longest quartiles of the
+corpus. No length normalisation is warranted. The one caveat: hydrate truncates
+at 8,000 characters, so the corpus spans ~1.9k-8.5k and this says nothing about
+the ~200-character mail snippets, whose cap is already known and handled by a
+separate threshold.
+
+**Correlated skill groups barely stack.** The worry was that
+kubernetes + helm + ingress + kustomize + argo cd + gitops gives 13 points for
+what is one skill. In practice only **9 of 135** JDs fire two of those six and
+**none fire three or more**.
+
+### the gap that measurement does support
+
+Coverage is one-directional. The score counts what the JD names that is on the
+resume and never what the JD demands that is not, and
+`r(score, count of non-resume technologies demanded) = **+0.46**` - positive,
+so the kitchen-sink JDs rank highest. The top of the list reads `Engineer,
+DevOps` at 46 while also demanding java, ruby, php, snowflake and elastic, and
+`Senior Platform Engineer, AI & Fabrics` at 45 demanding java, splunk, datadog,
+typescript and azure. Those are polyglot backend roles topping a DevOps search.
+Unfixed; it changes the score scale, so it needs the thresholds retuned with it.
+
+### outcome data does not exist yet
+
+`applications.md` has a `toapply -> applied -> interviewing -> rejected`
+schema, and weights could in principle be fitted to it. Parsed locally over 368
+scored rows: **351 `toapply`, 17 `applied`, and 0 rows in any state beyond
+`applied`.** There is no reply, interview or rejection data, so no weight can be
+fitted to outcomes today.
+
+What the file does show is a validation rather than a criticism: the median
+score of the roles chosen for application is **41**, against **21** for those
+never applied to. The scorer already agrees with the human judgement that
+followed it, by roughly 2x.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
