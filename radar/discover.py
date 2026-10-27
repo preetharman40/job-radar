@@ -392,7 +392,7 @@ def probe_board(platform, target):
         except Exception:
             return 0
     jr = _radar()
-    fn = getattr(jr, "fetch_" + platform, None) if jr else None
+    fn = jr.ADAPTERS.get(platform) if jr else None
     if not fn:
         return -1
     t = dict(target) if isinstance(target, dict) else target
@@ -454,7 +454,7 @@ def board_postings(platform, target):
     will poll it is not validated.
     """
     jr = _radar()
-    fn = getattr(jr, "fetch_" + platform, None) if jr else None
+    fn = jr.ADAPTERS.get(platform) if jr else None
     if not fn:
         return None
     _probe_wait(platform)
@@ -683,10 +683,8 @@ def main():
         except Exception:
             jr = None
         if jr:
-            for src, fn in (("workday", getattr(jr, "fetch_workday", None)),
-                            ("phenom", getattr(jr, "fetch_phenom", None)),
-                            ("successfactors",
-                             getattr(jr, "fetch_successfactors", None))):
+            for src in ("workday", "phenom", "successfactors"):
+                fn = jr.ADAPTERS.get(src)
                 for tgt in tg.get(src, []):
                     if not fn:
                         continue

@@ -11,9 +11,11 @@ python3 serve.py                # web view on :8737
 
 | Script | Purpose |
 |---|---|
-| `job_radar.py` | The engine — 21 ATS adapters, 529 boards, filters, scoring, output |
-| `fast.sh` | Cron lane 1: the 60 productive boards, every 5 min |
-| `daily.sh` | Cron lane 2: all 529 boards, every 30 min |
+| `job_radar.py` | The engine — filtering, scoring, state, tracker, notification, reporting |
+| `adapters/` | **One module per ATS platform**, 21 of them. `fetch_*` (pass 1), `hydrate` (pass 2), `expand` (per-query fan-out). Adding a platform is one file plus two lines in `adapters/__init__.py` |
+| `fetchcore.py` | HTTP transport, HTML→text, and `job()` — the record shape the whole pipeline agrees on. Imports nothing from the radar |
+| `fast.sh` | Cron lane 1: the productive boards from `fast.json`, every 5 min |
+| `daily.sh` | Cron lane 2: all 544 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |

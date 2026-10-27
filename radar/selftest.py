@@ -64,12 +64,14 @@ def sh(*cmd, **kw):
 @check(1, "every python file parses")
 def _py():
     bad = []
-    for f in sorted(glob.glob(os.path.join(HERE, "*.py"))):
+    files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
+                   glob.glob(os.path.join(HERE, "adapters", "*.py")))
+    for f in files:
         try:
             compile(open(f).read(), f, "exec")
         except SyntaxError as e:
-            bad.append(f"{os.path.basename(f)}:{e.lineno} {e.msg}")
-    return not bad, f"{len(glob.glob(os.path.join(HERE, '*.py')))} files" if not bad else "; ".join(bad)
+            bad.append(f"{os.path.relpath(f, HERE)}:{e.lineno} {e.msg}")
+    return not bad, f"{len(files)} files" if not bad else "; ".join(bad)
 
 
 @check(1, "every shell script parses")
@@ -145,6 +147,77 @@ def _units():
         return True, f"{n.group(1) if n else '?'} tests pass"
     fails = [l for l in out.splitlines() if l.startswith(("FAIL:", "ERROR:"))]
     return False, "; ".join(fails[:3]) or out.strip()[-120:]
+
+
+@check(1, "every adapter is wired in, and every reach-in still resolves")
+def _interface():
+    """Eleven modules - and tailor/gaps.py, outside this tree - read attributes
+    off job_radar. The adapter extraction moved most of those attributes into
+    fetchcore and adapters/, so they survive only as re-exports. A dropped
+    re-export does not fail at import: it fails later, inside a try/except, as
+    a board that quietly returns nothing. Check the whole surface here."""
+    sys.path.insert(0, HERE)
+    try:
+        import job_radar as jr
+        import adapters
+    except Exception as e:
+        return False, f"cannot import: {type(e).__name__}: {e}"
+
+    problems = []
+    # The layering only holds if it is one-way. An adapter that imports
+    # job_radar makes the package circular and pointless.
+    for f in sorted(glob.glob(os.path.join(HERE, "adapters", "*.py"))):
+        body = open(f).read()
+        if re.search(r"^\s*(?:import|from)\s+job_radar\b", body, re.M):
+            problems.append(f"adapters/{os.path.basename(f)} imports job_radar")
+
+    targets = json.load(open(jr.TARGETS))
+    # keys starting with _ are the per-platform notes kept in targets.json
+    platforms = {k for k in targets
+                 if k != "devops_vendors" and not k.startswith("_")}
+    if platforms - set(adapters.ADAPTERS):
+        problems.append(f"targets.json has no adapter for "
+                        f"{sorted(platforms - set(adapters.ADAPTERS))}")
+
+    files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
+                   ["/home/harman/devops/tailor/gaps.py",
+                    "/home/harman/devops/tailor/tailor.py"])
+    # job_radar.py defines the surface; this file quotes the patterns it greps
+    # for, so both would match themselves.
+    SELF_SKIP = ("job_radar.py", "selftest.py")
+    reach = {}
+    for f in files:
+        if os.path.basename(f) in SELF_SKIP or not os.path.exists(f):
+            continue
+        for m in re.finditer(r"\bjr\.([A-Za-z_][A-Za-z0-9_]*)", open(f).read()):
+            reach.setdefault(m.group(1), set()).add(os.path.basename(f))
+    for attr in sorted(reach):
+        if not hasattr(jr, attr):
+            problems.append(f"jr.{attr} is gone (read by "
+                            f"{', '.join(sorted(reach[attr]))})")
+
+    # Dynamic lookups are the dangerous ones: discover.py used
+    # getattr(jr, "fetch_" + platform, None), which returns None without
+    # raising, so the adapter move turned every board probe into a no-op and
+    # nothing said so. A literal `jr.X` grep cannot see that shape.
+    for f in files:
+        if os.path.basename(f) in SELF_SKIP or not os.path.exists(f):
+            continue
+        body = open(f).read()
+        for m in re.finditer(r'getattr\(\s*jr\s*,\s*"([A-Za-z_]+)"\s*\+', body):
+            for plat in sorted(adapters.ADAPTERS):
+                if not hasattr(jr, m.group(1) + plat):
+                    problems.append(f"{os.path.basename(f)} builds "
+                                    f"jr.{m.group(1)}<platform>, but "
+                                    f"{m.group(1)}{plat} does not resolve")
+                    break
+        if re.search(r"getattr\(\s*jr\s*,(?!\s*\")", body) or "vars(jr)" in body:
+            problems.append(f"{os.path.basename(f)} reads job_radar "
+                            f"attributes dynamically - cannot be verified here")
+    return not problems, (f"{len(adapters.ADAPTERS)} adapters, "
+                          f"{len(adapters.HYDRATORS)} hydrators, "
+                          f"{len(reach)} reach-ins ok"
+                          if not problems else "; ".join(problems))
 
 
 @check(1, "no secret is tracked by git")

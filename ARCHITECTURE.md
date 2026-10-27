@@ -43,22 +43,23 @@ means publication rather than last-modified.
 
 ```
 targets.json ──► FETCH ──► FILTER ──► HYDRATE ──► SCORE ──► DIFF ──► REPORT
-  469 boards    ~49,200     ~200        ~200      ~200     new only
+  544 boards    ~56,500     ~200        ~200      ~200     new only
                 postings   survive    descriptions
 ```
 
 **The order is the only interesting part.** Full job descriptions for 48,000
 postings is roughly 80 MB per run. Filtering on title and location first — both
 available in the cheap list call — cuts that to ~200 detail fetches. Whole run:
-**~215 seconds** for 469 boards expanded into 1,051 concurrent tasks. Job Bank
+**~215 seconds** for 544 boards expanded into 1,126 concurrent tasks. Job Bank
 accounts for about half the growth from ~130s on its own: it honours a 5s
 `Crawl-delay` on every request, list and hydrate alike, so a run with 16 Job
 Bank finalists spends ~105s of that total waiting on purpose.
 
 Workday and SuccessFactors targets fan out to one task per search keyword rather
-than one per tenant, so a nine-tenant sweep parallelises across the shared pool
-instead of running ten queries back to back. That change alone took a run from
-over two minutes to under thirty seconds.
+than one per tenant — `adapters.expand()` asks the adapter — so a nine-tenant
+sweep parallelises across the shared pool instead of running ten queries back
+to back. That change alone took a run from over two minutes to under thirty
+seconds.
 
 State is a SQLite table of seen URLs, so a run reports only what is new.
 
@@ -1478,6 +1479,124 @@ which blocks the commit.
 
 ---
 
+## the adapters are a package now, and the seam was already there
+
+`job_radar.py` was 3,169 lines, and 1,520 of them — 48% — were the 21 ATS
+adapters. That is also the only part of the file that structurally grows: every
+new platform is another `fetch_*`, another block of constants, another `elif` in
+`hydrate`, another arm of the per-query fan-out in `main`. Nothing else in the
+file gets longer when the radar covers more employers.
+
+**The cut was measured before it was made, not guessed at.** Walking the AST
+for every name the adapter region reads from outside itself returns exactly
+eight, and all eight are transport:
+
+```
+_req  16 uses    job        21    strip_html  23    days_ago  14
+_get_text  7     _TAG        1    WD_CANADA    1    _WD_FACET_CACHE  3
+```
+
+No adapter touched `classify_location`, `score`, `title_match`, the database or
+the tracker. The layering the code wanted was already latent in it:
+
+```
+fetchcore.py      HTTP transport, HTML -> text, job()      imports nothing from the radar
+     |
+adapters/*.py     21 modules, one per platform             may import fetchcore, never job_radar
+     |
+job_radar.py      filter, score, state, notify, report     1,421 lines
+```
+
+The contract each module implements is three functions, two of them optional:
+`fetch_<platform>(target)` for pass 1, `hydrate(job, kind)` for pass 2, and
+`expand(target)` for the platforms with no "all jobs" view. Adding a platform
+is now one new file plus two lines in `adapters/__init__.py`.
+
+### the one genuine cross-adapter dependency, and the two things that had to change
+
+A cross-reference check over the proposed split found exactly one: Job Bank
+called Amazon's `_amz_date`. That is a locale-safe "September 1, 2026" parser
+that cron needs because `%B` depends on `LC_TIME`, and two platforms wanting it
+is the definition of shared — it moved to `fetchcore.long_date`.
+
+**`hydrate` had to stop reaching into the classifier.** The Workday branch
+corrected a `N Locations` placeholder to the real city list and then recomputed
+`bucket`, `provinces` and `arrangement` itself. An adapter that imports the
+classifier makes the dependency circular and the package pointless. Now the
+adapter sets `job["location"]` and nothing else; the caller notices the change
+and re-derives. Same output, and the rule is general rather than Workday's.
+
+**`job_radar.py` now bootstraps its own `sys.path`.** `import adapters`
+resolves only if the radar directory is importable, and it is not always:
+`discover.py` loads `job_radar.py` with `spec_from_file_location()` from a
+different working directory, which puts *its* directory on `sys.path` and not
+this one. The import would have failed, and `discover.py` is deliberately
+written to keep working when the engine does not — so it would have swallowed
+the `ImportError` and silently continued without `classify_location`,
+`title_match` and the shared Ashby rate limiter. Three lines in `job_radar.py`
+prevent that for every loader, present and future.
+
+### verified by equality, not by hope
+
+A pure refactor has a testable claim: the output does not change. Three checks,
+in increasing cost:
+
+1. **The task list is byte-identical.** `adapters.expand()` replaced a
+   six-armed `if/elif` chain in `main`. Dumping all 1,126 `(platform, target,
+   function)` tasks over the real 544-board `targets.json` before and after:
+   `diff` is empty.
+2. **The pure functions are untouched.** 26 unit tests and the 259-case golden
+   master pass unchanged — which is exactly what that file exists for.
+3. **The adapters return the same postings.** Every adapter called directly
+   against a 20-platform subset, 111 tasks, ~4,800 postings, 0 errors, before
+   and after: 3,369 of ~3,400 distinct rows identical, and the remainder is
+   live churn on three paginated boards (Air Canada posts continuously; Avature
+   and SmartRecruiters page newest-first, so a slice shifts between runs). An
+   old-module-against-new-package comparison inside a single process confirmed
+   the differing boards agree when both are read at the same moment.
+
+### the reach-ins are preserved deliberately, and now guarded
+
+Eleven modules — plus `tailor/gaps.py`, which lives outside this tree and was
+nearly missed — read **33 attributes** off `job_radar`, among them `jr._req`,
+`jr.SF_TILE`, `jr.ASHBY_ONE` and `jr._wd_country_facet`. Most of those now live
+in `fetchcore` or `adapters`, and survive as explicit re-exports.
+
+Leaving them is the right call for a move commit, but a dropped re-export is a
+nasty failure: not an import error, just a board that quietly returns nothing
+inside somebody's `try/except`. So the surface is now a tier-1 selftest check
+that greps every sibling module for `jr.<attr>`, asserts each one still
+resolves, and asserts every platform in `targets.json` has an adapter wired
+into the registry. The package `__init__` also refuses to import if the modules
+on disk do not match the registry, because an adapter that exists but is not
+wired in loses a whole platform in silence.
+
+**The first version of that check was not enough, and a grep found what it
+missed.** `discover.py` did not name adapters literally — it built them:
+
+```python
+fn = getattr(jr, "fetch_" + platform, None) if jr else None
+if not fn:
+    return -1
+```
+
+Every one of those 21 names had just moved into the package, so the `getattr`
+returned `None` for all of them, and `discover.py` is written to treat a
+missing adapter as "unverifiable" rather than as an error. Board probing and
+the mail pipeline's board resolution would have gone quietly dead — no
+traceback, no log line, just `-1` forever. It is exactly the failure the check
+exists to prevent, and a check that only looks for `jr.X` cannot see it. Those
+three call sites now use `jr.ADAPTERS.get(platform)`, which is the registry
+that already exists for this, and the selftest additionally resolves any
+`getattr(jr, "<prefix>" + ...)` against every platform and flags any dynamic
+lookup it cannot evaluate. Verified by putting the `getattr` line back: the
+check fails and names `fetch_amazon`.
+
+Pointing those eleven callers at `fetchcore` and `adapters` directly is the
+next step, and a separate one.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
@@ -2337,17 +2456,10 @@ Two edits in one file. `bucket` is never written to `applications.md` and is
 never read by `serve.py` or `serve_page.html`, so the web app needed nothing;
 neither `daily.sh` nor `fast.sh` passes `--bucket`, so both inherit the new
 default. The only other place a bucket is recomputed is the Workday
-`N Locations` path inside `hydrate`, which calls `classify_location` and so
-picks up the new rules for free — the post-hydrate re-filter repeats the
+`N Locations` path: the adapter corrects `location`, `job_radar.hydrate()`
+re-derives the geo fields from it through `classify_location`, and so picks
+up the new rules for free — the post-hydrate re-filter repeats the
 vendor-family condition so a Workday row cannot enter `GLOBAL` through it.
-
-### the class this does NOT fix
-
-Two Canada-eligible reqs stay invisible because their location field carries no
-Canadian signal at all, and only the JD does:
-
-- KoBold `Staff Client Platform Engineer` — filed `Remote - US`, JD reads
-  *"open to candidates residing anywhere in the United States or Canada"*.
 - Databento `Site Reliability Engineer` — filed `Remote / San Francisco / New
   York / Salt Lake City`, JD reads *"100% remote, teammates living around the
   globe and paid in their local currency"*.
