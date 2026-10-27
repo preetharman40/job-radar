@@ -277,7 +277,15 @@ def _interface():
         name = os.path.basename(f)
         tree = ast.parse(open(f).read())
 
-        alias = {}                       # local name -> watched module
+        # local name -> watched module. Seeded with the project's conventional
+        # aliases, not only with what `import` statements declare: discover.py
+        # loads job_radar with spec_from_file_location() into a local `jr`, so
+        # an import-only alias map is blind to exactly the file that nearly
+        # broke when the adapters moved. A coincidental local named `jr` would
+        # now produce a false positive, which is the safe direction.
+        alias = {"jr": job_radar, "job_radar": job_radar,
+                 "fc": fetchcore, "fetchcore": fetchcore,
+                 "adapters": adapters}
         for n in ast.walk(tree):
             if isinstance(n, ast.Import):
                 for a in n.names:

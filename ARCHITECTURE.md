@@ -1650,7 +1650,31 @@ but undeclared, or gone), and covers 85 cross-module reads.
 It reads the tree with `ast`, not grep, for two reasons found the hard way: a
 regex for `job_radar\.X` also matches the string `"job_radar.py"` in a comment,
 which produced eleven phantom failures; and the alias has to be resolved per
-file, since `jr` is only `job_radar` because of that file's own import line.
+file, since `jr` is usually `job_radar` only because of that file's own import
+line.
+
+**And resolving aliases from import statements alone was not enough** - found
+by auditing the check rather than trusting it. `discover.py` does not import
+`job_radar`; it loads the file with `spec_from_file_location()` into a local
+`jr`, deliberately, so it can keep working when the engine does not. There is
+no `ast.Import` node to read, so the check silently examined none of that
+file's reads - and `discover.py` is precisely the file that nearly broke in
+silence when the adapters moved. Twice now the same file has slipped past a
+check written to protect it, for the same underlying reason: it is the one
+consumer that does not import the engine the ordinary way.
+
+The alias map is therefore seeded with the project's conventional names
+(`jr`, `fc`, `adapters`, and the full module names) and then extended by
+whatever the imports declare. A local variable coincidentally named `jr` would
+now raise a false positive, which is the safe direction for this check to
+fail. Coverage went from 124 reads to 126, and a private read through that
+lazily-loaded `jr` is now reported as
+`discover.py:592 reads jr._skill_groups - is private`.
+
+The check's own reach is worth stating: it scans `radar/*.py` plus
+`tailor/gaps.py` and `tailor/tailor.py`, which today is all 18 files in
+`~/devops` that reference these three modules. A consumer added somewhere else
+would not be seen.
 
 Verified in both directions: restoring `jr.ADAPTERS` in `board_health.py` is
 caught as *"exists but is not in `__all__`"*, and restoring `jr._req` in
