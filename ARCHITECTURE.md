@@ -1431,11 +1431,12 @@ when moving code. A sweep that completes happily while `classify_location` has
 started reading `Americana, Los Angeles` as American is a worse failure than a
 crash, because nothing reports it.
 
-46 tests over the pure functions - `classify_location`, `title_match`,
+52 tests over the pure functions - `classify_location`, `title_match`,
 `level_of`, `score`, `discover.variants`, `title_overlap`, the LinkedIn digest
-parsers, ratecheck's two patterns, `fetchcore`'s HTML and date helpers, and the
-adapters package's own contract. They run in 0.04s, so they sit in tier 1 of
-the selftest and therefore run on every commit through the pre-commit hook.
+parsers, ratecheck's two patterns, `fetchcore`'s HTML and date helpers, the
+adapters package's own contract, and the shipped tuning data. They run in
+0.04s, so they sit in tier 1 of the selftest and therefore run on every commit
+through the pre-commit hook.
 
 Two rules shaped the file.
 
@@ -1683,6 +1684,85 @@ copy only handled Workday and SuccessFactors. Replacing it with
 jobvite +9, avature +7, taleo +5**. Those four platforms were being polled with
 one unfiltered query instead of their keyword list every time that report ran.
 Duplicating a fan-out is how that happens, and there is now one copy.
+
+---
+
+## the tuning data is data: `rules/titles.json` and `rules/skills.json`
+
+`TITLE_RULES` and `SKILL_GROUPS` were 220 lines of literal inside
+`job_radar.py`, and they are the only two things in the radar that actually get
+*tuned*. Every change to them so far has come out of a measurement pass over a
+real corpus - which is a data transformation, not a code change. They are now
+`rules/titles.json` (22 rules) and `rules/skills.json` (63 groups), and
+`job_radar.py` is 1,302 lines.
+
+The win is not tidiness. It is that **a tuning mistake is now a data error
+rather than an edit to the engine**: a bad weight is caught by a loader that
+names the file, the index and the entry, instead of being a stray bracket
+somewhere in a 1,300-line module. Validation is the real gain - a Python
+literal cannot check itself.
+
+JSON, not TOML or YAML, for a dull reason: this box runs Python 3.10, there is
+no `tomllib`, and the radar has no third-party dependencies and is not
+acquiring one for a config format.
+
+### the comments had to survive, because they are the valuable part
+
+Each of these rules carries the measurement that justifies it - why bare
+`secops` is excluded, why the `power platform` lookbehind is load-bearing, why
+`cloud` and `automation` are absent from the skill list despite being on the
+resume, why ECS and GitOps are held at weight 1 below their rarity. A rule
+whose reasoning has been lost is a rule nobody can safely change, so JSON with
+comments stripped would have been a downgrade dressed as a refactor.
+
+So the comments became fields. The generator walked the AST, attached each
+comment block to the element that followed it, promoted `# --- ... ---` lines
+to `section`, and put the two long header blocks in `_doc`. Nothing was
+retyped, and the round trip was asserted against the live module before the
+literals were deleted: **22 rules and 63 groups identical, and the flat
+`SKILLS` dict's 181 forms identical**. `test_pure.py` asserts the notes and
+sections are still there, so a future edit cannot quietly drop them.
+
+### the loader is strict because the quiet failures are unbounded
+
+Two of them in particular:
+
+- A **truncated `titles.json`** makes every title tier 0. A tier-0 title never
+  reaches scoring, so the sweep would read 56,000 postings, match none, print
+  *"Nothing new"* and exit **0**. That is the `fast.json` failure again, so it
+  gets the same answer: a floor, below which the loader refuses to run.
+- A skill group with **no surface forms** compiles to `"|".join(()) == ""`, and
+  `re.compile("")` matches every string - so that skill would score on every
+  JD ever read.
+
+The second one was a bug in the first version of the loader, found by trying
+it: `not all(isinstance(f, str) and f for f in forms)` is `False` for an empty
+list, because `all(())` is `True`. Nine guards fired and that one did not.
+
+The loader also enforces the invariant the 2026-10-22 skill restructure
+existed for - **one surface form belongs to one skill** - which was previously
+only a convention. Two groups claiming `kubernetes` is how a JD reading
+"Kubernetes (K8s)" scored the one skill twice at two different weights,
+inflating 45 of 177 tracker rows. There are no duplicates today; now there
+cannot be one tomorrow.
+
+Errors are `RuntimeError`, deliberately not `SystemExit`: `discover.py` catches
+`Exception` so it can keep diagnosing a broken engine, and `SystemExit` is a
+`BaseException` that would sail straight through that and take the diagnostics
+tool down with the thing it exists to diagnose.
+
+### verified by breaking it, in both directions
+
+Ten sabotage cases - truncated, bad regex, missing field, duplicate form,
+weight out of range, formless group, wrong type, missing file, malformed
+JSON - and each is refused with a message naming the file, the index and the
+entry. Seven of them are now a tier-1 selftest check that mutates copies in a
+temp directory and points `RULES_DIR` at them, so the real files are never
+touched.
+
+That check is not vacuous either, which was also tested: deleting the floor
+guard and the formless-group guard from `job_radar.py` makes it fail and name
+exactly the three cases that stop being refused.
 
 ---
 

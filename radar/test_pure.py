@@ -25,6 +25,7 @@ Standard library only - unittest, no pytest.
 import glob
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -479,6 +480,89 @@ class TestAdaptersContract(unittest.TestCase):
         for x in ("<p>careers</p>", "", None):
             with self.subTest(x=x):
                 self.assertFalse(sf.looks_like(x))
+
+
+class TestRuleData(unittest.TestCase):
+    """The shipped rules/*.json, checked through the public surface.
+
+    These are the two things in the radar that get tuned, so they moved out of
+    job_radar.py and into data. That makes a tuning mistake a data error
+    instead of a syntax error in the engine - but only if the data is checked,
+    which is what this is for.
+    """
+
+    TITLES = os.path.join(HERE, "rules", "titles.json")
+    SKILLS = os.path.join(HERE, "rules", "skills.json")
+
+    def test_every_title_rule_compiles(self):
+        for rx, tier, fam in jr.TITLE_RULES:
+            with self.subTest(rx=rx):
+                re.compile(rx)
+                self.assertIn(tier, (2, 3, 4))
+                self.assertIn(fam, ("devops", "adjacent", "vendor"))
+
+    def test_one_surface_form_belongs_to_one_skill(self):
+        """The invariant the 2026-10-22 restructure existed for. Two groups
+        claiming a form is how "Kubernetes (K8s)" scored one skill twice, at
+        two different weights, inflating 45 of 177 tracker rows."""
+        seen = {}
+        for canon, _w, forms in jr.SKILL_GROUPS:
+            for f in forms:
+                with self.subTest(form=f):
+                    self.assertNotIn(f, seen,
+                                     f"{f!r} is in both {seen.get(f)!r} "
+                                     f"and {canon!r}")
+                seen[f] = canon
+        self.assertEqual(len(seen), len(jr.SKILLS))
+
+    def test_no_skill_group_is_formless(self):
+        """'|'.join(()) is '', re.compile('') matches every string, and the
+        group would then score on every JD ever read."""
+        for canon, w, forms in jr.SKILL_GROUPS:
+            with self.subTest(skill=canon):
+                self.assertTrue(forms)
+                self.assertIn(w, (1, 2, 3, 4))
+                self.assertTrue(all(isinstance(f, str) and f for f in forms))
+
+    def test_flat_SKILLS_agrees_with_the_groups(self):
+        """hn.py ranks Hacker News comments off the flat dict, so the two
+        lanes must not disagree about what a skill is worth."""
+        for canon, w, forms in jr.SKILL_GROUPS:
+            for f in forms:
+                with self.subTest(form=f):
+                    self.assertEqual(jr.SKILLS[f], w)
+
+    def test_the_data_files_keep_their_reasoning(self):
+        """Every weight here was measured against a real corpus, and the
+        measurement is recorded in `_doc` and per-entry `note` fields. A rule
+        whose justification has been lost is a rule nobody can safely change,
+        so the notes are asserted rather than hoped for."""
+        for path, key, floor in ((self.TITLES, "rules", 20),
+                                 (self.SKILLS, "groups", 50)):
+            with self.subTest(path=os.path.basename(path)), open(path) as f:
+                d = json.load(f)
+                # _doc and note are arrays of lines, so that a one-line
+                # change to a note is a one-line diff rather than a whole
+                # re-escaped paragraph
+                self.assertGreater(len("\n".join(d["_doc"])), 400)
+                self.assertGreaterEqual(len(d[key]), floor)
+                notes = [e["note"] for e in d[key] if "note" in e]
+                self.assertTrue(notes)
+                self.assertTrue(all(isinstance(n, list) for n in notes))
+                self.assertTrue(any("section" in e for e in d[key]))
+
+    def test_the_files_are_what_the_module_loaded(self):
+        """Catches a hand-edited rules file that was never reloaded, and any
+        drift between the data and the tuple shape the engine expects."""
+        with open(self.TITLES) as f:
+            self.assertEqual(
+                [(r["re"], r["tier"], r["family"]) for r in json.load(f)["rules"]],
+                [tuple(x) for x in jr.TITLE_RULES])
+        with open(self.SKILLS) as f:
+            self.assertEqual(
+                [(g["skill"], g["weight"], tuple(g["forms"]))
+                 for g in json.load(f)["groups"]],
+                list(jr.SKILL_GROUPS))
 
 
 class TestGoldenMaster(unittest.TestCase):

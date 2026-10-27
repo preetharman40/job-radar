@@ -31,6 +31,8 @@ Exit status is the number of failed checks, so `selftest.py && git commit`
 works. Standard library only.
 """
 import argparse
+import tempfile
+import copy
 import ast
 import glob
 import json
@@ -117,12 +119,84 @@ def _cron_lanes():
 @check(1, "json config files are valid")
 def _json():
     bad = []
-    for f in ("targets.json", "fast.json"):
+    files = ["targets.json", "fast.json",
+             os.path.join("rules", "titles.json"),
+             os.path.join("rules", "skills.json")]
+    for f in files:
         try:
-            json.load(open(os.path.join(HERE, f)))
+            with open(os.path.join(HERE, f)) as fh:
+                json.load(fh)
         except Exception as e:
             bad.append(f"{f}: {e}")
-    return not bad, "targets.json fast.json" if not bad else "; ".join(bad)
+    return not bad, f"{len(files)} files" if not bad else "; ".join(bad)
+
+
+@check(1, "the rule loaders still refuse bad tuning data")
+def _rule_guards():
+    """rules/*.json is edited by hand, and a bad edit there must not reach a
+    sweep. The quiet failures are the dangerous ones: a truncated titles.json
+    makes every title tier 0, so a sweep reads 56,000 postings, matches none,
+    prints "Nothing new" and exits 0; a skill group with no surface forms
+    compiles to re.compile(""), which matches every JD and scores that skill
+    on all of them.
+
+    Mutates copies in a temp directory and points RULES_DIR at them, so the
+    real files are never touched. Reaches for the private loaders on purpose -
+    this file is the one place that is allowed to, and the loaders are what is
+    under test."""
+    sys.path.insert(0, HERE)
+    try:
+        import job_radar as jr
+    except Exception as e:
+        return False, f"cannot import job_radar: {type(e).__name__}: {e}"
+
+    real = {n: json.load(open(os.path.join(HERE, "rules", n)))
+            for n in ("titles.json", "skills.json")}
+    CASES = [
+        ("titles truncated", "titles.json",
+         lambda d: d.update(rules=d["rules"][:3])),
+        ("title regex broken", "titles.json",
+         lambda d: d["rules"][0].update(re="a(b")),
+        ("title field missing", "titles.json",
+         lambda d: d["rules"][0].pop("tier")),
+        ("skills truncated", "skills.json",
+         lambda d: d.update(groups=d["groups"][:4])),
+        ("skill form duplicated", "skills.json",
+         lambda d: d["groups"][5]["forms"].append(d["groups"][6]["forms"][0])),
+        ("skill weight invalid", "skills.json",
+         lambda d: d["groups"][0].update(weight=9)),
+        ("skill has no forms", "skills.json",
+         lambda d: d["groups"][0].update(forms=[])),
+    ]
+    keep, missed = jr.RULES_DIR, []
+    try:
+        for label, fname, mutate in CASES:
+            with tempfile.TemporaryDirectory() as tmp:
+                for n, d in real.items():
+                    body = copy.deepcopy(d)
+                    if n == fname:
+                        mutate(body)
+                    with open(os.path.join(tmp, n), "w") as fh:
+                        json.dump(body, fh)
+                jr.RULES_DIR = tmp
+                try:
+                    jr._title_rules()
+                    jr._skill_groups()
+                    missed.append(label)
+                except RuntimeError:
+                    pass
+                except Exception as e:
+                    missed.append(f"{label} (raised {type(e).__name__}, "
+                                  f"not RuntimeError)")
+        # and the files really do load when they are not sabotaged
+        jr.RULES_DIR = keep
+        if len(jr._title_rules()) < 20 or len(jr._skill_groups()) < 50:
+            missed.append("the real rule files no longer load")
+    finally:
+        jr.RULES_DIR = keep
+    return not missed, (f"{len(CASES)} bad-data cases all refused"
+                        if not missed else
+                        "accepted bad data: " + "; ".join(missed))
 
 
 @check(1, "logrotate config is valid")

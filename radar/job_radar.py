@@ -61,7 +61,7 @@ from adapters import ADAPTERS, WD_TRUNCATED                       # noqa: E402
 # is named below.
 __all__ = [
     # paths and config
-    "DB", "TARGETS", "TRACKER", "NTFY_FILE", "HERE", "VENDORS",
+    "DB", "TARGETS", "TRACKER", "NTFY_FILE", "RULES_DIR", "HERE", "VENDORS",
     # title / level / location / score - the pure core
     "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
@@ -78,226 +78,98 @@ __all__ = [
 VENDORS = set()   # filled from targets.json at startup
 
 # ------------------------------------------------------------------ titles ---
-# (regex, tier, family). Tier drives the base score; family drives --family.
+# The tuning data - title rules and skill weights - lives in rules/*.json
+# rather than here. Two reasons. A weight change should not be able to put a
+# syntax error in the engine; and these are the only two things in the radar
+# that actually get tuned, so the measurement passes that set them become data
+# transformations rather than code edits. The justification for each entry
+# travels with it in a `note` field, because a rule whose reasoning has been
+# lost is a rule nobody can safely change.
 
-TITLE_RULES = [
-    # --- family: devops -------------------------------------------------
-    # Covers "dev ops" with a space and the whole devsecops family. Measured
-    # on 205 distinct titles from a fortnight of real alert mail: 15
-    # infra-shaped titles scored tier 0, and SIX were caught by widening this
-    # one rule - "DevSecOps Engineer", "Senior DevSecOps Engineer", "Cloud
-    # Security DevSecOps Engineer", "Azure DevSecOps Architect", "Dev Ops I"
-    # and "Dev Ops II, Public Cloud". A tier-0 title never reaches scoring at
-    # all, so these were invisible rather than ranked low.
-    #
-    # `ops` keeps its word boundary so "operations" cannot match, and bare
-    # "secops" is deliberately excluded - that is a SOC analyst title, and
-    # analyst roles are out by request. Costs 21 extra postings across a
-    # 56,524-posting snapshot, nearly all of them genuine DevSecOps reqs.
-    (r"\b(dev[\s-]?sec[\s-]?ops|dev[\s-]?ops)\b",                 4, "devops"),
-    (r"\b(sre|site\s+reliability)\b",                           4, "devops"),
-    (r"\bplatform\s+engineer",                                  4, "devops"),
-    (r"\b(cloud|infrastructure|infra)\s+"
-     r"(engineer|developer|specialist|analyst|administrator)",  4, "devops"),
-    # Adjacency with at most one word between, which is what "Kubernetes
-    # (K8S) / HPC Engineer" needs - four characters of punctuation and one
-    # token sit between the platform and the role noun. Bounded deliberately:
-    # the unbounded "kubernetes anywhere AND engineer anywhere" form admitted
-    # 19 postings, mostly "Senior Software Engineer - Python/Golang -
-    # Kubernetes" coding roles, while this one admits exactly 1 extra posting
-    # in 56,524 and still rescues the title it was written for.
-    (r"\b(kubernetes|k8s)\b[\s/()\[\],.-]*"
-     r"(?:[a-z0-9]+[\s/()\[\],.-]+)?engineer",                  4, "devops"),
-    # "Platform Administration Lead", "Data Platform Operations Engineer".
-    # The power-platform lookbehind is load-bearing: "Power BI & Power
-    # Platform Administrator" is an M365 reporting role, and it arrived in the
-    # same fortnight of mail as the titles above. Requiring the role noun
-    # (operations ENGINEER, or administrator/administration) rather than a
-    # bare "platform operations" is what keeps out "Sr Program Manager, GTM
-    # Platform Operations" and the support-engineer variants - the loose form
-    # admitted 32 postings of which 22 were program-manager or support roles.
-    # "Manager, AMS/SAP Platform Administration and Support" still matches but
-    # is harmless: level_of reads it as exec, which is -10.
-    (r"(?<!power )\bplatform\s+"
-     r"(?:operations?\s+engineer|administrat(?:or|ion))\b",     4, "devops"),
-    (r"\b(reliability|observability)\s+engineer",               4, "devops"),
-    (r"\bmlops\b",                                              3, "devops"),
-    # A gap is allowed between "cloud" and "operations" because vendors put
-    # their product name there: "VMware Cloud Foundation (VCF) Operations
-    # Engineer". Admits 0 extra postings in the 56,524-posting snapshot, so
-    # the widening is free - the title it rescues came through alert mail from
-    # a board the radar does not poll.
-    (r"\bcloud\s+(operations|ops)\b"
-     r"|\bcloud\b[a-z0-9\s()&./-]{0,26}\boperations?\s+engineer", 3, "devops"),
+RULES_DIR = os.path.join(HERE, "rules")
 
-    # --- family: adjacent (infra work that hires from support) ----------
-    (r"\b(build|release|automation|tooling)\s+engineer",        3, "adjacent"),
-    (r"\bdeveloper\s+(experience|productivity|platform)",       3, "adjacent"),
-    (r"\b(linux|unix|systems?)\s+"
-     r"(engineer|administrator|admin|analyst)",                 3, "adjacent"),
-    (r"\b(endpoint|mdm|intune|workspace\s*one|"
-     r"unified\s+endpoint|modern\s+workplace|device\s+management)", 4, "adjacent"),
-    (r"\b(noc|network\s+operations)\b",                         2, "adjacent"),
-    (r"\bit\s+(engineer|operations|infrastructure)",            2, "adjacent"),
 
-    # --- family: vendor (only counts at a DevOps tool vendor) -----------
-    (r"\b(technical|customer|enterprise)\s+support\s+engineer", 4, "vendor"),
-    (r"\bsupport\s+engineer\b",                                 4, "vendor"),
-    (r"\b(solutions?|sales|field)\s+engineer\b",                3, "vendor"),
-    (r"\b(implementation|onboarding|deployment)\s+engineer",    3, "vendor"),
-    (r"\b(technical\s+account\s+manager|professional\s+services)", 3, "vendor"),
-    (r"\b(customer\s+success\s+engineer|escalation\s+engineer)", 4, "vendor"),
-    (r"\bdeveloper\s+(advocate|relations)\b",                   2, "vendor"),
-]
+def _load_rules(filename, key, floor):
+    """Read rules/<filename>[key], and refuse anything that looks truncated.
 
-# Straight off the resume. Ranks, never filters.
-#
-# One SKILL, one score, many spellings. This was a flat {phrase: weight} dict
-# until 2026-10-22, which carried three defects measured against the 177 rows
-# then in the tracker:
-#
-#  1. ALIASES DOUBLE-COUNTED. "kubernetes" and "k8s" were separate entries, so
-#     a JD reading "Kubernetes (K8s)" scored the one skill twice - and at two
-#     different weights (3 and 2), so the total depended on which spellings the
-#     recruiter happened to use. 37 rows double-counted infrastructure-as-code,
-#     6 kubernetes, 2 ci/cd: 45 of 177 rows were inflated by 1-2 points.
-#  2. NO WORD BOUNDARY. Matching was a plain `kw in blob`, so "aws" matched
-#     "laws" and "draws", "helm" matched "overwhelming", "iac" matched
-#     "maniac". Every form is now anchored on both sides.
-#  3. DISPLAY SORTED ALPHABETICALLY, then truncated to 10 - so the shown list
-#     was the first ten by name, not the ten that earned the score. No row was
-#     actually hiding a weight-3 skill when this was fixed, but it was one new
-#     keyword away from doing so.
-#
-# What is deliberately NOT here is as important as what is. A keyword earns a
-# place by DISCRIMINATING, not by being relevant: "automation", "monitoring",
-# "pipeline", "deployment", "scripting" and "cloud" appear in essentially every
-# DevOps JD, so scoring them would raise every role by the same amount and rank
-# nothing. They are in the resume and they are still omitted. Likewise absent
-# are azure and gcp - real skills, but not HIS, and rewarding a JD for
-# requiring them would promote the roles he is least able to land.
-#
-# (canonical name, weight, surface forms that mean it)
-SKILL_GROUPS = (
-    # --- the rare, highly diagnostic things: few JDs name these ----------
-    ("intune",          4, ("intune", "microsoft intune", "endpoint manager")),
-    ("workspace one",   4, ("workspace one", "workspace 1", "airwatch")),
-    ("loki",            3, ("loki",)),
-    ("grafana",         3, ("grafana",)),
-    ("mdm",             3, ("mdm", "mobile device management",
-                            "device management")),
-    ("terraform",       3, ("terraform", "terragrunt")),
-    ("github actions",  3, ("github actions", "gh actions",
-                            "github workflow", "github workflows")),
-    ("kubernetes",      3, ("kubernetes", "k8s", "kubectl", "eks", "aks",
-                            "gke", "openshift", "rancher")),
-    # --- core toolchain --------------------------------------------------
-    ("docker",          2, ("docker", "dockerfile", "containerization",
-                            "containerisation", "container image",
-                            "oci image", "podman")),
-    ("ci/cd",           2, ("ci/cd", "cicd", "ci cd", "continuous integration",
-                            "continuous delivery", "continuous deployment")),
-    ("jenkins",         2, ("jenkins", "jenkinsfile")),
-    ("aws",             2, ("aws", "amazon web services", "ec2", "s3",
-                            "cloudformation")),
-    ("digitalocean",    2, ("digitalocean", "digital ocean")),
-    ("linux",           2, ("linux", "ubuntu", "rhel",
-                            "red hat enterprise", "centos", "debian",
-                            "unix")),
-    ("bash",            2, ("bash", "shell scripting", "shell script",
-                            "sh scripting")),
-    ("python",          2, ("python", "python3")),
-    ("infrastructure as code", 2, ("infrastructure as code", "iac")),
-    ("prometheus",      2, ("prometheus", "promql", "alertmanager")),
-    ("helm",            2, ("helm", "helm chart", "helm charts")),
-    ("observability",   2, ("observability", "telemetry",
-                            "distributed tracing")),
-    # --- operations vocabulary: how he actually spent six years ----------
-    ("incident",        2, ("incident", "incident response",
-                            "incident management", "major incident")),
-    ("root cause",      2, ("root cause", "rca", "root cause analysis",
-                            "postmortem", "post-mortem")),
-    ("mttr",            2, ("mttr", "mean time to repair",
-                            "mean time to resolution")),
-    # "endpoint" alone matched "a REST endpoint", which is an API, not a
-    # managed device. A word boundary cannot fix that - the word really is
-    # there - so the form itself has to carry the meaning.
-    ("endpoint management", 2, ("endpoint management", "endpoint security",
-                                "endpoint protection", "device compliance")),
-    ("servicenow",      2, ("servicenow", "service now")),
-    ("escalation",      2, ("escalation", "escalations", "escalate")),
-    ("troubleshooting", 2, ("troubleshooting", "troubleshoot")),
-    # --- supporting, and genuinely in the resume -------------------------
-    ("ansible",         1, ("ansible",)),
-    ("argo cd",         1, ("argo cd", "argocd", "argo-cd")),
-    ("microservices",   1, ("microservices", "micro-services",
-                            "service mesh", "istio")),
-    ("on-call",         1, ("on-call", "on call", "pagerduty", "pager duty")),
-    ("jira",            1, ("jira", "confluence", "atlassian")),
-    ("rest api",        1, ("rest api", "rest apis", "restful",
-                            "rest endpoint", "rest endpoints")),
-    ("fastapi",         1, ("fastapi",)),
-    ("playwright",      1, ("playwright",)),
-    ("pytest",          1, ("pytest",)),
-    ("ms sql",          1, ("ms sql", "mssql", "sql server", "t-sql")),
-    ("vmware",          1, ("vmware", "esxi", "vsphere")),
+    Loudly, because the quiet failure here is unbounded: an empty TITLE_RULES
+    makes every title tier 0, and a sweep then reads 56,000 postings, matches
+    none, prints "Nothing new" and exits 0. `floor` is the same shrink guard
+    make_fast.py grew after fast.json was nearly rewritten with one board.
+    """
+    path = os.path.join(RULES_DIR, filename)
+    try:
+        with open(path) as f:
+            items = json.load(f)[key]
+    except Exception as e:
+        raise RuntimeError(f"cannot read {path}: {type(e).__name__}: {e}")
+    if not isinstance(items, list) or len(items) < floor:
+        raise RuntimeError(f"{path}: {len(items)} {key}, expected at least "
+                           f"{floor} - refusing to run on a truncated rule "
+                           f"set")
+    return items
 
-    # --- added 2026-10-22 from Harmanpreet_Singh_DevOps_Resume_Latest.docx --
-    #
-    # Weights here are MEASURED, not guessed. Each candidate was counted
-    # against a corpus of 135 real job descriptions pulled from the fast lane
-    # (mean 6,857 chars), and weighted by how much naming it DISCRIMINATES:
-    #
-    #     >=60% of JDs  ->  dropped, it ranks nothing
-    #     35-60%        ->  weight 1
-    #     12-35%        ->  weight 2
-    #     <12%          ->  weight 3, rare and his
-    #
-    # The controls are the proof the method works: "cloud" appears in 65% of
-    # JDs and "automation" in 63%, so both are omitted even though the resume
-    # names them - scoring them would add the same points to nearly every role
-    # and reorder nothing. "monitoring" (49%) and "pipeline" (43%) are out for
-    # the same reason at lower cost.
-    #
-    # Rarity is then CAPPED BY PROFICIENCY. The resume separates what he runs
-    # from what he lists under "Familiar with:" and "Learning", and a skill he
-    # is merely familiar with must not outrank one he operates daily however
-    # rare it is. ECS, GitOps and Kafka are 4-7% terms that would otherwise
-    # score 3; they are held at 1. GCP and Go are omitted outright - "Learning
-    # GCP" should not promote a GCP-heavy JD, and bare "go" is unmatchable.
-    ("llm",             2, ("llm", "large language model", "genai",
-                            "generative ai")),
-    ("ai platform",     3, ("ml platform", "ai platform", "mlops", "llmops",
-                            "real-time inference")),
-    ("iam",             2, ("iam", "least privilege", "least-privilege")),
-    ("alerting",        2, ("alerting",)),
-    ("runbook",         2, ("runbook", "sop", "knowledge base")),
-    ("disaster recovery", 2, ("disaster recovery", "business continuity")),
-    ("slo",             3, ("slo", "sli", "error budget",
-                            "service level objective")),
-    ("secrets management", 3, ("secrets management", "secret management")),
-    ("oauth",           3, ("oauth", "oauth2", "oidc")),
-    ("vpc",             3, ("vpc", "subnet", "elastic load balancing")),
-    ("rbac",            3, ("rbac", "role-based access")),
-    ("dns",             3, ("dns",)),
-    ("tls",             3, ("tls", "mtls")),
-    ("drift detection", 3, ("drift detection", "remote state",
-                            "state locking")),
-    ("dynamodb",        3, ("dynamodb",)),
-    ("sast",            3, ("sast", "dependency scanning",
-                            "vulnerability scanning")),
-    ("ingress",         3, ("ingress",)),
-    ("kustomize",       3, ("kustomize",)),
-    ("rolling deploys", 3, ("rolling update", "rolling deployment")),
-    ("defender",        3, ("microsoft defender", "defender for endpoint")),
-    ("ckad",            2, ("ckad", "cka")),
-    # held at 1 by proficiency, not by rarity - see the note above
-    ("ecs",             1, ("amazon ecs", "fargate")),
-    ("gitops",          1, ("gitops",)),
-    ("kafka",           1, ("kafka",)),
-    ("policy as code",  1, ("policy-as-code", "policy as code",
-                            "open policy agent")),
-)
+
+def _title_rules():
+    """-> [(regex, tier, family)]. Tier drives the base score, family --family.
+
+    title_match() returns the MAX tier among matching rules, so a rule added
+    here can only raise a posting's tier, never lower it. That is what makes
+    the list safe to extend.
+    """
+    out = []
+    for i, r in enumerate(_load_rules("titles.json", "rules", 20)):
+        try:
+            re.compile(r["re"])
+            out.append((r["re"], int(r["tier"]), str(r["family"])))
+        except Exception as e:
+            raise RuntimeError(f"rules/titles.json rule {i} "
+                               f"({r.get('re')!r}): {type(e).__name__}: {e}")
+    return out
+
+
+def _skill_groups():
+    """-> ((canonical name, weight, surface forms), ...).
+
+    The uniqueness check is the invariant the 2026-10-22 restructure existed
+    for: one skill, one score, many spellings. Two groups claiming the same
+    surface form is exactly how a JD reading "Kubernetes (K8s)" used to score
+    the one skill twice, at two different weights.
+    """
+    out, seen = [], {}
+    for i, g in enumerate(_load_rules("skills.json", "groups", 50)):
+        forms = g.get("forms")
+        # `forms` must be non-empty, and emptiness is the dangerous case
+        # rather than the harmless one: "|".join(()) is "", re.compile("")
+        # matches every string, and the group would then score on every JD
+        # ever read. all() over an empty list is True, so this is checked
+        # separately rather than inside the comprehension.
+        if not g.get("skill") or g.get("weight") not in (1, 2, 3, 4) \
+                or not isinstance(forms, list) or not forms \
+                or not all(isinstance(f, str) and f for f in forms):
+            raise RuntimeError(f"rules/skills.json group {i} "
+                               f"({g.get('skill')!r}): needs a skill, a "
+                               f"weight of 1-4, and one or more forms")
+        for f in forms:
+            if f in seen:
+                where = (f"listed twice under {g['skill']!r}"
+                         if seen[f] == g["skill"] else
+                         f"claimed by both {seen[f]!r} and {g['skill']!r}")
+                raise RuntimeError(f"rules/skills.json: {f!r} is {where} - a "
+                                   f"surface form belongs to one skill, or a "
+                                   f"JD naming it scores twice")
+            seen[f] = g["skill"]
+        out.append((g["skill"], int(g["weight"]), tuple(forms)))
+    return tuple(out)
+
+
+TITLE_RULES = _title_rules()
+
+# Straight off the resume. Ranks, never filters. The groups, their weights and
+# the measurement that set them are in rules/skills.json - including why
+# "cloud", "automation" and "monitoring" are deliberately absent despite being
+# on the resume, and why ECS, GitOps and Kafka are held below their rarity.
+SKILL_GROUPS = _skill_groups()
 
 # Anchored on both sides so a form only matches as a whole token. \b is wrong
 # for forms that END in a non-word character, and several of these contain "/"
