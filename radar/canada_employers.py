@@ -24,6 +24,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import adapters  # noqa: E402
 import job_radar as jr  # noqa: E402
 
 
@@ -41,16 +42,14 @@ def main():
     jr.VENDORS.update(vendors)
 
     tasks = []
-    for src, fn in jr.ADAPTERS.items():
+    # adapters.expand() knows which platforms need a per-keyword fan-out. This
+    # used to inline the workday and successfactors cases and nothing else, so
+    # oracle, jobvite, avature and taleo were polled with one unfiltered query
+    # instead of their keyword list.
+    for src, fn in adapters.ADAPTERS.items():
         for tok in tg.get(src, []):
-            if src == "workday":
-                for q in jr.WD_QUERIES:
-                    tasks.append((src, {**tok, "_query": q}, fn))
-            elif src == "successfactors":
-                for q in jr.SF_QUERIES:
-                    tasks.append((src, {**tok, "_query": q}, fn))
-            else:
-                tasks.append((src, tok, fn))
+            for task in adapters.expand(src, tok):
+                tasks.append((src, task, fn))
 
     jobs = []
     with cf.ThreadPoolExecutor(a.workers) as ex:

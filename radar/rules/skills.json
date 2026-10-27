@@ -1,0 +1,629 @@
+{
+ "_doc": [
+  "Straight off the resume. Ranks, never filters.",
+  "",
+  "One SKILL, one score, many spellings. This was a flat {phrase: weight} dict",
+  "until 2026-10-22, which carried three defects measured against the 177 rows",
+  "then in the tracker:",
+  "",
+  " 1. ALIASES DOUBLE-COUNTED. \"kubernetes\" and \"k8s\" were separate entries, so",
+  "    a JD reading \"Kubernetes (K8s)\" scored the one skill twice - and at two",
+  "    different weights (3 and 2), so the total depended on which spellings the",
+  "    recruiter happened to use. 37 rows double-counted infrastructure-as-code,",
+  "    6 kubernetes, 2 ci/cd: 45 of 177 rows were inflated by 1-2 points.",
+  " 2. NO WORD BOUNDARY. Matching was a plain `kw in blob`, so \"aws\" matched",
+  "    \"laws\" and \"draws\", \"helm\" matched \"overwhelming\", \"iac\" matched",
+  "    \"maniac\". Every form is now anchored on both sides.",
+  " 3. DISPLAY SORTED ALPHABETICALLY, then truncated to 10 - so the shown list",
+  "    was the first ten by name, not the ten that earned the score. No row was",
+  "    actually hiding a weight-3 skill when this was fixed, but it was one new",
+  "    keyword away from doing so.",
+  "",
+  "What is deliberately NOT here is as important as what is. A keyword earns a",
+  "place by DISCRIMINATING, not by being relevant: \"automation\", \"monitoring\",",
+  "\"pipeline\", \"deployment\", \"scripting\" and \"cloud\" appear in essentially every",
+  "DevOps JD, so scoring them would raise every role by the same amount and rank",
+  "nothing. They are in the resume and they are still omitted. Likewise absent",
+  "are azure and gcp - real skills, but not HIS, and rewarding a JD for",
+  "requiring them would promote the roles he is least able to land.",
+  "",
+  "(canonical name, weight, surface forms that mean it)"
+ ],
+ "groups": [
+  {
+   "section": "the rare, highly diagnostic things: few JDs name these",
+   "skill": "intune",
+   "weight": 4,
+   "forms": [
+    "intune",
+    "microsoft intune",
+    "endpoint manager"
+   ]
+  },
+  {
+   "skill": "workspace one",
+   "weight": 4,
+   "forms": [
+    "workspace one",
+    "workspace 1",
+    "airwatch"
+   ]
+  },
+  {
+   "skill": "loki",
+   "weight": 3,
+   "forms": [
+    "loki"
+   ]
+  },
+  {
+   "skill": "grafana",
+   "weight": 3,
+   "forms": [
+    "grafana"
+   ]
+  },
+  {
+   "skill": "mdm",
+   "weight": 3,
+   "forms": [
+    "mdm",
+    "mobile device management",
+    "device management"
+   ]
+  },
+  {
+   "skill": "terraform",
+   "weight": 3,
+   "forms": [
+    "terraform",
+    "terragrunt"
+   ]
+  },
+  {
+   "skill": "github actions",
+   "weight": 3,
+   "forms": [
+    "github actions",
+    "gh actions",
+    "github workflow",
+    "github workflows"
+   ]
+  },
+  {
+   "skill": "kubernetes",
+   "weight": 3,
+   "forms": [
+    "kubernetes",
+    "k8s",
+    "kubectl",
+    "eks",
+    "aks",
+    "gke",
+    "openshift",
+    "rancher"
+   ]
+  },
+  {
+   "section": "core toolchain",
+   "skill": "docker",
+   "weight": 2,
+   "forms": [
+    "docker",
+    "dockerfile",
+    "containerization",
+    "containerisation",
+    "container image",
+    "oci image",
+    "podman"
+   ]
+  },
+  {
+   "skill": "ci/cd",
+   "weight": 2,
+   "forms": [
+    "ci/cd",
+    "cicd",
+    "ci cd",
+    "continuous integration",
+    "continuous delivery",
+    "continuous deployment"
+   ]
+  },
+  {
+   "skill": "jenkins",
+   "weight": 2,
+   "forms": [
+    "jenkins",
+    "jenkinsfile"
+   ]
+  },
+  {
+   "skill": "aws",
+   "weight": 2,
+   "forms": [
+    "aws",
+    "amazon web services",
+    "ec2",
+    "s3",
+    "cloudformation"
+   ]
+  },
+  {
+   "skill": "digitalocean",
+   "weight": 2,
+   "forms": [
+    "digitalocean",
+    "digital ocean"
+   ]
+  },
+  {
+   "skill": "linux",
+   "weight": 2,
+   "forms": [
+    "linux",
+    "ubuntu",
+    "rhel",
+    "red hat enterprise",
+    "centos",
+    "debian",
+    "unix"
+   ]
+  },
+  {
+   "skill": "bash",
+   "weight": 2,
+   "forms": [
+    "bash",
+    "shell scripting",
+    "shell script",
+    "sh scripting"
+   ]
+  },
+  {
+   "skill": "python",
+   "weight": 2,
+   "forms": [
+    "python",
+    "python3"
+   ]
+  },
+  {
+   "skill": "infrastructure as code",
+   "weight": 2,
+   "forms": [
+    "infrastructure as code",
+    "iac"
+   ]
+  },
+  {
+   "skill": "prometheus",
+   "weight": 2,
+   "forms": [
+    "prometheus",
+    "promql",
+    "alertmanager"
+   ]
+  },
+  {
+   "skill": "helm",
+   "weight": 2,
+   "forms": [
+    "helm",
+    "helm chart",
+    "helm charts"
+   ]
+  },
+  {
+   "skill": "observability",
+   "weight": 2,
+   "forms": [
+    "observability",
+    "telemetry",
+    "distributed tracing"
+   ]
+  },
+  {
+   "section": "operations vocabulary: how he actually spent six years",
+   "skill": "incident",
+   "weight": 2,
+   "forms": [
+    "incident",
+    "incident response",
+    "incident management",
+    "major incident"
+   ]
+  },
+  {
+   "skill": "root cause",
+   "weight": 2,
+   "forms": [
+    "root cause",
+    "rca",
+    "root cause analysis",
+    "postmortem",
+    "post-mortem"
+   ]
+  },
+  {
+   "skill": "mttr",
+   "weight": 2,
+   "forms": [
+    "mttr",
+    "mean time to repair",
+    "mean time to resolution"
+   ]
+  },
+  {
+   "note": [
+    "\"endpoint\" alone matched \"a REST endpoint\", which is an API, not a",
+    "managed device. A word boundary cannot fix that - the word really is",
+    "there - so the form itself has to carry the meaning."
+   ],
+   "skill": "endpoint management",
+   "weight": 2,
+   "forms": [
+    "endpoint management",
+    "endpoint security",
+    "endpoint protection",
+    "device compliance"
+   ]
+  },
+  {
+   "skill": "servicenow",
+   "weight": 2,
+   "forms": [
+    "servicenow",
+    "service now"
+   ]
+  },
+  {
+   "skill": "escalation",
+   "weight": 2,
+   "forms": [
+    "escalation",
+    "escalations",
+    "escalate"
+   ]
+  },
+  {
+   "skill": "troubleshooting",
+   "weight": 2,
+   "forms": [
+    "troubleshooting",
+    "troubleshoot"
+   ]
+  },
+  {
+   "section": "supporting, and genuinely in the resume",
+   "skill": "ansible",
+   "weight": 1,
+   "forms": [
+    "ansible"
+   ]
+  },
+  {
+   "skill": "argo cd",
+   "weight": 1,
+   "forms": [
+    "argo cd",
+    "argocd",
+    "argo-cd"
+   ]
+  },
+  {
+   "skill": "microservices",
+   "weight": 1,
+   "forms": [
+    "microservices",
+    "micro-services",
+    "service mesh",
+    "istio"
+   ]
+  },
+  {
+   "skill": "on-call",
+   "weight": 1,
+   "forms": [
+    "on-call",
+    "on call",
+    "pagerduty",
+    "pager duty"
+   ]
+  },
+  {
+   "skill": "jira",
+   "weight": 1,
+   "forms": [
+    "jira",
+    "confluence",
+    "atlassian"
+   ]
+  },
+  {
+   "skill": "rest api",
+   "weight": 1,
+   "forms": [
+    "rest api",
+    "rest apis",
+    "restful",
+    "rest endpoint",
+    "rest endpoints"
+   ]
+  },
+  {
+   "skill": "fastapi",
+   "weight": 1,
+   "forms": [
+    "fastapi"
+   ]
+  },
+  {
+   "skill": "playwright",
+   "weight": 1,
+   "forms": [
+    "playwright"
+   ]
+  },
+  {
+   "skill": "pytest",
+   "weight": 1,
+   "forms": [
+    "pytest"
+   ]
+  },
+  {
+   "skill": "ms sql",
+   "weight": 1,
+   "forms": [
+    "ms sql",
+    "mssql",
+    "sql server",
+    "t-sql"
+   ]
+  },
+  {
+   "skill": "vmware",
+   "weight": 1,
+   "forms": [
+    "vmware",
+    "esxi",
+    "vsphere"
+   ]
+  },
+  {
+   "section": "added 2026-10-22 from Harmanpreet_Singh_DevOps_Resume_Latest.docx",
+   "note": [
+    "Weights here are MEASURED, not guessed. Each candidate was counted",
+    "against a corpus of 135 real job descriptions pulled from the fast lane",
+    "(mean 6,857 chars), and weighted by how much naming it DISCRIMINATES:",
+    "",
+    ">=60% of JDs  ->  dropped, it ranks nothing",
+    "35-60%        ->  weight 1",
+    "12-35%        ->  weight 2",
+    "<12%          ->  weight 3, rare and his",
+    "",
+    "The controls are the proof the method works: \"cloud\" appears in 65% of",
+    "JDs and \"automation\" in 63%, so both are omitted even though the resume",
+    "names them - scoring them would add the same points to nearly every role",
+    "and reorder nothing. \"monitoring\" (49%) and \"pipeline\" (43%) are out for",
+    "the same reason at lower cost.",
+    "",
+    "Rarity is then CAPPED BY PROFICIENCY. The resume separates what he runs",
+    "from what he lists under \"Familiar with:\" and \"Learning\", and a skill he",
+    "is merely familiar with must not outrank one he operates daily however",
+    "rare it is. ECS, GitOps and Kafka are 4-7% terms that would otherwise",
+    "score 3; they are held at 1. GCP and Go are omitted outright - \"Learning",
+    "GCP\" should not promote a GCP-heavy JD, and bare \"go\" is unmatchable."
+   ],
+   "skill": "llm",
+   "weight": 2,
+   "forms": [
+    "llm",
+    "large language model",
+    "genai",
+    "generative ai"
+   ]
+  },
+  {
+   "skill": "ai platform",
+   "weight": 3,
+   "forms": [
+    "ml platform",
+    "ai platform",
+    "mlops",
+    "llmops",
+    "real-time inference"
+   ]
+  },
+  {
+   "skill": "iam",
+   "weight": 2,
+   "forms": [
+    "iam",
+    "least privilege",
+    "least-privilege"
+   ]
+  },
+  {
+   "skill": "alerting",
+   "weight": 2,
+   "forms": [
+    "alerting"
+   ]
+  },
+  {
+   "skill": "runbook",
+   "weight": 2,
+   "forms": [
+    "runbook",
+    "sop",
+    "knowledge base"
+   ]
+  },
+  {
+   "skill": "disaster recovery",
+   "weight": 2,
+   "forms": [
+    "disaster recovery",
+    "business continuity"
+   ]
+  },
+  {
+   "skill": "slo",
+   "weight": 3,
+   "forms": [
+    "slo",
+    "sli",
+    "error budget",
+    "service level objective"
+   ]
+  },
+  {
+   "skill": "secrets management",
+   "weight": 3,
+   "forms": [
+    "secrets management",
+    "secret management"
+   ]
+  },
+  {
+   "skill": "oauth",
+   "weight": 3,
+   "forms": [
+    "oauth",
+    "oauth2",
+    "oidc"
+   ]
+  },
+  {
+   "skill": "vpc",
+   "weight": 3,
+   "forms": [
+    "vpc",
+    "subnet",
+    "elastic load balancing"
+   ]
+  },
+  {
+   "skill": "rbac",
+   "weight": 3,
+   "forms": [
+    "rbac",
+    "role-based access"
+   ]
+  },
+  {
+   "skill": "dns",
+   "weight": 3,
+   "forms": [
+    "dns"
+   ]
+  },
+  {
+   "skill": "tls",
+   "weight": 3,
+   "forms": [
+    "tls",
+    "mtls"
+   ]
+  },
+  {
+   "skill": "drift detection",
+   "weight": 3,
+   "forms": [
+    "drift detection",
+    "remote state",
+    "state locking"
+   ]
+  },
+  {
+   "skill": "dynamodb",
+   "weight": 3,
+   "forms": [
+    "dynamodb"
+   ]
+  },
+  {
+   "skill": "sast",
+   "weight": 3,
+   "forms": [
+    "sast",
+    "dependency scanning",
+    "vulnerability scanning"
+   ]
+  },
+  {
+   "skill": "ingress",
+   "weight": 3,
+   "forms": [
+    "ingress"
+   ]
+  },
+  {
+   "skill": "kustomize",
+   "weight": 3,
+   "forms": [
+    "kustomize"
+   ]
+  },
+  {
+   "skill": "rolling deploys",
+   "weight": 3,
+   "forms": [
+    "rolling update",
+    "rolling deployment"
+   ]
+  },
+  {
+   "skill": "defender",
+   "weight": 3,
+   "forms": [
+    "microsoft defender",
+    "defender for endpoint"
+   ]
+  },
+  {
+   "skill": "ckad",
+   "weight": 2,
+   "forms": [
+    "ckad",
+    "cka"
+   ]
+  },
+  {
+   "note": [
+    "held at 1 by proficiency, not by rarity - see the note above"
+   ],
+   "skill": "ecs",
+   "weight": 1,
+   "forms": [
+    "amazon ecs",
+    "fargate"
+   ]
+  },
+  {
+   "skill": "gitops",
+   "weight": 1,
+   "forms": [
+    "gitops"
+   ]
+  },
+  {
+   "skill": "kafka",
+   "weight": 1,
+   "forms": [
+    "kafka"
+   ]
+  },
+  {
+   "skill": "policy as code",
+   "weight": 1,
+   "forms": [
+    "policy-as-code",
+    "policy as code",
+    "open policy agent"
+   ]
+  }
+ ]
+}

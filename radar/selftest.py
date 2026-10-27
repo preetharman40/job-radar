@@ -31,6 +31,9 @@ Exit status is the number of failed checks, so `selftest.py && git commit`
 works. Standard library only.
 """
 import argparse
+import tempfile
+import copy
+import ast
 import glob
 import json
 import os
@@ -64,12 +67,14 @@ def sh(*cmd, **kw):
 @check(1, "every python file parses")
 def _py():
     bad = []
-    for f in sorted(glob.glob(os.path.join(HERE, "*.py"))):
+    files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
+                   glob.glob(os.path.join(HERE, "adapters", "*.py")))
+    for f in files:
         try:
             compile(open(f).read(), f, "exec")
         except SyntaxError as e:
-            bad.append(f"{os.path.basename(f)}:{e.lineno} {e.msg}")
-    return not bad, f"{len(glob.glob(os.path.join(HERE, '*.py')))} files" if not bad else "; ".join(bad)
+            bad.append(f"{os.path.relpath(f, HERE)}:{e.lineno} {e.msg}")
+    return not bad, f"{len(files)} files" if not bad else "; ".join(bad)
 
 
 @check(1, "every shell script parses")
@@ -114,12 +119,84 @@ def _cron_lanes():
 @check(1, "json config files are valid")
 def _json():
     bad = []
-    for f in ("targets.json", "fast.json"):
+    files = ["targets.json", "fast.json",
+             os.path.join("rules", "titles.json"),
+             os.path.join("rules", "skills.json")]
+    for f in files:
         try:
-            json.load(open(os.path.join(HERE, f)))
+            with open(os.path.join(HERE, f)) as fh:
+                json.load(fh)
         except Exception as e:
             bad.append(f"{f}: {e}")
-    return not bad, "targets.json fast.json" if not bad else "; ".join(bad)
+    return not bad, f"{len(files)} files" if not bad else "; ".join(bad)
+
+
+@check(1, "the rule loaders still refuse bad tuning data")
+def _rule_guards():
+    """rules/*.json is edited by hand, and a bad edit there must not reach a
+    sweep. The quiet failures are the dangerous ones: a truncated titles.json
+    makes every title tier 0, so a sweep reads 56,000 postings, matches none,
+    prints "Nothing new" and exits 0; a skill group with no surface forms
+    compiles to re.compile(""), which matches every JD and scores that skill
+    on all of them.
+
+    Mutates copies in a temp directory and points RULES_DIR at them, so the
+    real files are never touched. Reaches for the private loaders on purpose -
+    this file is the one place that is allowed to, and the loaders are what is
+    under test."""
+    sys.path.insert(0, HERE)
+    try:
+        import job_radar as jr
+    except Exception as e:
+        return False, f"cannot import job_radar: {type(e).__name__}: {e}"
+
+    real = {n: json.load(open(os.path.join(HERE, "rules", n)))
+            for n in ("titles.json", "skills.json")}
+    CASES = [
+        ("titles truncated", "titles.json",
+         lambda d: d.update(rules=d["rules"][:3])),
+        ("title regex broken", "titles.json",
+         lambda d: d["rules"][0].update(re="a(b")),
+        ("title field missing", "titles.json",
+         lambda d: d["rules"][0].pop("tier")),
+        ("skills truncated", "skills.json",
+         lambda d: d.update(groups=d["groups"][:4])),
+        ("skill form duplicated", "skills.json",
+         lambda d: d["groups"][5]["forms"].append(d["groups"][6]["forms"][0])),
+        ("skill weight invalid", "skills.json",
+         lambda d: d["groups"][0].update(weight=9)),
+        ("skill has no forms", "skills.json",
+         lambda d: d["groups"][0].update(forms=[])),
+    ]
+    keep, missed = jr.RULES_DIR, []
+    try:
+        for label, fname, mutate in CASES:
+            with tempfile.TemporaryDirectory() as tmp:
+                for n, d in real.items():
+                    body = copy.deepcopy(d)
+                    if n == fname:
+                        mutate(body)
+                    with open(os.path.join(tmp, n), "w") as fh:
+                        json.dump(body, fh)
+                jr.RULES_DIR = tmp
+                try:
+                    jr._title_rules()
+                    jr._skill_groups()
+                    missed.append(label)
+                except RuntimeError:
+                    pass
+                except Exception as e:
+                    missed.append(f"{label} (raised {type(e).__name__}, "
+                                  f"not RuntimeError)")
+        # and the files really do load when they are not sabotaged
+        jr.RULES_DIR = keep
+        if len(jr._title_rules()) < 20 or len(jr._skill_groups()) < 50:
+            missed.append("the real rule files no longer load")
+    finally:
+        jr.RULES_DIR = keep
+    return not missed, (f"{len(CASES)} bad-data cases all refused"
+                        if not missed else
+                        "accepted bad data: " + "; ".join(missed))
 
 
 @check(1, "logrotate config is valid")
@@ -132,6 +209,141 @@ def _logrotate():
         if os.path.exists(p):
             os.remove(p)
     return not errs, "no errors" if not errs else "; ".join(errs)
+
+
+@check(1, "unit tests for the pure functions")
+def _units():
+    """Tier 1 because they are instant (~0.05s) and because they catch the
+    class of bug selftest's own smoke tests cannot: a sweep that completes
+    happily while classify_location has quietly changed its mind."""
+    rc, out = sh(sys.executable, "-m", "unittest", "test_pure", timeout=120)
+    if rc == 0:
+        n = re.search(r"Ran (\d+) tests", out)
+        return True, f"{n.group(1) if n else '?'} tests pass"
+    fails = [l for l in out.splitlines() if l.startswith(("FAIL:", "ERROR:"))]
+    return False, "; ".join(fails[:3]) or out.strip()[-120:]
+
+
+@check(1, "module boundaries: every cross-module read is a declared name")
+def _interface():
+    """Three modules declare a public surface - job_radar, fetchcore and
+    adapters - and every other script reads only from those lists.
+
+    Before this existed, nine scripts reached for privates: jr._req,
+    jr.SF_TILE, jr._ashby_wait, jr._SCRIPT. That is how the adapter extraction
+    nearly broke discover.py silently, so the rule is checked rather than
+    documented. hasattr() is not enough: a name that happens to exist but is
+    not in __all__ is a reach-in that works today and moves tomorrow.
+
+    Read with ast, not grep - a regex for `job_radar.X` also matches the
+    string "job_radar.py" in a comment, and the import aliases have to be
+    resolved per file anyway."""
+    sys.path.insert(0, HERE)
+    try:
+        import adapters
+        import fetchcore
+        import job_radar
+    except Exception as e:
+        return False, f"cannot import: {type(e).__name__}: {e}"
+
+    problems = []
+    # The layering only holds if it is one-way. An adapter that imports
+    # job_radar makes the package circular and pointless.
+    for f in sorted(glob.glob(os.path.join(HERE, "adapters", "*.py"))):
+        if re.search(r"^\s*(?:import|from)\s+job_radar\b", open(f).read(), re.M):
+            problems.append(f"adapters/{os.path.basename(f)} imports job_radar")
+
+    targets = json.load(open(job_radar.TARGETS))
+    # keys starting with _ are the per-platform notes kept in targets.json
+    platforms = {k for k in targets
+                 if k != "devops_vendors" and not k.startswith("_")}
+    if platforms - set(adapters.ADAPTERS):
+        problems.append(f"targets.json has no adapter for "
+                        f"{sorted(platforms - set(adapters.ADAPTERS))}")
+
+    WATCHED = {"job_radar": job_radar, "fetchcore": fetchcore,
+               "adapters": adapters}
+    files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
+                   ["/home/harman/devops/tailor/gaps.py",
+                    "/home/harman/devops/tailor/tailor.py"])
+    # job_radar and fetchcore define their own surfaces, and this checker has
+    # to read __all__ and _MODULES to do the checking, so all three would flag
+    # themselves.
+    reads = 0
+    for f in files:
+        if os.path.basename(f) in ("job_radar.py", "fetchcore.py",
+                                   "selftest.py") or not os.path.exists(f):
+            continue
+        name = os.path.basename(f)
+        tree = ast.parse(open(f).read())
+
+        # local name -> watched module. Seeded with the project's conventional
+        # aliases, not only with what `import` statements declare: discover.py
+        # loads job_radar with spec_from_file_location() into a local `jr`, so
+        # an import-only alias map is blind to exactly the file that nearly
+        # broke when the adapters moved. A coincidental local named `jr` would
+        # now produce a false positive, which is the safe direction.
+        alias = {"jr": job_radar, "job_radar": job_radar,
+                 "fc": fetchcore, "fetchcore": fetchcore,
+                 "adapters": adapters}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name in WATCHED:
+                        alias[a.asname or a.name] = WATCHED[a.name]
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)):
+                continue
+            mod = alias.get(n.value.id)
+            if mod is None:
+                continue
+            reads += 1
+            if n.attr in getattr(mod, "__all__", ()):
+                continue
+            # a submodule reached through the package is fine: the import
+            # names the platform, which is the point
+            if mod is adapters and n.attr in adapters._MODULES:
+                continue
+            why = ("is private" if n.attr.startswith("_") else
+                   "exists but is not in __all__" if hasattr(mod, n.attr)
+                   else "does not exist")
+            problems.append(f"{name}:{n.lineno} reads "
+                            f"{n.value.id}.{n.attr} - {why}")
+
+            # Dynamic lookups are the dangerous ones: discover.py used
+            # getattr(jr, "fetch_" + platform, None), which returns None
+            # without raising, so the adapter move turned every board probe
+            # into a no-op and nothing said so.
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "getattr" and n.args
+                    and isinstance(n.args[0], ast.Name)):
+                continue
+            mod = alias.get(n.args[0].id)
+            if mod is None:
+                continue
+            arg = n.args[1] if len(n.args) > 1 else None
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                continue                 # a literal name: checked above in spirit
+            prefix = (arg.left.value if isinstance(arg, ast.BinOp)
+                      and isinstance(arg.left, ast.Constant) else None)
+            if isinstance(prefix, str):
+                for plat in sorted(adapters.ADAPTERS):
+                    if not hasattr(mod, prefix + plat):
+                        problems.append(f"{name}:{n.lineno} builds "
+                                        f"{n.args[0].id}.{prefix}<platform>, "
+                                        f"but {prefix}{plat} does not resolve")
+                        break
+            else:
+                problems.append(f"{name}:{n.lineno} reads "
+                                f"{n.args[0].id}.<computed> - "
+                                f"cannot be verified here")
+
+    return not problems, (f"{len(adapters.ADAPTERS)} adapters, "
+                          f"{len(job_radar.__all__)}+{len(fetchcore.__all__)}"
+                          f"+{len(adapters.__all__)} declared names, "
+                          f"{reads} cross-module reads ok"
+                          if not problems else "; ".join(problems))
 
 
 @check(1, "no secret is tracked by git")

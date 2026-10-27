@@ -1,0 +1,259 @@
+{"bucket":"US-ONLY","company":"kong","family":"vendor","keep":false,"level":"mid","location":"United States","tier":2,"title":"Developer Advocate - Volcano"}
+{"bucket":"MULTI","company":"Workday","family":"devops","keep":true,"level":"senior","location":"2 Locations","tier":4,"title":"Senior Site Reliability Engineer"}
+{"bucket":"US-ONLY","company":"huntress","family":"adjacent","keep":false,"level":"senior","location":"United States of America","tier":3,"title":"Senior IT Automation Engineer"}
+{"bucket":"OTHER","company":"TurnerTownsend","family":null,"keep":false,"level":"senior","location":"London, United Kingdom, United Kingdom","tier":0,"title":"Cost Planner/Senior Cost Planner - Infrastructure"}
+{"bucket":"NA-REMOTE","company":"customerio","family":"adjacent","keep":true,"level":"senior","location":"Americas Remote","tier":3,"title":"Senior Developer Experience Engineer, Integrations"}
+{"bucket":"GLOBAL","company":"metabase","family":null,"keep":true,"level":"mid","location":"Global Remote","tier":0,"title":"CI Engineer"}
+{"bucket":"US-ONLY","company":"kong","family":null,"keep":false,"level":"mid","location":"Virginia, United States","tier":0,"title":"Account Development Representative (Fed)"}
+{"bucket":"OTHER","company":"databricks","family":"vendor","keep":false,"level":"senior","location":"Seattle, Washington","tier":2,"title":"Sr. Developer Advocate, AI and Machine Learning"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"exec","location":"USA, CA, Pleasanton","tier":4,"title":"Director, Client Platform Engineering"}
+{"bucket":"CA","company":"okta","family":null,"keep":true,"level":"exec","location":"Bellevue, Washington; Chicago, Illinois; Toronto, Ontario, Canada","tier":0,"title":"Global Paid Search Marketing Manager"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Performance Engineer - Open Source"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"senior","location":"Denver, Colorado, United States, AMER","tier":0,"title":"Senior Strategic Finance Analyst"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"vendor","keep":true,"level":"senior","location":"Remote, Colorado, United States, AMER","tier":3,"title":"Senior Sales Engineer, Enterprise"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Channel Partner Sales Executive"}
+{"bucket":"OTHER","company":"Celestica","family":"adjacent","keep":false,"level":"entry","location":"Miyagi, 04, JP","tier":2,"title":"Associate, IT Infrastructure"}
+{"bucket":"OTHER","company":"clickhouse","family":"vendor","keep":false,"level":"senior","location":"Singapore","tier":4,"title":"Senior Technical Customer Support Engineer - Singapore"}
+{"bucket":"CA","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"Vancouver, BC","tier":2,"title":"Network Operations Lead"}
+{"bucket":"OTHER","company":"cloudflare","family":"adjacent","keep":false,"level":"mid","location":"Hybrid","tier":2,"title":"Data Center Network Operations Engineer"}
+{"bucket":"OTHER","company":"databricks","family":null,"keep":false,"level":"exec","location":"Mumbai, India","tier":0,"title":"Senior Solutions Architect (Lakebase)"}
+{"bucket":"CA","company":"Rogers","family":"adjacent","keep":true,"level":"mid","location":"Calgary, AB, CA +4 more\u2026","tier":2,"title":"NOC Specialist"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"vendor","keep":true,"level":"exec","location":"Remote, New York, United States, AMER","tier":3,"title":"Staff Solutions Engineer"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Engineer II - Endpoint Protection Security"}
+{"bucket":"CA","company":"BMO","family":"adjacent","keep":true,"level":"mid","location":"Toronto, ON, CAN","tier":3,"title":"Automation Engineer"}
+{"bucket":"CA","company":"Alberta Health Services","family":"adjacent","keep":true,"level":"mid","location":"Edmonton Zone, Edmonton, CN Tower","tier":2,"title":"IT Infrastructure Services 4"}
+{"bucket":"MULTI","company":"BMO","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":2,"title":"Senior NOC Escalation analyst, Firewall support"}
+{"bucket":"US-ONLY","company":"elastic","family":"adjacent","keep":false,"level":"senior","location":"United States","tier":3,"title":"Sr. Business Systems Analyst"}
+{"bucket":"MULTI","company":"Sun Life","family":null,"keep":true,"level":"exec","location":"3 Locations","tier":0,"title":"Director, Domain Enterprise Architect, Technology Modernization and Cloudification"}
+{"bucket":"US-ONLY","company":"ServiceNow","family":"adjacent","keep":false,"level":"senior","location":"Remote - remote, Florida, United States","tier":2,"title":"Senior Auditor \u2013 Business & IT Operations"}
+{"bucket":"CA","company":"Celestica","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CA","tier":2,"title":"Senior Specialist, IT Infrastructure"}
+{"bucket":"MULTI","company":"Sun Life","family":"devops","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Security Platform Engineer (SIEM)"}
+{"bucket":"CA","company":"jobber","family":"adjacent","keep":true,"level":"exec","location":"Edmonton / Vancouver","tier":2,"title":"Manager, IT Operations"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"entry","location":"Home based - Worldwide","tier":4,"title":"Associate Linux Support Engineer"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"Platform Engineer, Managed Postgres"}
+{"bucket":"OTHER","company":"okta","family":"devops","keep":false,"level":"exec","location":"Bengaluru, India","tier":4,"title":"Manager, Site Reliability Engineer"}
+{"bucket":"US-ONLY","company":"brex","family":null,"keep":false,"level":"mid","location":"San Francisco, California, United States","tier":0,"title":"Enterprise Client Sales Executive "}
+{"bucket":"US-ONLY","company":"PilotCompany","family":null,"keep":false,"level":"mid","location":"Olive Branch, MS, United States","tier":0,"title":"Janitorial Maintenance"}
+{"bucket":"CA","company":"TD Bank","family":null,"keep":true,"level":"mid","location":"Toronto, Ontario","tier":0,"title":"Solutions Design IT Specialist"}
+{"bucket":"OTHER","company":"HMGroup","family":null,"keep":false,"level":"exec","location":"Amsterdam, NH, Netherlands","tier":0,"title":"Department Manager \u2013 Amsterdam Flagship (38 uur)"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"senior","location":"USA.VA.Reston","tier":4,"title":"Mid/Senior Site Reliability Engineer (US Federal)"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":2,"title":"Sr IT Operations Analyst-Cisco UCS & VMware"}
+{"bucket":"MULTI","company":"Manulife","family":"adjacent","keep":true,"level":"mid","location":"2 Locations","tier":3,"title":"Business Systems Analyst"}
+{"bucket":"MULTI","company":"PwC Canada","family":"adjacent","keep":true,"level":"senior","location":"8 Locations","tier":3,"title":"Senior Test Automation Engineer (freelance)"}
+{"bucket":"CA","company":"Celestica","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CA","tier":2,"title":"Senior Specialist, IT Infrastructure"}
+{"bucket":"OTHER","company":"coreweave","family":"vendor","keep":false,"level":"exec","location":"Livingston, NJ / New York, NY / San Francisco, CA /Sunnyvale, CA / Bellevue, WA","tier":2,"title":"Director, Developer Relations"}
+{"bucket":"OTHER","company":"abcellera","family":null,"keep":false,"level":"mid","location":"Vancouver","tier":0,"title":"QA Operations Specialist (15-month contract)"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"senior","location":"USA.VA.Reston","tier":4,"title":"Mid/Senior Site Reliability Engineer (US Federal)"}
+{"bucket":"OTHER","company":"Electronic Arts","family":"devops","keep":false,"level":"mid","location":"Shanghai, China","tier":4,"title":"Site Reliability Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home based - Worldwide","tier":4,"title":"Cloud Support Engineer"}
+{"bucket":"MULTI","company":"BMO","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":2,"title":"Senior NOC Escalation analyst, Firewall support"}
+{"bucket":"MULTI","company":"Workday","family":"devops","keep":true,"level":"senior","location":"2 Locations","tier":4,"title":"Senior Site Reliability Engineer"}
+{"bucket":"US-ONLY","company":"mixpanel","family":null,"keep":false,"level":"exec","location":"San Francisco, US (Hybrid)","tier":0,"title":"Product Manager - Data"}
+{"bucket":"CA","company":"Workday","family":"devops","keep":true,"level":"exec","location":"Canada, ON, Toronto","tier":4,"title":"Principal DataOps Engineer (DevOps for Data)"}
+{"bucket":"GLOBAL","company":"canonical","family":"devops","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"MLOps Field Engineer"}
+{"bucket":"MULTI","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"2 Locations","tier":2,"title":"Network Operations Lead"}
+{"bucket":"US-ONLY","company":"datadog","family":"vendor","keep":false,"level":"exec","location":"Boston, Massachusetts, USA","tier":3,"title":"Technical Account Manager 2 - Boston"}
+{"bucket":"MULTI","company":"RBC","family":null,"keep":true,"level":"entry","location":"3 Locations","tier":0,"title":"Associate, Financial Planning - Qu\u00e9bec"}
+{"bucket":"CA","company":"Manulife","family":"devops","keep":true,"level":"mid","location":"Toronto, Ontario","tier":4,"title":"Workday Platform Engineer"}
+{"bucket":"CA","company":"Scalian","family":"adjacent","keep":true,"level":"mid","location":"Hybrid - Montreal, , Canada","tier":3,"title":"Conops Satellite Systems Engineer"}
+{"bucket":"CA","company":"BMO","family":"devops","keep":true,"level":"exec","location":"Toronto, ON, CAN","tier":4,"title":"Lead DevOps Engineer"}
+{"bucket":"US-ONLY","company":"KrgTechnologyInc","family":"adjacent","keep":false,"level":"mid","location":"Alpharetta, GA, United States","tier":3,"title":"Unix/Linux Engineer"}
+{"bucket":"MULTI","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"2 Locations","tier":2,"title":"Network Operations Lead"}
+{"bucket":"MULTI","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"2 Locations","tier":2,"title":"Network Operations Lead"}
+{"bucket":"US-ONLY","company":"jamf","family":null,"keep":false,"level":"mid","location":"San Francisco, CA; US Remote","tier":0,"title":"Strategic Account Executive | Bay Area"}
+{"bucket":"CA","company":"Scotiabank","family":"devops","keep":true,"level":"mid","location":"Toronto, ON, CA, M5H 1H1","tier":4,"title":"Platform Engineer"}
+{"bucket":"CA","company":"Canadian Tire","family":"adjacent","keep":true,"level":"mid","location":"Toronto, ON","tier":3,"title":"Business Systems Engineer, AI"}
+{"bucket":"US-ONLY","company":"Celestica","family":"adjacent","keep":false,"level":"entry","location":"Fort Worth, TX, US","tier":2,"title":"Associate, IT Infrastructure"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home based - Worldwide","tier":4,"title":"Software Support Engineer"}
+{"bucket":"CA","company":"rippling","family":null,"keep":true,"level":"exec","location":"Toronto, Canada","tier":0,"title":"Product Design Lead, Design Systems"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"exec","location":"USA, CA, Pleasanton","tier":4,"title":"Director, Client Platform Engineering"}
+{"bucket":"OTHER","company":"jamf","family":"devops","keep":false,"level":"senior","location":"Poland - Remote","tier":4,"title":"B2B Senior Site Reliability Engineer "}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Engineer II - Endpoint Protection Security"}
+{"bucket":"OTHER","company":"elastic","family":"devops","keep":false,"level":"senior","location":"Greece","tier":4,"title":"Senior Information Security Infrastructure Engineer - Security Architecture - InfoSec"}
+{"bucket":"OTHER","company":"cloudflare","family":"vendor","keep":false,"level":"mid","location":"Hybrid","tier":2,"title":"VoidZero Developer Relations Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"exec","location":"Home based - Worldwide","tier":3,"title":"Cloud Professional Services Manager"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"vendor","keep":true,"level":"exec","location":"Remote, California, United States, AMER","tier":3,"title":"Lead Sales Engineer, Enterprise"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"adjacent","keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":3,"title":"Senior  Staff Systems Engineer, Data & Integrations"}
+{"bucket":"US-ONLY","company":"AristaNetworks","family":"adjacent","keep":false,"level":"exec","location":"Hybrid - Austin, TX, United States","tier":2,"title":"Senior Manager, IT Infrastructure & Multi-Cloud Systems"}
+{"bucket":"OTHER","company":"esri","family":"devops","keep":false,"level":"mid","location":"St. Louis, MO - Globe","tier":4,"title":"DevOps / Platform Engineer \u2013 TS/SCI"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":0,"title":"Senior Manager, Accounts Receivable & Billing"}
+{"bucket":"NA-REMOTE","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home Based - Americas; Home based - EMEA","tier":3,"title":"Telco Cloud Field Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"exec","location":"Home based - Worldwide","tier":0,"title":"Engineering Manager - Security Standards and Hardening"}
+{"bucket":"MULTI","company":"Desjardins","family":"devops","keep":true,"level":"senior","location":"2 Locations","tier":4,"title":"Senior IT Platform Administrator"}
+{"bucket":"CA","company":"globalrelay","family":null,"keep":true,"level":"mid","location":"Halifax, Nova Scotia, Canada","tier":0,"title":"Network Automation Specialist "}
+{"bucket":"MULTI","company":"PwC Canada","family":"adjacent","keep":true,"level":"senior","location":"8 Locations","tier":3,"title":"Senior Test Automation Engineer (freelance)"}
+{"bucket":"CA","company":"Celestica","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CA","tier":2,"title":"Senior Specialist, IT Infrastructure"}
+{"bucket":"OTHER","company":"NielsenIQ","family":null,"keep":false,"level":"exec","location":"Shenzhen, GD, China","tier":0,"title":"Senior Manager, Antibot Engineering"}
+{"bucket":"CA-OPTION","company":"trulioo","family":null,"keep":true,"level":"exec","location":"Vancouver, BC / New York, NY / San Diego, CA / Toronto, ON / San Francisco, CA","tier":0,"title":"Senior Business Development Manager"}
+{"bucket":"OTHER","company":"EgisGroup","family":null,"keep":false,"level":"mid","location":"Bengaluru, KA, India","tier":0,"title":"Engineer- Roads & Highways"}
+{"bucket":"US-ONLY","company":"ServiceNow","family":"adjacent","keep":false,"level":"senior","location":"Remote - remote, Texas, United States","tier":2,"title":"Senior Auditor \u2013 Business & IT Operations"}
+{"bucket":"GLOBAL","company":"canonical","family":"devops","keep":true,"level":"mid","location":"Home based - Worldwide","tier":4,"title":"Python and Kubernetes Software Engineer - Data, Workflows, AI/ML & Analytics"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"devops","keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":4,"title":"Senior Staff Site Reliability Engineer"}
+{"bucket":"CA","company":"eqbank","family":"adjacent","keep":true,"level":"exec","location":"Toronto","tier":3,"title":"Lead, Business System Analyst"}
+{"bucket":"OTHER","company":"elastic","family":"vendor","keep":false,"level":"senior","location":"Poland","tier":2,"title":"Senior Developer Advocate"}
+{"bucket":"US-ONLY","company":"geotab","family":"devops","keep":false,"level":"mid","location":"Atlanta, Georgia - USA; Detroit, Michigan - USA; Las Vegas, Nevada - USA","tier":4,"title":"Site Reliability Engineering"}
+{"bucket":"CA","company":"telesat","family":null,"keep":true,"level":"senior","location":"Ottawa, Ontario","tier":0,"title":"Senior IT Specialist - Kubernetes"}
+{"bucket":"US-ONLY","company":"ServiceNow","family":"adjacent","keep":false,"level":"senior","location":"Remote - San Diego, CALIFORNIA, United States","tier":2,"title":"Senior Auditor \u2013 Business & IT Operations"}
+{"bucket":"NA-REMOTE","company":"canonical","family":null,"keep":true,"level":"entry","location":"Home Based - Americas","tier":0,"title":"Graduate HR Generalist - Americas"}
+{"bucket":"CA-OPTION","company":"trulioo","family":null,"keep":true,"level":"mid","location":"San Diego, CA / New York, NY / Vancouver, BC / San Francisco, CA","tier":0,"title":"North America Regulatory Consultant"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"Embedded Linux Field Engineer for Devices/IoT"}
+{"bucket":"NA-REMOTE","company":"metabase","family":null,"keep":true,"level":"mid","location":"Remote-North & South America","tier":0,"title":"Analytics Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"entry","location":"Home based - Worldwide","tier":0,"title":"Junior Linux Kernel Engineer - Ubuntu"}
+{"bucket":"CA","company":"Scotiabank","family":"devops","keep":true,"level":"exec","location":"Toronto, ON, CA, M5H 1H1","tier":4,"title":"Staff Cloud Platform Engineer"}
+{"bucket":"US-ONLY","company":"elastic","family":"adjacent","keep":false,"level":"senior","location":"United States","tier":3,"title":"Sr. Business Systems Analyst, CPQ"}
+{"bucket":"OTHER","company":"PwC Canada","family":"devops","keep":false,"level":"mid","location":"Bengaluru Millenia","tier":4,"title":"IN_Manager_SRE / DevOps Engineer (Azure)_GCC_Advisory_Bangalore"}
+{"bucket":"US-ONLY","company":"datadog","family":"vendor","keep":false,"level":"senior","location":"California, USA, Remote; Nevada, USA, Remote; Texas, USA, Remote; Washington, USA, Remote","tier":2,"title":"Senior Developer Advocate - Modern App Development"}
+{"bucket":"US-ONLY","company":"Workday","family":"adjacent","keep":false,"level":"exec","location":"USA, CA, Pleasanton","tier":3,"title":"Senior Product Manager \u2013 Developer Platform Telemetry & Observability"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"senior","location":"USA.VA.Reston","tier":4,"title":"Senior Site Reliability Engineer - US Federal (VDI & Infrastructure)"}
+{"bucket":"OTHER","company":"Thomson Reuters","family":"devops","keep":false,"level":"exec","location":"","tier":4,"title":"Staff Platform Engineer - Materia AI"}
+{"bucket":"CA","company":"sophos","family":"vendor","keep":true,"level":"mid","location":"Canada","tier":3,"title":"Global Solutions Engineer"}
+{"bucket":"OTHER","company":"Fortinet","family":"adjacent","keep":false,"level":"mid","location":"Dubai, Dubai, United Arab Emirates","tier":3,"title":"Systems Engineer - Telco (UAE)"}
+{"bucket":"CA-OPTION","company":"trulioo","family":null,"keep":true,"level":"exec","location":"Vancouver, BC / New York, NY / San Diego, CA / Toronto, ON / San Francisco, CA","tier":0,"title":"Senior Director, Corporate Strategy & Development"}
+{"bucket":"US-ONLY","company":"1password","family":"vendor","keep":false,"level":"senior","location":"United States / San Francisco, CA / New York, NY","tier":2,"title":"Senior Developer Advocate"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"exec","location":"Home Based - Americas; Home Based - APAC; Home based - EMEA; Home based - Worldwide","tier":0,"title":"Regional SDR Director"}
+{"bucket":"GLOBAL","company":"supabase","family":null,"keep":true,"level":"mid","location":"Remote, Global","tier":0,"title":"Software Engineer - Auth"}
+{"bucket":"OTHER","company":"gusto","family":null,"keep":false,"level":"exec","location":"Denver, CO - Hybrid","tier":0,"title":"AI Operations Program Manager, Benefits"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Linux Kernel Engineer"}
+{"bucket":"US-ONLY","company":"launchdarkly","family":"vendor","keep":false,"level":"exec","location":"Remote - US","tier":2,"title":"Staff Enterprise Developer Advocate"}
+{"bucket":"MULTI","company":"Workday","family":null,"keep":true,"level":"exec","location":"2 Locations","tier":0,"title":"Sr. Software Development Engineer / Principal, Software Development Engineer"}
+{"bucket":"US-ONLY","company":"Celestica","family":"adjacent","keep":false,"level":"entry","location":"Fort Worth, TX, US","tier":2,"title":"Associate, IT Infrastructure"}
+{"bucket":"US-ONLY","company":"Dev2","family":"devops","keep":false,"level":"exec","location":"Atlantic City, NEW JERSEY, United States","tier":4,"title":"Senior Lead Platform Engineer (IAM)"}
+{"bucket":"CA","company":"tailscale","family":"vendor","keep":true,"level":"exec","location":"Remote (Canada)","tier":2,"title":"Manager, Developer Relations Engineering"}
+{"bucket":"CA","company":"Medfar","family":null,"keep":true,"level":"mid","location":"Hybrid - Montreal, QUEBEC, Canada","tier":0,"title":"Intermediate Full-Stack Software Developer (SaaS Healthcare)"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"exec","location":"Remote, California, United States, AMER","tier":0,"title":"Senior Partner Manager"}
+{"bucket":"MULTI","company":"PwC Canada","family":"adjacent","keep":true,"level":"senior","location":"8 Locations","tier":3,"title":"Senior Test Automation Engineer (freelance)"}
+{"bucket":"OTHER","company":"fivetran","family":"adjacent","keep":false,"level":"exec","location":"Bengaluru, Karnataka, India, APAC","tier":3,"title":"Staff Software Engineer - Developer Productivity"}
+{"bucket":"NA-REMOTE","company":"coder","family":"vendor","keep":true,"level":"senior","location":"North America","tier":4,"title":"Senior Customer Support Engineer"}
+{"bucket":"MULTI","company":"Manulife","family":"adjacent","keep":true,"level":"mid","location":"2 Locations","tier":3,"title":"Business Systems Analyst"}
+{"bucket":"MULTI","company":"Ledcor","family":null,"keep":true,"level":"mid","location":"12 Locations","tier":0,"title":"Laborer - Mining"}
+{"bucket":"OTHER","company":"AntonPaar1","family":null,"keep":false,"level":"mid","location":"Bangkok, , Thailand","tier":0,"title":"Technical Sales Representative for Material Characterization (f/m/x)"}
+{"bucket":"GLOBAL","company":"supabase","family":"adjacent","keep":true,"level":"mid","location":"Remote, Global","tier":3,"title":"Release Engineer"}
+{"bucket":"CA-OPTION","company":"trulioo","family":null,"keep":true,"level":"exec","location":"Vancouver, BC / New York, NY / San Diego, CA / San Francisco, CA","tier":0,"title":"Senior Director, Global Privacy & Data Protection"}
+{"bucket":"CA","company":"Insight Global","family":"adjacent","keep":true,"level":"mid","location":"Mississauga, ON","tier":2,"title":"IT Network Operations"}
+{"bucket":"CA-OPTION","company":"gusto","family":null,"keep":true,"level":"exec","location":"Atlanta, GA - Hybrid; Denver, CO - Hybrid; New York, NY - Hybrid; Phoenix, AZ - Hybrid; San Francisco, CA - Hybrid; Toronto, Ontario - Remote","tier":0,"title":"Partner Manager, Gusto Pro "}
+{"bucket":"CA","company":"Celestica","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CA","tier":2,"title":"Senior Specialist, IT Infrastructure"}
+{"bucket":"OTHER","company":"RBC","family":"devops","keep":false,"level":"mid","location":"90 WESTERN PKY:BEDFORD","tier":4,"title":"AI Platform Engineer"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"adjacent","keep":true,"level":"exec","location":"Denver, Colorado, United States, AMER","tier":3,"title":"Senior Staff Systems Engineer, GTM"}
+{"bucket":"OTHER","company":"databricks","family":"vendor","keep":false,"level":"senior","location":"Amsterdam, Netherlands","tier":3,"title":"Senior Solutions Engineer - Benelux Geo"}
+{"bucket":"OTHER","company":"AristaNetworks","family":"adjacent","keep":false,"level":"mid","location":"Remote - London, England, United Kingdom","tier":3,"title":"Network Systems Engineer (Pre-Sales) - DV Cleared"}
+{"bucket":"MULTI","company":"Ledcor","family":null,"keep":true,"level":"mid","location":"8 Locations","tier":0,"title":"Designer"}
+{"bucket":"MULTI","company":"Manulife","family":null,"keep":true,"level":"exec","location":"3 Locations","tier":0,"title":"Manager, Technology Business Management (TBM) & FinOps"}
+{"bucket":"CA","company":"TD Bank","family":null,"keep":true,"level":"mid","location":"Toronto, Ontario","tier":0,"title":"Machine Learning Engineer"}
+{"bucket":"CA","company":"Interac","family":"adjacent","keep":true,"level":"mid","location":"Toronto","tier":3,"title":"Systems Engineering, Specialist"}
+{"bucket":"OTHER","company":"zscaler","family":"vendor","keep":false,"level":"senior","location":"Tokyo, JPN","tier":3,"title":"Senior Sales Engineer - Telco"}
+{"bucket":"OTHER","company":"HitachiSolutions","family":null,"keep":false,"level":"exec","location":"Hybrid - London, England, United Kingdom","tier":0,"title":"Lead Data Consultant"}
+{"bucket":"CA","company":"BMO","family":"devops","keep":true,"level":"senior","location":"REMOTE/TELETRAVAIL, ON, CAN","tier":4,"title":"Senior Cloud Engineer"}
+{"bucket":"CA","company":"docker","family":"vendor","keep":true,"level":"exec","location":"Canada / United States","tier":3,"title":"Director, Partner Solution Engineer"}
+{"bucket":"CA-OPTION","company":"trulioo","family":null,"keep":true,"level":"exec","location":"Vancouver, BC / New York, NY / San Diego, CA / Toronto, ON / San Francisco, CA","tier":0,"title":"Senior Partner Success Manager"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"Platform Engineer - Compute"}
+{"bucket":"MULTI","company":"Workday","family":null,"keep":true,"level":"exec","location":"2 Locations","tier":0,"title":"Principal Functional Consultant (German Speaking)"}
+{"bucket":"US-ONLY","company":"zscaler","family":"vendor","keep":false,"level":"senior","location":"USA - Update Location","tier":3,"title":"Senior Professional Services Consultant"}
+{"bucket":"CA","company":"BMO","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CAN","tier":3,"title":"Senior Business System Analyst"}
+{"bucket":"CA-OPTION","company":"cohere","family":null,"keep":true,"level":"mid","location":"Europe / London / United States / New York / United Kingdom / Toronto / Montreal","tier":0,"title":"Software Engineer, Integrations"}
+{"bucket":"CA-OPTION","company":"coreweave","family":null,"keep":true,"level":"mid","location":"Chicago, IL / Seattle, WA / Los Angeles, CA / San Francisco, CA / Toronto, ON","tier":0,"title":"Account Executive - Greenfield"}
+{"bucket":"GLOBAL","company":"supabase","family":null,"keep":true,"level":"exec","location":"Remote, Global","tier":0,"title":"Head of AI Native Operations"}
+{"bucket":"NA-REMOTE","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home Based - Americas","tier":0,"title":"Sales Development Representative (Portuguese Speaker)"}
+{"bucket":"OTHER","company":"elastic","family":"vendor","keep":false,"level":"senior","location":"Spain","tier":2,"title":"Senior Developer Advocate"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"Platform Engineer - Compute Capacity"}
+{"bucket":"OTHER","company":"elastic","family":"vendor","keep":false,"level":"senior","location":"Portugal","tier":2,"title":"Senior Developer Advocate"}
+{"bucket":"OTHER","company":"netskope","family":"devops","keep":false,"level":"exec","location":"Brazil","tier":4,"title":"Staff Engineer DevOps, Data Security (DLP)"}
+{"bucket":"MULTI","company":"Sun Life","family":"devops","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Security Platform Engineer (SIEM)"}
+{"bucket":"CA","company":"UBC","family":"adjacent","keep":true,"level":"entry","location":"UBC Vancouver Campus - Vancouver, BC, Canada","tier":3,"title":"Systems Administrator I"}
+{"bucket":"CA-OPTION","company":"elevenlabs","family":"devops","keep":true,"level":"mid","location":"London / Dublin / Hungary / Toronto / New York / Sofia / Germany / Switzerland / Paris / Poland / United Kingdom / Zurich / Stockholm / Czechia / France / Amsterdam / Berlin","tier":4,"title":"Infrastructure Engineer"}
+{"bucket":"US-ONLY","company":"KrgTechnologyInc","family":"adjacent","keep":false,"level":"mid","location":"Alpharetta, GA, United States","tier":3,"title":"Windows System Administrator"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Ubuntu Software Engineer"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
+{"bucket":"MULTI","company":"Manulife","family":"adjacent","keep":true,"level":"mid","location":"2 Locations","tier":3,"title":"Business Systems Analyst"}
+{"bucket":"NA-REMOTE","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home Based - Americas","tier":0,"title":"Software Engineer (Python/Linux/Packaging)"}
+{"bucket":"US-ONLY","company":"ServiceNow","family":"devops","keep":false,"level":"exec","location":"Hybrid - Santa Clara, CALIFORNIA, United States","tier":4,"title":"Senior Staff Data Platform Engineer - Data Access Team"}
+{"bucket":"MULTI","company":"TD Bank","family":"devops","keep":true,"level":"mid","location":"2 Locations","tier":4,"title":"Software Engineer II (Cloud Engineer)"}
+{"bucket":"US-ONLY","company":"RedBull","family":null,"keep":false,"level":"mid","location":"Kalamazoo, MI, United States","tier":0,"title":"Sales Trainee"}
+{"bucket":"GLOBAL","company":"supabase","family":null,"keep":true,"level":"mid","location":"Remote, Global","tier":0,"title":"Software Engineer - Storage"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"entry","location":"Home based - Worldwide","tier":3,"title":"Ubuntu Sales Engineer (Entry-Level)"}
+{"bucket":"US-ONLY","company":"NBCUniversal3","family":"adjacent","keep":false,"level":"senior","location":"Remote - New York, NEW YORK, United States","tier":3,"title":"Sr. Software Engineer, Automation Engineering"}
+{"bucket":"US-ONLY","company":"ServiceNow","family":"devops","keep":false,"level":"exec","location":"Hybrid - San Diego, CALIFORNIA, United States","tier":4,"title":"Senior Staff Platform Engineer - Kubernetes - Federal"}
+{"bucket":"US-ONLY","company":"smartsheet","family":null,"keep":false,"level":"exec","location":"-REMOTE, USA-","tier":0,"title":"Senior Product Manager \u2013 People Systems"}
+{"bucket":"OTHER","company":"SikaAG","family":null,"keep":false,"level":"exec","location":"Vienna, Vienna, Austria","tier":0,"title":"Online Marketing Manager:in (m/w/d)"}
+{"bucket":"CA-OPTION","company":"gusto","family":null,"keep":true,"level":"exec","location":"Atlanta, GA - Hybrid; Denver, CO - Hybrid; New York, NY - Hybrid; San Francisco, CA - Hybrid; Toronto, Ontario - Remote","tier":0,"title":"Channel Partnerships Manager, Investor Ecosystems (VC & PE)"}
+{"bucket":"MULTI","company":"Manulife","family":"devops","keep":true,"level":"senior","location":"2 Locations","tier":4,"title":"Senior Platform Engineer"}
+{"bucket":"MULTI","company":"Workday","family":null,"keep":true,"level":"exec","location":"19 Locations","tier":0,"title":"Principal Managing Partner"}
+{"bucket":"MULTI","company":"BMO","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":2,"title":"Senior NOC Escalation analyst, Firewall support"}
+{"bucket":"GLOBAL","company":"metabase","family":"devops","keep":true,"level":"senior","location":"Global Remote","tier":4,"title":"Senior SRE/DevOps Engineer"}
+{"bucket":"CA","company":"Scotiabank","family":"devops","keep":true,"level":"senior","location":"Toronto, ON, CA, M5H4A6","tier":4,"title":"Senior Platform Engineer"}
+{"bucket":"OTHER","company":"okta","family":"adjacent","keep":false,"level":"senior","location":"Bellevue, Washington; San Francisco, California","tier":3,"title":"Senior Systems Engineer, Productivity Engineering"}
+{"bucket":"MULTI","company":"Sun Life","family":"devops","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Security Platform Engineer (SIEM)"}
+{"bucket":"GLOBAL","company":"canonical","family":"adjacent","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"Embedded & Desktop Linux Systems Engineer - Optimisation"}
+{"bucket":"OTHER","company":"ContinentalGroupSectorContiTech","family":"adjacent","keep":false,"level":"senior","location":"Hybrid - City of Taguig, Metro Manila, Philippines","tier":2,"title":"Senior IT Engineer Active Directory & Microsoft Entra ID"}
+{"bucket":"OTHER","company":"Scalian","family":"adjacent","keep":false,"level":"mid","location":"Hybrid - Casablanca, , Morocco","tier":3,"title":"Cloud & SysOps / Automation Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Software Engineer - App Stores"}
+{"bucket":"CA","company":"Celestica","family":"adjacent","keep":true,"level":"senior","location":"Toronto, ON, CA","tier":2,"title":"Senior Specialist, IT Infrastructure"}
+{"bucket":"GLOBAL","company":"canonical","family":"adjacent","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"Distributed Systems Engineer"}
+{"bucket":"MULTI","company":"Desjardins","family":null,"keep":true,"level":"senior","location":"4 Locations","tier":0,"title":"Senior Advisor, Guidewire Business Intelligence and Data Modelling"}
+{"bucket":"OTHER","company":"sonarsource","family":"adjacent","keep":false,"level":"mid","location":"Bochum","tier":3,"title":"Cloud Platform Automation Engineer (f/m/d)"}
+{"bucket":"OTHER","company":"canonical","family":"vendor","keep":false,"level":"mid","location":"Home Based - APAC; Home based - EMEA","tier":2,"title":"Developer Relations Engineer"}
+{"bucket":"US-ONLY","company":"Workday","family":"devops","keep":false,"level":"senior","location":"USA, CA, Pleasanton","tier":4,"title":"Sr DevOps Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"Cloud Field Engineer"}
+{"bucket":"US-ONLY","company":"Collabera2","family":"adjacent","keep":false,"level":"mid","location":"Denver, CO, United States","tier":3,"title":"System Administrator"}
+{"bucket":"CA","company":"Rogers","family":"adjacent","keep":true,"level":"mid","location":"Calgary, AB, CA +4 more\u2026","tier":2,"title":"NOC Specialist"}
+{"bucket":"CA","company":"University of Toronto","family":null,"keep":true,"level":"mid","location":"Mississauga, ON, CA","tier":0,"title":"Sessional Lecturer PSY210H5 S - Introduction to Developmental Psychology"}
+{"bucket":"US-ONLY","company":"AmericanIronandMetal","family":null,"keep":false,"level":"mid","location":"Hybrid - Atlanta, Georgia, United States","tier":0,"title":"Field Account Representative"}
+{"bucket":"CA","company":"CIBC","family":null,"keep":true,"level":"exec","location":"Toronto, ON","tier":0,"title":"Director, Chapter Lead, Mass Affluent"}
+{"bucket":"OTHER","company":"purestorage","family":"adjacent","keep":false,"level":"mid","location":"Remote, France","tier":3,"title":"Presales System Engineer, Territory - PACA (Remote: Marseille or Aix-based)"}
+{"bucket":"MULTI","company":"Aritzia","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Information Technology - Senior Solution Systems Analyst/Solution Systems Analyst, Omni Technology"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"Platform Engineer, Edge & Networking"}
+{"bucket":"OTHER","company":"Konecranes","family":null,"keep":false,"level":"mid","location":"Nesttun, , Norway","tier":0,"title":"Service Tekniker"}
+{"bucket":"CA","company":"telesat","family":"adjacent","keep":true,"level":"mid","location":"Ottawa, Ontario","tier":3,"title":"Communication Systems Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":"devops","keep":true,"level":"senior","location":"Home based - Worldwide","tier":4,"title":"Senior Site Reliability Engineer"}
+{"bucket":"US-ONLY","company":"Celestica","family":"devops","keep":false,"level":"mid","location":"Remote Employee US, NH, US","tier":4,"title":"DevOps Engineer"}
+{"bucket":"CA","company":"Scotiabank","family":"devops","keep":true,"level":"senior","location":"Toronto, ON, CA, M1L 4S2","tier":4,"title":"Senior DevOps Engineer"}
+{"bucket":"US-ONLY","company":"mejuri","family":null,"keep":false,"level":"exec","location":"United States","tier":0,"title":"Lead Piercer "}
+{"bucket":"CA-OPTION","company":"gusto","family":null,"keep":true,"level":"senior","location":"Atlanta, GA - Hybrid; Denver, CO - Hybrid; New York, NY - Hybrid; San Francisco, CA - Hybrid; Scottsdale, AZ - Hybrid; Toronto, Ontario - Remote","tier":0,"title":"Sr. Sales Operations Analyst"}
+{"bucket":"CA","company":"canonical","family":"devops","keep":true,"level":"mid","location":"Office Based - Toronto, Canada","tier":4,"title":"MAAS Data Center Infrastructure Engineer (Toronto area)"}
+{"bucket":"MULTI","company":"Ledcor","family":null,"keep":true,"level":"mid","location":"2 Locations","tier":0,"title":"Project Engineer, Mining"}
+{"bucket":"NA-REMOTE","company":"koboldmetals","family":null,"keep":true,"level":"exec","location":"North America, Europe, Africa","tier":0,"title":"Vice President of Business Development"}
+{"bucket":"US-ONLY","company":"grafanalabs","family":"vendor","keep":false,"level":"senior","location":"United States (Remote)","tier":3,"title":"Senior Solutions Engineer | Canada | Remote"}
+{"bucket":"CA-OPTION","company":"gusto","family":null,"keep":true,"level":"exec","location":"Denver, CO - Hybrid; New York, NY - Hybrid; San Francisco, CA - Hybrid; Toronto, Ontario - Remote","tier":0,"title":"Senior Product Design Manager, Payroll"}
+{"bucket":"US-ONLY","company":"EVERSANA1","family":null,"keep":false,"level":"exec","location":"Remote - Chicago, IL, United States","tier":0,"title":"Marketing Manager II (Account/Project Management)"}
+{"bucket":"CA","company":"TMX Group","family":"devops","keep":true,"level":"mid","location":"Toronto - 100 Adelaide St W","tier":4,"title":"DevOps Analyst"}
+{"bucket":"CA","company":"CIBC","family":null,"keep":true,"level":"mid","location":"Montr\u00e9al, QC","tier":0,"title":"Branch Administrator, Wood Gundy-Bilingual"}
+{"bucket":"CA","company":"RBC","family":"devops","keep":true,"level":"senior","location":"TORONTO, Ontario, Canada","tier":4,"title":"Senior Site Reliability Engineer"}
+{"bucket":"MULTI","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"2 Locations","tier":2,"title":"Network Operations Lead"}
+{"bucket":"CA","company":"Amazon","family":null,"keep":true,"level":"exec","location":"Richmond, BC","tier":0,"title":"Site Procurement Manager , Site Procurement OPs(SPO)"}
+{"bucket":"US-ONLY","company":"Dev2","family":null,"keep":false,"level":"exec","location":"Killeen, TEXAS, United States","tier":0,"title":"Salon Manager - Expressway Plaza"}
+{"bucket":"CA-OPTION","company":"1password","family":null,"keep":true,"level":"exec","location":"Toronto, ON / Austin, TX","tier":0,"title":"Senior Staff GTM Communications Manager"}
+{"bucket":"CA","company":"GDMSI","family":"adjacent","keep":true,"level":"mid","location":"Hybrid - Calgary, AB, Canada","tier":3,"title":"System Engineering Analyst"}
+{"bucket":"OTHER","company":"databricks","family":"vendor","keep":false,"level":"senior","location":"San Francisco, California","tier":2,"title":"Sr. Developer Advocate - Neon"}
+{"bucket":"NA-REMOTE","company":"canonical","family":null,"keep":true,"level":"exec","location":"Home Based - Americas; Home Based - APAC","tier":0,"title":"Junior Project Manager"}
+{"bucket":"OTHER","company":"palantir","family":"adjacent","keep":false,"level":"mid","location":"New York, NY","tier":3,"title":"Security Systems Engineer"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
+{"bucket":"MULTI","company":"Telus Health","family":"adjacent","keep":true,"level":"senior","location":"4 Locations","tier":3,"title":"Systems Analyst III - Health & Welfare Benefits Implementations"}
+{"bucket":"NA-REMOTE","company":"supabase","family":null,"keep":true,"level":"exec","location":"Remote, AMER","tier":0,"title":"Customer Solution Architect, Team Lead "}
+{"bucket":"OTHER","company":"fivetran","family":"vendor","keep":false,"level":"senior","location":"Dublin, Dublin, Ireland, EMEA","tier":3,"title":"Senior Sales Engineer, Commercial"}
+{"bucket":"CA","company":"BMO","family":"devops","keep":true,"level":"exec","location":"Toronto, ON, CAN","tier":4,"title":"Senior Manager, Azure Cloud Engineering"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":"adjacent","keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":3,"title":"Senior Staff Systems Engineer, GTM"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":0,"title":"GTM Strategy & Planning Manager"}
+{"bucket":"OTHER","company":"jfrog","family":"devops","keep":false,"level":"exec","location":"Atlanta","tier":4,"title":"Professional Services DevOps Architect "}
+{"bucket":"US-ONLY","company":"AWPSafety","family":null,"keep":false,"level":"mid","location":"North Canton, OH, United States","tier":0,"title":"Billing Specialist"}
+{"bucket":"MULTI","company":"Ledcor","family":null,"keep":true,"level":"mid","location":"4 Locations","tier":0,"title":"Project Coordinator"}
+{"bucket":"OTHER","company":"JobsForHumanity","family":null,"keep":false,"level":"mid","location":"Beirut, Beirut Governorate, Lebanon","tier":0,"title":"Clinics and Diagnostic Center Coordinator"}
+{"bucket":"MULTI","company":"BMO","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":2,"title":"Senior NOC Escalation analyst, Firewall support"}
+{"bucket":"US-ONLY","company":"elastic","family":"vendor","keep":false,"level":"senior","location":"New York, United States","tier":2,"title":"Senior Developer Advocate"}
+{"bucket":"OTHER","company":"cloudflare","family":"vendor","keep":false,"level":"mid","location":"Hybrid","tier":3,"title":"Professional Services Consultant"}
+{"bucket":"US-ONLY","company":"tailscale","family":"vendor","keep":false,"level":"exec","location":"Remote (United States)","tier":2,"title":"Manager, Developer Relations Engineering"}
+{"bucket":"MULTI","company":"Ledcor","family":"adjacent","keep":true,"level":"exec","location":"2 Locations","tier":2,"title":"Network Operations Lead"}
+{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"mid","location":"Home based - Worldwide","tier":3,"title":"Alliances Field Engineer"}
+{"bucket":"MULTI","company":"PwC Canada","family":"devops","keep":true,"level":"mid","location":"2 Locations","tier":4,"title":"Cloud Infrastructure Engineer, Senior Associate"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"Cloud Platform Engineer"}
+{"bucket":"GLOBAL","company":"canonical","family":"devops","keep":true,"level":"exec","location":"Home based - Worldwide","tier":3,"title":"Engineering Manager - MLOps & Analytics"}
+{"bucket":"OTHER","company":"netskope","family":"devops","keep":false,"level":"mid","location":"Taguig, Taguig, Philippines","tier":4,"title":"Platform Engineer (Agent Release)"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"mid","location":"3 Locations","tier":4,"title":"Engineer II - Endpoint Protection Security"}
+{"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
+{"bucket":"CA","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"Toronto, Ontario","tier":3,"title":"Senior Windows Server Automation Engineer"}
+{"bucket":"MULTI","company":"Ledcor","family":null,"keep":true,"level":"mid","location":"25 Locations","tier":0,"title":"Superintendent"}
+{"bucket":"US-ONLY","company":"koboldmetals","family":"devops","keep":false,"level":"exec","location":"Remote - US","tier":4,"title":"Staff Client Platform Engineer (CPE) (Remote)"}
+{"bucket":"US-ONLY","company":"KrgTechnologyInc","family":"adjacent","keep":false,"level":"mid","location":"Alpharetta, GA, United States","tier":3,"title":"\u2022\tWindows System Administrator-"}
+{"bucket":"NA-REMOTE","company":"customerio","family":null,"keep":true,"level":"mid","location":"Americas Remote","tier":0,"title":"People Partner"}
+{"bucket":"CA","company":"gitlab","family":null,"keep":true,"level":"mid","location":"Remote, Canada","tier":0,"title":"Public Sector Strategic Account Executive - Canada"}
+{"bucket":"GLOBAL","company":"supabase","family":"devops","keep":true,"level":"mid","location":"Remote, Global","tier":4,"title":"AI Platform Engineer"}
+{"bucket":"OTHER","company":"abacus","family":"adjacent","keep":false,"level":"mid","location":"Chennai, Tamil Nadu, India","tier":2,"title":"NOC Analyst"}

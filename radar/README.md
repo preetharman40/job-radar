@@ -11,9 +11,13 @@ python3 serve.py                # web view on :8737
 
 | Script | Purpose |
 |---|---|
-| `job_radar.py` | The engine — 21 ATS adapters, 529 boards, filters, scoring, output |
-| `fast.sh` | Cron lane 1: the 60 productive boards, every 5 min |
-| `daily.sh` | Cron lane 2: all 529 boards, every 30 min |
+| `job_radar.py` | The engine — filtering, scoring, state, tracker, notification, reporting |
+| `adapters/` | **One module per ATS platform**, 21 of them. `fetch_*` (pass 1), `hydrate` (pass 2), `expand` (per-query fan-out). Adding a platform is one file plus two lines in `adapters/__init__.py` |
+| `fetchcore.py` | HTTP transport (`req`, `get_text`), HTML→text, and `job()` — the record shape the whole pipeline agrees on. Imports nothing from the radar |
+| `rules/titles.json` | **The title rules** — `(regex, tier, family)` plus the measurement that justifies each one. Tuning data, not code |
+| `rules/skills.json` | **The skill weights** — one skill, one score, many spellings, with the corpus frequencies the weights came from |
+| `fast.sh` | Cron lane 1: the productive boards from `fast.json`, every 5 min |
+| `daily.sh` | Cron lane 2: all 544 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
@@ -31,6 +35,7 @@ python3 serve.py                # web view on :8737
 | `alert.sh` | systemd `OnFailure=` handler, so a crash in the *watchdog* is not silent |
 | `notify_send.py` | **The only path to your phone.** Retries, then queues anything ntfy cannot take and re-sends it on recovery. `--status` shows the backlog, `--drain` flushes it |
 | `logrotate.conf` | 12 weekly generations, compressed. Replaced a cron job that **deleted** any log over 5MB |
+| `test_pure.py` | **26 unit tests** for the pure functions, plus a 259-case golden master over real postings. 0.05s, runs inside `selftest` on every commit |
 | `selftest.py` | **Run after every change.** 23 checks in 4 tiers: scripts parse, cron paths exist, services up, DB sound, and each lane actually runs. `--quick` skips the network tier |
 | `pre-commit.hook` | Runs `selftest.py --quick` before each commit — **installed** as a symlink at `.git/hooks/pre-commit`, so edits here take effect with no reinstall. Verified to refuse a commit whose Python does not parse. Bypass once with `git commit --no-verify`; add the smoke tier with `RADAR_FULL_SELFTEST=1` |
 | `install_sudo_bits.sh` | The two root changes, as one auditable script: `sudo bash radar/install_sudo_bits.sh` |
@@ -42,6 +47,24 @@ python3 serve.py                # web view on :8737
 | `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot. `--boards` reads ATS tokens out of the links; `--employers` resolves the employer **by name** for LinkedIn mail, which carries no token at all, and vets each board against the title that was mailed. Runs daily 19:52 with `--notify --track --add-employer-boards` |
 | `hn.py` | Hacker News "Who is hiring?" |
 | `signals.py` | Funding rounds, before the requisition exists |
+
+**Tuning the radar.** The two things you actually tune are data:
+`rules/titles.json` (which titles count, and at what tier) and
+`rules/skills.json` (what a JD naming a skill is worth). Each entry carries
+the measurement that justifies it in a `note`. After editing either, run
+`./selftest.py --quick` — it takes about a second and refuses truncated or
+contradictory data, because the failures here are quiet ones: an empty rule
+list makes every title tier 0 and the sweep reports "Nothing new" while
+exiting 0.
+
+**Module boundaries.** Three modules declare a public surface and nothing
+re-exports anything: `job_radar.__all__` (paths, classifier, scorer, tracker,
+locks, push), `fetchcore.__all__` (transport and HTML), `adapters.__all__`
+(`ADAPTERS`, `HYDRATORS`, `expand`, `platform`, `WD_TRUNCATED`). Platform
+specifics are reached through the module — `from adapters import workday` —
+so an import line says which platform a file depends on. `selftest.py`
+tier 1 reads the tree with `ast` and fails if any script reads a name that is
+private or absent from the owning module's `__all__`.
 
 | Data | |
 |---|---|

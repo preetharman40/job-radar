@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import fetchcore as fc  # noqa: E402
 import job_radar as jr  # noqa: E402
 
 TRACKER = os.path.abspath(os.path.join(HERE, "..", "applications.md"))
@@ -71,7 +72,7 @@ CLOSED = re.compile(
 
 def _closed_text(html):
     """HTML with <script>/<style> removed, for CLOSED to search."""
-    return jr._SCRIPT.sub(" ", jr._COMMENT.sub(" ", html or ""))
+    return fc.drop_scripts(html)
 
 
 # Hosts this script must never fetch, matched on the host or any subdomain.
@@ -174,7 +175,7 @@ def _check_once(url):
     if m:
         t, c, site, path = m.groups()
         api = f"https://{t}.{c}.myworkdayjobs.com/wday/cxs/{t}/{site}{path}"
-        req = urllib.request.Request(api, headers={**jr.UA, "Accept": "application/json"})
+        req = urllib.request.Request(api, headers={**fc.UA, "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=25) as f:
                 d = json.load(f)
@@ -212,7 +213,7 @@ def _check_once(url):
         re.search(r"gh_jid=(\d+)", url)
     if m and m.lastindex == 2:
         try:
-            d = jr._req(f"https://boards-api.greenhouse.io/v1/boards/"
+            d = fc.req(f"https://boards-api.greenhouse.io/v1/boards/"
                         f"{m.group(1)}/jobs/{m.group(2)}")
             return ("open", d.get("title", "")[:60]) if d.get("title") else ("gone", "no title")
         except urllib.error.HTTPError as e:
@@ -222,7 +223,7 @@ def _check_once(url):
 
     # Everything else: fetch the page and look for closed-posting language.
     try:
-        html = jr._get_text(url, timeout=PAGE_TIMEOUT)
+        html = fc.get_text(url, timeout=PAGE_TIMEOUT)
         if CLOSED.search(_closed_text(html)[:60000]):
             return "gone", "closed-posting text"
         return ("open", "page loads") if len(html) > 1500 else ("unknown", "thin page")

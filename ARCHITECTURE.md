@@ -43,22 +43,23 @@ means publication rather than last-modified.
 
 ```
 targets.json ──► FETCH ──► FILTER ──► HYDRATE ──► SCORE ──► DIFF ──► REPORT
-  469 boards    ~49,200     ~200        ~200      ~200     new only
+  544 boards    ~56,500     ~200        ~200      ~200     new only
                 postings   survive    descriptions
 ```
 
 **The order is the only interesting part.** Full job descriptions for 48,000
 postings is roughly 80 MB per run. Filtering on title and location first — both
 available in the cheap list call — cuts that to ~200 detail fetches. Whole run:
-**~215 seconds** for 469 boards expanded into 1,051 concurrent tasks. Job Bank
+**~215 seconds** for 544 boards expanded into 1,126 concurrent tasks. Job Bank
 accounts for about half the growth from ~130s on its own: it honours a 5s
 `Crawl-delay` on every request, list and hydrate alike, so a run with 16 Job
 Bank finalists spends ~105s of that total waiting on purpose.
 
 Workday and SuccessFactors targets fan out to one task per search keyword rather
-than one per tenant, so a nine-tenant sweep parallelises across the shared pool
-instead of running ten queries back to back. That change alone took a run from
-over two minutes to under thirty seconds.
+than one per tenant — `adapters.expand()` asks the adapter — so a nine-tenant
+sweep parallelises across the shared pool instead of running ten queries back
+to back. That change alone took a run from over two minutes to under thirty
+seconds.
 
 State is a SQLite table of seen URLs, so a run reports only what is new.
 
@@ -1422,6 +1423,373 @@ exits 0 only if all five pass.
 
 ---
 
+## unit tests, as the safety net a refactor needs
+
+`selftest.py` proves the lanes **run**. `test_pure.py` proves they still
+**decide the same way**, which is a different question and the one that matters
+when moving code. A sweep that completes happily while `classify_location` has
+started reading `Americana, Los Angeles` as American is a worse failure than a
+crash, because nothing reports it.
+
+52 tests over the pure functions - `classify_location`, `title_match`,
+`level_of`, `score`, `discover.variants`, `title_overlap`, the LinkedIn digest
+parsers, ratecheck's two patterns, `fetchcore`'s HTML and date helpers, the
+adapters package's own contract, and the shipped tuning data. They run in
+0.04s, so they sit in tier 1 of the selftest and therefore run on every commit
+through the pre-commit hook.
+
+Two rules shaped the file.
+
+**Every expectation was produced by running the function, never by reasoning
+about what it ought to return.** That is not pedantry. Two expectations written
+the other way round earlier the same day were wrong, and
+`Remote (United States / Canada)` returns `CA`, not the `CA-OPTION` the name
+suggests. The first run of the suite also failed on
+`test_li_segments_groups_by_job_id` - and the **fixture** was wrong, not the
+parser: `LI_VIEW` anchors on the `linkedin.com` host, so a relative href is not
+a posting link. Keeping the real URL shape rather than the convenient one is
+the point of the test.
+
+**Most cases are regressions for bugs that actually happened**, taken from the
+comments that record them: `Americana` as a Brazilian city and a Los Angeles
+mall, `Burlington, MA` read as Canadian, `Kubernetes (K8s)` scoring one skill
+twice, `Power BI & Power Platform Administrator` slipping past the platform
+rule, `enterprise` resolving to a Recruitee demo account, `SRE` matching half
+the internet, `429` matched as a substring of a job id, and `workday/TC Energy`
+dropped from a report because `\S+` cannot hold a space. Each of those has
+already cost somebody a day; they are the highest-value assertions in the file.
+
+### the golden master is what protects the refactor
+
+The hand-written cases cover what someone thought to write down.
+`testdata_golden.jsonl` covers what nobody did: **259 real postings**,
+stratified across every one of the 24 `(bucket, tier)` combinations present in
+a 56,524-posting snapshot, each carrying the verdict the code gives today. A
+uniform random sample would have been 95% `OTHER`/tier-0 and would have tested
+almost nothing.
+
+It asserts only that behaviour has not **changed**, not that it is right. When
+a change is deliberate, regenerating the file turns the diff into a record of
+exactly which postings moved - which is the review you actually want before
+shipping a scoring or geography change.
+
+Verified by breaking the code on purpose: changing one character in the
+Americas rule (`americas` -> `america`) failed three hand-written cases and
+named the six real postings that moved, including `United States of America`
+flipping from `US-ONLY` to `NA-REMOTE`. A failing unit test fails the selftest,
+which blocks the commit.
+
+---
+
+## the adapters are a package now, and the seam was already there
+
+`job_radar.py` was 3,169 lines, and 1,520 of them — 48% — were the 21 ATS
+adapters. That is also the only part of the file that structurally grows: every
+new platform is another `fetch_*`, another block of constants, another `elif` in
+`hydrate`, another arm of the per-query fan-out in `main`. Nothing else in the
+file gets longer when the radar covers more employers.
+
+**The cut was measured before it was made, not guessed at.** Walking the AST
+for every name the adapter region reads from outside itself returns exactly
+eight, and all eight are transport:
+
+```
+_req  16 uses    job        21    strip_html  23    days_ago  14
+_get_text  7     _TAG        1    WD_CANADA    1    _WD_FACET_CACHE  3
+```
+
+No adapter touched `classify_location`, `score`, `title_match`, the database or
+the tracker. The layering the code wanted was already latent in it:
+
+```
+fetchcore.py      HTTP transport, HTML -> text, job()      imports nothing from the radar
+     |
+adapters/*.py     21 modules, one per platform             may import fetchcore, never job_radar
+     |
+job_radar.py      filter, score, state, notify, report     1,421 lines
+```
+
+The contract each module implements is three functions, two of them optional:
+`fetch_<platform>(target)` for pass 1, `hydrate(job, kind)` for pass 2, and
+`expand(target)` for the platforms with no "all jobs" view. Adding a platform
+is now one new file plus two lines in `adapters/__init__.py`.
+
+### the one genuine cross-adapter dependency, and the two things that had to change
+
+A cross-reference check over the proposed split found exactly one: Job Bank
+called Amazon's `_amz_date`. That is a locale-safe "September 1, 2026" parser
+that cron needs because `%B` depends on `LC_TIME`, and two platforms wanting it
+is the definition of shared — it moved to `fetchcore.long_date`.
+
+**`hydrate` had to stop reaching into the classifier.** The Workday branch
+corrected a `N Locations` placeholder to the real city list and then recomputed
+`bucket`, `provinces` and `arrangement` itself. An adapter that imports the
+classifier makes the dependency circular and the package pointless. Now the
+adapter sets `job["location"]` and nothing else; the caller notices the change
+and re-derives. Same output, and the rule is general rather than Workday's.
+
+**`job_radar.py` now bootstraps its own `sys.path`.** `import adapters`
+resolves only if the radar directory is importable, and it is not always:
+`discover.py` loads `job_radar.py` with `spec_from_file_location()` from a
+different working directory, which puts *its* directory on `sys.path` and not
+this one. The import would have failed, and `discover.py` is deliberately
+written to keep working when the engine does not — so it would have swallowed
+the `ImportError` and silently continued without `classify_location`,
+`title_match` and the shared Ashby rate limiter. Three lines in `job_radar.py`
+prevent that for every loader, present and future.
+
+### verified by equality, not by hope
+
+A pure refactor has a testable claim: the output does not change. Three checks,
+in increasing cost:
+
+1. **The task list is byte-identical.** `adapters.expand()` replaced a
+   six-armed `if/elif` chain in `main`. Dumping all 1,126 `(platform, target,
+   function)` tasks over the real 544-board `targets.json` before and after:
+   `diff` is empty.
+2. **The pure functions are untouched.** 26 unit tests and the 259-case golden
+   master pass unchanged — which is exactly what that file exists for.
+3. **The adapters return the same postings.** Every adapter called directly
+   against a 20-platform subset, 111 tasks, ~4,800 postings, 0 errors, before
+   and after: 3,369 of ~3,400 distinct rows identical, and the remainder is
+   live churn on three paginated boards (Air Canada posts continuously; Avature
+   and SmartRecruiters page newest-first, so a slice shifts between runs). An
+   old-module-against-new-package comparison inside a single process confirmed
+   the differing boards agree when both are read at the same moment.
+
+### the reach-ins are preserved deliberately, and now guarded
+
+Eleven modules — plus `tailor/gaps.py`, which lives outside this tree and was
+nearly missed — read **33 attributes** off `job_radar`, among them `jr._req`,
+`jr.SF_TILE`, `jr.ASHBY_ONE` and `jr._wd_country_facet`. Most of those now live
+in `fetchcore` or `adapters`, and survive as explicit re-exports.
+
+Leaving them is the right call for a move commit, but a dropped re-export is a
+nasty failure: not an import error, just a board that quietly returns nothing
+inside somebody's `try/except`. So the surface is now a tier-1 selftest check
+that greps every sibling module for `jr.<attr>`, asserts each one still
+resolves, and asserts every platform in `targets.json` has an adapter wired
+into the registry. The package `__init__` also refuses to import if the modules
+on disk do not match the registry, because an adapter that exists but is not
+wired in loses a whole platform in silence.
+
+**The first version of that check was not enough, and a grep found what it
+missed.** `discover.py` did not name adapters literally — it built them:
+
+```python
+fn = getattr(jr, "fetch_" + platform, None) if jr else None
+if not fn:
+    return -1
+```
+
+Every one of those 21 names had just moved into the package, so the `getattr`
+returned `None` for all of them, and `discover.py` is written to treat a
+missing adapter as "unverifiable" rather than as an error. Board probing and
+the mail pipeline's board resolution would have gone quietly dead — no
+traceback, no log line, just `-1` forever. It is exactly the failure the check
+exists to prevent, and a check that only looks for `jr.X` cannot see it. Those
+three call sites now use `jr.ADAPTERS.get(platform)`, which is the registry
+that already exists for this, and the selftest additionally resolves any
+`getattr(jr, "<prefix>" + ...)` against every platform and flags any dynamic
+lookup it cannot evaluate. Verified by putting the `getattr` line back: the
+check fails and names `fetch_amazon`.
+
+Pointing those eleven callers at `fetchcore` and `adapters` directly is the
+next step, and a separate one.
+
+---
+
+## three modules, three declared surfaces
+
+The re-exports above were a bridge, and bridges get walked across. Each of the
+three modules now states its own surface and nothing else re-exports anything:
+
+| module | names | what it owns |
+|---|---|---|
+| `job_radar` | 30 | paths, the classifier, the scorer, the tracker, the locks, the push |
+| `fetchcore` | 9 | `req`, `get_text`, `strip_html`, `drop_scripts`, `job`, `days_ago`, `long_date`, `TAG`, `UA` |
+| `adapters` | 5 | `ADAPTERS`, `HYDRATORS`, `expand`, `platform`, `WD_TRUNCATED` |
+
+**A public API spelled with leading underscores is not one.** `_req` and
+`_get_text` were the transport every adapter and four other scripts depend on,
+so they are now `req` and `get_text` - 47 call sites, mechanical.
+
+Three reach-ins became functions, which is the part that actually improves the
+design rather than relabelling it:
+
+- `fetchcore.drop_scripts(html)` replaces `verify_tracked` reaching for the
+  `_SCRIPT` and `_COMMENT` regexes to build the same expression by hand.
+- `adapters.workday.probe_canada(api)` replaces `hunt.py` inlining
+  `_wd_country_facet` + a `_req` payload + `WD_CANADA` - **twice**, in two
+  functions, nine lines each. Both are now four. The facet constant and the
+  detector went back to being private.
+- `adapters.successfactors.looks_like(html)` replaces `hunt.py` testing
+  `SF_ROW` and `SF_TILE` itself to decide whether a careers page is an RMK
+  site. The adapter that will poll the board is the right place to answer what
+  counts as that board.
+
+`adapters.platform(name)` exists for the one caller that holds a platform
+string rather than an import; everything else does
+`from adapters import successfactors`, so the import line says which platform
+the file depends on.
+
+Two files stopped importing the engine altogether. `hunt.py` needed only those
+two functions, and `tailor/gaps.py` needed transport plus one GraphQL
+document - neither now pulls in sqlite3, the tracker, argparse or `main()` to
+fetch a web page.
+
+### the check is now `__all__`, not `hasattr`
+
+The previous version asserted that every `jr.X` still resolved. That is too
+weak: `jr.ADAPTERS` resolves - `job_radar` imports it for its own task loop -
+but reading it from another module is exactly the undeclared dependency that
+broke when the adapters moved. The check now requires membership in `__all__`,
+reports `file:line` and says which of three things is wrong (private, exists
+but undeclared, or gone), and covers 85 cross-module reads.
+
+It reads the tree with `ast`, not grep, for two reasons found the hard way: a
+regex for `job_radar\.X` also matches the string `"job_radar.py"` in a comment,
+which produced eleven phantom failures; and the alias has to be resolved per
+file, since `jr` is usually `job_radar` only because of that file's own import
+line.
+
+**And resolving aliases from import statements alone was not enough** - found
+by auditing the check rather than trusting it. `discover.py` does not import
+`job_radar`; it loads the file with `spec_from_file_location()` into a local
+`jr`, deliberately, so it can keep working when the engine does not. There is
+no `ast.Import` node to read, so the check silently examined none of that
+file's reads - and `discover.py` is precisely the file that nearly broke in
+silence when the adapters moved. Twice now the same file has slipped past a
+check written to protect it, for the same underlying reason: it is the one
+consumer that does not import the engine the ordinary way.
+
+The alias map is therefore seeded with the project's conventional names
+(`jr`, `fc`, `adapters`, and the full module names) and then extended by
+whatever the imports declare. A local variable coincidentally named `jr` would
+now raise a false positive, which is the safe direction for this check to
+fail. Coverage went from 124 reads to 126, and a private read through that
+lazily-loaded `jr` is now reported as
+`discover.py:592 reads jr._skill_groups - is private`.
+
+The check's own reach is worth stating: it scans `radar/*.py` plus
+`tailor/gaps.py` and `tailor/tailor.py`, which today is all 18 files in
+`~/devops` that reference these three modules. A consumer added somewhere else
+would not be seen.
+
+Verified in both directions: restoring `jr.ADAPTERS` in `board_health.py` is
+caught as *"exists but is not in `__all__`"*, and restoring `jr._req` in
+`verify_tracked.py` as *"is private"*.
+
+The new surface got tests too, taking `test_pure.py` from 26 to 46: `strip_html`
+had none at all despite feeding every score in the tracker, and the package
+contract now asserts that each registry entry really is its module's
+`fetch_*`, that the registry matches the modules on disk, and that `expand()`
+is the identity for the platforms with an all-jobs view. One of those tests
+failed on its first run and the **expectation** was wrong, again - `strip_html`
+returns `" Role Terraform "`, with the leading space the `<div>` leaves behind,
+and a column-aligned `print` had hidden it.
+
+### one ordering question, measured rather than argued
+
+`strip_html` removed `<script>` bodies before comments; `verify_tracked` built
+its own stripper the other way round. Folding both into `drop_scripts` had to
+pick one, and it had to be script-first, because `strip_html` feeds the scorer
+and the golden master. The orders genuinely differ on HTML where a comment
+opens before a `<script>` and closes inside its body. So it was measured on 60
+real tracked job pages: `strip_html` byte-identical to the pre-refactor
+version, and `drop_scripts` versus the old order identical in **output text**,
+not merely in the CLOSED verdict. Zero differences either way.
+
+### a latent bug the fan-out fix exposed
+
+`canada_employers.py` had its own copy of the per-keyword fan-out, and that
+copy only handled Workday and SuccessFactors. Replacing it with
+`adapters.expand()` took its task list from 1,078 to 1,126: **oracle +27,
+jobvite +9, avature +7, taleo +5**. Those four platforms were being polled with
+one unfiltered query instead of their keyword list every time that report ran.
+Duplicating a fan-out is how that happens, and there is now one copy.
+
+---
+
+## the tuning data is data: `rules/titles.json` and `rules/skills.json`
+
+`TITLE_RULES` and `SKILL_GROUPS` were 220 lines of literal inside
+`job_radar.py`, and they are the only two things in the radar that actually get
+*tuned*. Every change to them so far has come out of a measurement pass over a
+real corpus - which is a data transformation, not a code change. They are now
+`rules/titles.json` (22 rules) and `rules/skills.json` (63 groups), and
+`job_radar.py` is 1,302 lines.
+
+The win is not tidiness. It is that **a tuning mistake is now a data error
+rather than an edit to the engine**: a bad weight is caught by a loader that
+names the file, the index and the entry, instead of being a stray bracket
+somewhere in a 1,300-line module. Validation is the real gain - a Python
+literal cannot check itself.
+
+JSON, not TOML or YAML, for a dull reason: this box runs Python 3.10, there is
+no `tomllib`, and the radar has no third-party dependencies and is not
+acquiring one for a config format.
+
+### the comments had to survive, because they are the valuable part
+
+Each of these rules carries the measurement that justifies it - why bare
+`secops` is excluded, why the `power platform` lookbehind is load-bearing, why
+`cloud` and `automation` are absent from the skill list despite being on the
+resume, why ECS and GitOps are held at weight 1 below their rarity. A rule
+whose reasoning has been lost is a rule nobody can safely change, so JSON with
+comments stripped would have been a downgrade dressed as a refactor.
+
+So the comments became fields. The generator walked the AST, attached each
+comment block to the element that followed it, promoted `# --- ... ---` lines
+to `section`, and put the two long header blocks in `_doc`. Nothing was
+retyped, and the round trip was asserted against the live module before the
+literals were deleted: **22 rules and 63 groups identical, and the flat
+`SKILLS` dict's 181 forms identical**. `test_pure.py` asserts the notes and
+sections are still there, so a future edit cannot quietly drop them.
+
+### the loader is strict because the quiet failures are unbounded
+
+Two of them in particular:
+
+- A **truncated `titles.json`** makes every title tier 0. A tier-0 title never
+  reaches scoring, so the sweep would read 56,000 postings, match none, print
+  *"Nothing new"* and exit **0**. That is the `fast.json` failure again, so it
+  gets the same answer: a floor, below which the loader refuses to run.
+- A skill group with **no surface forms** compiles to `"|".join(()) == ""`, and
+  `re.compile("")` matches every string - so that skill would score on every
+  JD ever read.
+
+The second one was a bug in the first version of the loader, found by trying
+it: `not all(isinstance(f, str) and f for f in forms)` is `False` for an empty
+list, because `all(())` is `True`. Nine guards fired and that one did not.
+
+The loader also enforces the invariant the 2026-10-22 skill restructure
+existed for - **one surface form belongs to one skill** - which was previously
+only a convention. Two groups claiming `kubernetes` is how a JD reading
+"Kubernetes (K8s)" scored the one skill twice at two different weights,
+inflating 45 of 177 tracker rows. There are no duplicates today; now there
+cannot be one tomorrow.
+
+Errors are `RuntimeError`, deliberately not `SystemExit`: `discover.py` catches
+`Exception` so it can keep diagnosing a broken engine, and `SystemExit` is a
+`BaseException` that would sail straight through that and take the diagnostics
+tool down with the thing it exists to diagnose.
+
+### verified by breaking it, in both directions
+
+Ten sabotage cases - truncated, bad regex, missing field, duplicate form,
+weight out of range, formless group, wrong type, missing file, malformed
+JSON - and each is refused with a message naming the file, the index and the
+entry. Seven of them are now a tier-1 selftest check that mutates copies in a
+temp directory and points `RULES_DIR` at them, so the real files are never
+touched.
+
+That check is not vacuous either, which was also tested: deleting the floor
+guard and the formless-group guard from `job_radar.py` makes it fail and name
+exactly the three cases that stop being refused.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
@@ -2281,17 +2649,10 @@ Two edits in one file. `bucket` is never written to `applications.md` and is
 never read by `serve.py` or `serve_page.html`, so the web app needed nothing;
 neither `daily.sh` nor `fast.sh` passes `--bucket`, so both inherit the new
 default. The only other place a bucket is recomputed is the Workday
-`N Locations` path inside `hydrate`, which calls `classify_location` and so
-picks up the new rules for free — the post-hydrate re-filter repeats the
+`N Locations` path: the adapter corrects `location`, `job_radar.hydrate()`
+re-derives the geo fields from it through `classify_location`, and so picks
+up the new rules for free — the post-hydrate re-filter repeats the
 vendor-family condition so a Workday row cannot enter `GLOBAL` through it.
-
-### the class this does NOT fix
-
-Two Canada-eligible reqs stay invisible because their location field carries no
-Canadian signal at all, and only the JD does:
-
-- KoBold `Staff Client Platform Engineer` — filed `Remote - US`, JD reads
-  *"open to candidates residing anywhere in the United States or Canada"*.
 - Databento `Site Reliability Engineer` — filed `Remote / San Francisco / New
   York / Salt Lake City`, JD reads *"100% remote, teammates living around the
   globe and paid in their local currency"*.

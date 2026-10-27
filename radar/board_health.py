@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import adapters  # noqa: E402
 import job_radar as jr  # noqa: E402
 
 # How many consecutive zero samples before it counts as a regression. One zero
@@ -106,7 +107,7 @@ def main():
         return 0
 
     tg = json.load(open(jr.TARGETS))
-    tasks = [(src, tok, fn) for src, fn in jr.ADAPTERS.items()
+    tasks = [(src, tok, fn) for src, fn in adapters.ADAPTERS.items()
              for tok in tg.get(src, [])]
     with cf.ThreadPoolExecutor(a.workers) as ex:
         results = list(ex.map(sample, tasks))

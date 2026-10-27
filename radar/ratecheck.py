@@ -4,7 +4,7 @@ ratecheck.py - are the sweeps getting rate-limited?
 
 The cron window was widened on 2026-09-25 from 07:00-15:59 weekdays to
 07:00-19:59 every day, roughly doubling request volume. That is safe only while
-the Workday per-tenant burst cap (WD_TENANT_BURST in job_radar.py) holds. This
+the Workday per-tenant burst cap (WD_TENANT_BURST in adapters/workday.py) holds. This
 reads radar.log and says whether it did.
 
 A 429 is not cosmetic: the board returns nothing for that query and the jobs on
@@ -139,7 +139,7 @@ def main():
         msg = (f"Radar rate-limited: {worst[0]} 429s in one sweep ({worst[1]}), "
                f"{total} over {a.days}d. Worst board: "
                f"{boards.most_common(1)[0][0] if boards else '?'}. "
-               f"Lower WD_TENANT_BURST in job_radar.py.")
+               f"Lower WD_TENANT_BURST in adapters/workday.py.")
         print(f"\n  !! {msg}")
         if a.notify:
             topic = jr.ntfy_topic()
