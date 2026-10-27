@@ -226,45 +226,57 @@ def main():
                        "applications.%s-pre-rescore.md.bak" % stamp)
     os.makedirs(os.path.dirname(bak), exist_ok=True)
 
-    with jr.FileLock(timeout=60):
-        src = open(a.tracker, encoding="utf-8").read()
-        shutil.copy2(a.tracker, bak)
-        print(">> backup %s" % bak)
-        out, done = src, 0
-        for p in plan:
-            # the detail block, bounded so a replace cannot stray into its
-            # neighbour, which is how an id like 31 corrupts 310
-            bm = re.search(r"(?m)^## %d\. .*$" % p["n"], out)
-            if not bm:
-                print("   !! block %d vanished, skipping" % p["n"])
-                continue
-            end = out.find("\n---\n", bm.start())
-            end = len(out) if end < 0 else end
-            blk = out[bm.start():end]
-            old_f = FIELD_SCORE.format(lvl=p["old_lvl"], score=p["old"])
-            new_f = FIELD_SCORE.format(lvl=p["new_lvl"], score=p["new"])
-            if blk.count(old_f) != 1:
-                print("   !! #%d level/score line not unique, skipping" % p["n"])
-                continue
-            blk = blk.replace(old_f, new_f)
-            blk = RE_KW.sub("- **Resume keywords matched:** " + p["kw"]
-                            .replace("\\", "\\\\"), blk, count=1)
-            out = out[:bm.start()] + blk + out[end:]
+    # Guarded like the batch writers. rescore rewrites EVERY row, so it
+    # is the longest single hold of this lock. Unhandled, a TimeoutError
+    # surfaced as a traceback after the plan and the backup path had
+    # already been printed, which reads as though the rescore half
+    # happened. It did not - nothing is written outside this block - and
+    # saying so plainly is worth the four lines.
+    try:
+        with jr.FileLock(timeout=60):
+            src = open(a.tracker, encoding="utf-8").read()
+            shutil.copy2(a.tracker, bak)
+            print(">> backup %s" % bak)
+            out, done = src, 0
+            for p in plan:
+                # the detail block, bounded so a replace cannot stray into its
+                # neighbour, which is how an id like 31 corrupts 310
+                bm = re.search(r"(?m)^## %d\. .*$" % p["n"], out)
+                if not bm:
+                    print("   !! block %d vanished, skipping" % p["n"])
+                    continue
+                end = out.find("\n---\n", bm.start())
+                end = len(out) if end < 0 else end
+                blk = out[bm.start():end]
+                old_f = FIELD_SCORE.format(lvl=p["old_lvl"], score=p["old"])
+                new_f = FIELD_SCORE.format(lvl=p["new_lvl"], score=p["new"])
+                if blk.count(old_f) != 1:
+                    print("   !! #%d level/score line not unique, skipping" % p["n"])
+                    continue
+                blk = blk.replace(old_f, new_f)
+                blk = RE_KW.sub("- **Resume keywords matched:** " + p["kw"]
+                                .replace("\\", "\\\\"), blk, count=1)
+                out = out[:bm.start()] + blk + out[end:]
 
-            # the summary table's score cell, and nothing else on the line
-            rm = re.search(r"(?m)^\|\s*%d\s*\|.*$" % p["n"], out)
-            if rm:
-                cells = rm.group(0).split("|")
-                if len(cells) > 7 and cells[7].strip() == str(p["old"]):
-                    cells[7] = cells[7].replace(str(p["old"]),
-                                                str(p["new"]), 1)
-                    out = out[:rm.start()] + "|".join(cells) + out[rm.end():]
-            done += 1
+                # the summary table's score cell, and nothing else on the line
+                rm = re.search(r"(?m)^\|\s*%d\s*\|.*$" % p["n"], out)
+                if rm:
+                    cells = rm.group(0).split("|")
+                    if len(cells) > 7 and cells[7].strip() == str(p["old"]):
+                        cells[7] = cells[7].replace(str(p["old"]),
+                                                    str(p["new"]), 1)
+                        out = out[:rm.start()] + "|".join(cells) + out[rm.end():]
+                done += 1
 
-        tmp_path = a.tracker + ".tracker-rescore.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(out)
-        os.replace(tmp_path, a.tracker)
+            tmp_path = a.tracker + ".tracker-rescore.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(out)
+            os.replace(tmp_path, a.tracker)
+    except TimeoutError as e:
+        print("\n!! could not lock the tracker after 60s: %s" % e)
+        print("   Another writer holds it - a sweep, inbox.py, or the web")
+        print("   app mid-update. NOTHING was changed; run this again.")
+        return 1
     print(">> restated %d of %d record(s)" % (done, len(plan)))
     if tmp:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -89,19 +89,20 @@ if [ $((now - last)) -lt $((REALERT_HOURS * 3600)) ]; then
   exit 1
 fi
 
-topic="${RADAR_NTFY_TOPIC:-}"
-[ -z "$topic" ] && [ -r .ntfy_topic ] && topic=$(tr -d '[:space:]' < .ntfy_topic)
-if [ -n "$topic" ]; then
-  body=$(printf '%s\n' "${problems[@]}")
-  curl -fsS -m 15 \
-    -H "Title: JOB RADAR IS NOT RUNNING" \
-    -H "Priority: urgent" -H "Tags: rotating_light" \
-    -d "$body" "https://ntfy.sh/$topic" >/dev/null \
-    && echo "  alert pushed" || echo "  could not push alert"
+body=$(printf '%s\n' "${problems[@]}")
+if ./notify_send.py --title "JOB RADAR IS NOT RUNNING" \
+     --message "$body" --priority 5 --tags rotating_light; then
+  echo "  alert pushed"
+  # Only record the rate-limit stamp when the alert ACTUALLY went out.
+  # Recording it unconditionally meant a failed push still suppressed the
+  # next six hours of retries - so an ntfy outage during an incident hid the
+  # incident for the rest of the morning. notify_send queues an undeliverable
+  # alert, and leaving the stamp unwritten means this also keeps re-checking.
+  grep -v "^$key " "$STATE" 2>/dev/null > "$STATE.tmp" || true
+  echo "$key $now" >> "$STATE.tmp"
+  mv "$STATE.tmp" "$STATE"
 else
-  echo "  no ntfy topic configured, alert not pushed"
+  echo "  alert queued or undeliverable - NOT recording it as sent, so the"
+  echo "  next run will try again rather than going quiet for ${REALERT_HOURS}h"
 fi
-grep -v "^$key " "$STATE" 2>/dev/null > "$STATE.tmp" || true
-echo "$key $now" >> "$STATE.tmp"
-mv "$STATE.tmp" "$STATE"
 exit 1

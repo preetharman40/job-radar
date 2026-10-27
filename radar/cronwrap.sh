@@ -103,20 +103,17 @@ print(json.dumps(rec, separators=(",", ":")))
 PYEOF
 
 if [ "$rc" -ne 0 ]; then
-  topic="${RADAR_NTFY_TOPIC:-}"
-  [ -z "$topic" ] && [ -r .ntfy_topic ] && topic=$(tr -d '[:space:]' < .ntfy_topic)
   # Last 12 lines is enough to show the exception without pushing a digest.
   body=$(tail -12 "$out" | cut -c1-300)
   echo ">> $label FAILED rc=$rc"
-  if [ -n "$topic" ]; then
-    curl -fsS -m 15 \
-      -H "Title: job radar: $label failed (rc=$rc)" \
-      -H "Priority: high" -H "Tags: warning" \
-      -d "$body" "https://ntfy.sh/$topic" >/dev/null \
-      && echo ">> failure pushed to ntfy" \
-      || echo ">> could not push failure alert"
-  else
-    echo ">> no ntfy topic configured, failure not pushed"
-  fi
+  # Through notify_send.py, not curl: it retries and then QUEUES. This path
+  # especially needs it, because the alert about a failure travels over the
+  # same channel that may be the thing that failed - without a queue, an ntfy
+  # outage silences both the lane and the warning about the lane.
+  "$(dirname "$0")/notify_send.py" \
+    --title "job radar: $label failed (rc=$rc)" \
+    --message "$body" --priority 4 --tags warning \
+    && echo ">> failure pushed to ntfy" \
+    || echo ">> failure alert queued or undeliverable (see above)"
 fi
 exit "$rc"

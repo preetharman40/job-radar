@@ -1329,6 +1329,71 @@ costume - a cheap check mistaken for a conclusion.
 
 ---
 
+## an ntfy outage used to be silent loss; now it is late delivery
+
+Four places pushed to ntfy independently - `job_radar.notify()`,
+`cronwrap.sh`, `watchdog.sh` and `alert.sh` - each with its own `curl` or
+`urllib` call, no retries, and no memory. When ntfy.sh was unreachable the
+message was simply gone. That is worse here than it first looks, for two
+reasons that compound:
+
+- **A job push is lost forever.** By the time `notify()` runs, the posting is
+  already claimed in `seen`, so no later sweep re-notifies it. One blip and a
+  matching job never reaches the phone at all.
+- **The alarm travels over the same wire as the signal.** `cronwrap.sh` reports
+  a failed lane by pushing to ntfy, so an outage silences both the lane and the
+  warning about the lane. No amount of extra alerting fixes that, because every
+  alert uses the channel that is down.
+
+The second point is why a queue, rather than more retries, is the answer: the
+information has to survive until the channel returns.
+
+`notify_send.py` is now the only way anything reaches the phone. It retries,
+and anything still undeliverable is appended to `.pending_pushes.jsonl` and
+re-sent by the next push attempt or by `--drain`. Every send drains the queue
+first, so recovery is automatic - nothing has to notice that ntfy came back.
+
+The queue is bounded in both directions, because an unbounded one trades a
+silent failure for a noisy one: at most 100 entries, oldest dropped first, and
+nothing older than 48h is delivered. A job alert from four days ago is noise,
+and a flood of them on recovery is worse than useless. Both limits are reported
+when they bite. While draining, one failure stops the rest - ntfy is still
+down, and hammering it only delays the lane that triggered the drain.
+
+Measured through a simulated outage: three pushes queued with nothing lost, the
+next successful push delivered all three plus itself in order, and a 72-hour-old
+entry expired instead of being sent.
+
+### the bug this exposed in watchdog.sh
+
+`watchdog.sh` rate-limits its alerts to one per problem per six hours, and it
+wrote that timestamp **whether or not the push succeeded**. So an ntfy outage
+during an incident recorded "already alerted" for an alert that never arrived,
+and the watchdog then went quiet about a live outage for the rest of the
+morning. The stamp is now written only on confirmed delivery; an undeliverable
+alert is queued *and* left unstamped, so the next 15-minute tick tries again.
+
+### rescore.py's lock
+
+Guarded like the batch writers, and it needed it most: `rescore` rewrites every
+row in the tracker, so it is the longest single hold of that lock. Unhandled,
+the `TimeoutError` surfaced as a traceback *after* the plan and the backup path
+had already been printed, which reads as though the rescore half happened. It
+did not - nothing is written outside the locked block - and saying so in three
+plain lines is worth more than the traceback.
+
+Verified by making the lock unobtainable and running the real `main()` against
+a **copy** of the tracker: clean message, no traceback, `rc=1`, file byte-identical.
+The copy matters. The first attempt used the live `applications.md` as its
+control and reported the guard had failed - the file really had changed, but
+because the fast and daily lanes had each tracked a new posting during the
+180-second window (373 rows -> 375). The giveaway was that `rescore` writes a
+`pre-rescore` backup inside the lock before touching anything, and the newest
+one on disk was five days old. Never use a file that production writes to as
+the control in a test.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that

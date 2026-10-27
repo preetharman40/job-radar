@@ -2699,6 +2699,28 @@ def ntfy_topic():
     return ""
 
 
+def _ns():
+    """notify_send, imported lazily.
+
+    Lazy because job_radar is imported by discover.py, board_health.py,
+    verify_tracked.py and inbox.py, and none of them push - making every one
+    of them pay for an import they do not use would be gratuitous. It is also
+    one less module that can break `import job_radar` if it is ever edited
+    badly, which matters when five other tools depend on that import working.
+    """
+    if _ns.mod is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "notify_send", os.path.join(HERE, "notify_send.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        _ns.mod = m
+    return _ns.mod
+
+
+_ns.mod = None
+
+
 def notify(jobs, topic, limit=6):
     """One push per strong match, then a single roll-up for the rest."""
     if not topic or not jobs:
@@ -2720,21 +2742,20 @@ def notify(jobs, topic, limit=6):
         # ("Specialiste DevOps"), so this was not an edge case - it was a
         # standing hole that dropped matching jobs with no push at all. A JSON
         # body is UTF-8 end to end and has no such limit.
-        req = urllib.request.Request(
-            "https://ntfy.sh/",
-            data=json.dumps({"topic": topic,
-                             "title": f"[{j['score']}] {j['title'][:80]}",
-                             "message": body,
-                             "priority": {"urgent": 5, "high": 4,
-                                          "default": 3}[prio],
-                             "tags": [tag],
-                             "click": j["url"]}).encode("utf-8"),
-            headers={"Content-Type": "application/json",
-                     "User-Agent": UA["User-Agent"]},
-            method="POST")
+        payload = {"title": f"[{j['score']}] {j['title'][:80]}",
+                   "message": body,
+                   "priority": {"urgent": 5, "high": 4, "default": 3}[prio],
+                   "tags": [tag], "click": j["url"]}
+        # Through notify_send, which retries and then QUEUES anything it still
+        # cannot deliver. That matters most here of all the push sites: the
+        # posting has already been claimed in `seen` by the time this runs, so
+        # a dropped push is a job you never hear about again. Queued, it
+        # arrives late instead of never.
         try:
-            urllib.request.urlopen(req, timeout=12)
-            sent += 1
+            if _ns().send(payload, tp=topic, verbose=False):
+                sent += 1
+            else:
+                raise RuntimeError("queued for later - ntfy unreachable")
         except Exception as e:
             # Never swallow this. A rate limit, a network drop or a bad topic
             # used to look exactly like "nothing matched" - the alerts simply
@@ -2746,16 +2767,12 @@ def notify(jobs, topic, limit=6):
         body = "\n".join(f"[{j['score']}] {j['title'][:52]} — {j['company']}"
                           for j in rest[:14])
         try:
-            urllib.request.urlopen(urllib.request.Request(
-                "https://ntfy.sh/",
-                data=json.dumps({"topic": topic,
-                                 "title": f"+{len(rest)} more matches",
-                                 "message": body, "priority": 2,
-                                 "tags": ["mag"]}).encode("utf-8"),
-                headers={"Content-Type": "application/json",
-                         "User-Agent": UA["User-Agent"]}, method="POST"),
-                timeout=12)
-            sent += 1
+            if _ns().send({"title": f"+{len(rest)} more matches",
+                           "message": body, "priority": 2, "tags": ["mag"]},
+                          tp=topic, verbose=False):
+                sent += 1
+            else:
+                raise RuntimeError("queued for later - ntfy unreachable")
         except Exception as e:
             failed.append(f"{type(e).__name__}: {e} — roll-up")
     if failed:
