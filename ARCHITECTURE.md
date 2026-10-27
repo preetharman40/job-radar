@@ -703,6 +703,113 @@ followed it, by roughly 2x.
 
 ---
 
+## the coverage gap was an artifact of a biased corpus and a careless regex
+
+The claim was that the scorer is one-directional - it counts what a JD names
+that is on the resume and never what the JD demands that is not - evidenced by
+`r(score, count of non-resume technologies demanded) = +0.46`. That number came
+from the 135-JD corpus, which was captured from **fast.json**: the boards
+already selected for producing matches. Re-measured against 217 JDs captured
+from a full 544-board sweep:
+
+| | fast-lane corpus (135) | full-sweep corpus (217) |
+|---|---|---|
+| `r(score, distinct foreign tech)` | **+0.46** | **+0.08** |
+| `r(score, max mentions of one)` | - | **-0.04** |
+| `r(score, blob length)` | +0.06 | **-0.00** |
+
+**160 of 217 JDs name no foreign technology at all.** The correlation was
+mostly the corpus, and the rest was the measurement counting things that are
+not demands:
+
+- `proficiency in scripting languages (e.g., python, bash, java, ruby, php,
+  powershell)` counted as four unmet demands. It is one demand, offering six
+  alternatives, and python and bash are both named and both his. That JD -
+  `Engineer, DevOps` at Recurrent Energy, score 46 - was the single worst
+  "offender" in the original measurement and is a straightforwardly good match.
+- `at least one enterprise observability platform (datadog, splunk, grafana,
+  new relic or similar)` - grafana is his, so the requirement is **met**.
+- `...openai, snap inc., and snowflake` is a **customer list**.
+- `...sequoia capital, and spark capital` is a **venture firm**, not Apache
+  Spark. A bare `\bgo\b` for golang has the same defect.
+
+Counting only enumeration markers caught a third of it; reading the
+"standalone" two thirds showed nearly all of those were alternations too.
+
+The honest test is frequency, not presence: a role really built on a foreign
+stack names it repeatedly. Across 217 JDs only four name one more than three
+times, and the scorer already ranks the three genuine mismatches at the bottom
+of the distribution without any help, because a Salesforce or SAP role does not
+hit DevOps skill groups:
+
+```
+score 23   DevOps Engineer(Salesforce)                 salesforce x20
+score 11   Business System Analyst - Pharmaceutical    salesforce x5
+score  8   IT - Senior Solution Systems Analyst        sap x6
+score 39   DevOps Engineer                             java x4   <- real DevOps role
+```
+
+Median score is 28. **No fix was made, because there is nothing to fix.**
+
+### thresholds were not retuned either, and the reason is the dedupe
+
+`--notify-min-score 15` admits **181 of 217** scored postings - 83% - which
+looks far too loose, and 16 of the 17 roles actually applied to score 30 or
+more. That argues for raising it, until you notice that a threshold governs a
+*per-sweep* pass rate while a notification only fires for a posting not already
+in `seen`. Measured from the log: **58 push events and 93 notifications over
+~40 days**, about 2.3 a day from the daily lane, with 47 of the 58 pushing
+exactly one. New rows entering `seen` run at a median of 8 a day. There is no
+alert-volume problem for a higher threshold to solve, and raising it would
+discard the one applied role that scored 14.
+
+The lesson worth keeping: the pass rate of a threshold is not the volume it
+produces, whenever a dedupe sits downstream of it.
+
+---
+
+## two lanes, one writer: `database is locked`
+
+Four `sqlite3.OperationalError: database is locked` tracebacks, all at the
+`INSERT OR IGNORE INTO seen` that claims a posting. `seen.sqlite3` is WAL with
+`busy_timeout=30000`, so this means another process held the write lock for
+more than thirty seconds.
+
+The intuitive culprit is the full sweep, which upserts one `live` row per
+*scanned* posting - 56,524 of them - inside the same transaction as the `seen`
+claims, committing only at the end. Measured: that `executemany` plus commit
+takes **0.27s**. Not it.
+
+It was `inbox.py`, in two places, both holding a write transaction across
+network I/O because the first INSERT opens one implicitly and nothing committed
+until the work was done:
+
+| window | transaction opens | held across |
+|---|---|---|
+| the message loop | first `mail_seen` insert | every remaining `M.fetch()` - 175 IMAP round-trips on a `--days 14 --all` backfill |
+| `report_employers` | first `employer_board` insert | the whole probe loop, minutes on a backfill |
+
+The second is why this matters in production rather than only during a manual
+backfill: `inbox.py` runs from cron at 19:52 with `--add-employer-boards`, and
+the fast lane's last run of the day fires at 19:55.
+
+Both now commit per row. At these volumes - a few dozen messages, a handful of
+new employers a night - a commit per row costs nothing and bounds the lock to a
+single insert. Reproduced and verified in isolation: a writer that inserts then
+sleeps makes a second connection fail with `database is locked`, and the same
+writer committing per row lets it through.
+
+### the failure was invisible, which is its own bug
+
+`fast.sh` sent stdout to `/dev/null`, so the only trace of a dying fast lane
+was a bare traceback in `fast.log` with nothing around it - no timestamp, no
+indication of which run it belonged to, and no record of what that run would
+have pushed. The full digest genuinely is too much to keep 156 times a day, so
+the lane now logs just its summary line and any `>> pushed` / `>> Tracked`
+lines, timestamped: one line on a quiet run against 1,162 for the digest.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that

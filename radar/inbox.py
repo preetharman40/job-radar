@@ -672,10 +672,18 @@ def report_employers(employers, targets_path, add=False, conn=None,
         evs = f"{ev[0]} -> {ev[1]}" if ev else None
         results.append((v, name, p, t, len(posts), evs))
         if conn is not None:
+            # Commit per employer, not once at the end. seen.sqlite3 is shared
+            # with both poller lanes and SQLite in WAL mode allows exactly one
+            # writer, so an open transaction here blocks them. Holding it
+            # across the whole probe loop - minutes on a backfill, and this
+            # runs at 19:52 while the fast lane's last run of the day fires at
+            # 19:55 - is what makes the other process die on
+            # "database is locked" once its 30s busy_timeout expires. A commit
+            # per row costs nothing at this volume and bounds the lock to one
+            # insert.
             conn.execute("INSERT OR REPLACE INTO employer_board VALUES(?,?,?,?,?,?,?)",
                          (name, now, v, p, t, len(posts), evs))
-    if conn is not None:
-        conn.commit()
+            conn.commit()
 
     by = lambda v: [r for r in results if r[0] == v]
     verified, nt = by("verified"), by("no-target-roles")
@@ -894,7 +902,13 @@ def main():
         if not a.all and mid in seen_ids:
             continue
         msgs += 1
+        # Committed per message for the same reason the employer cache is:
+        # the first INSERT opens a write transaction, and without this it
+        # stayed open across every remaining M.fetch() in this loop - 175
+        # network round-trips on a --days 14 --all backfill. Any other writer
+        # on seen.sqlite3 blocks for that whole window.
         conn.execute("INSERT OR IGNORE INTO mail_seen VALUES(?,?)", (mid, now))
+        conn.commit()
         source, subject, found = extract(msg)
         if a.boards:
             links |= all_job_links(msg)
