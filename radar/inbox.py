@@ -168,6 +168,45 @@ JUNK_ANCHOR = frozenset((
     "click here", "view all jobs", "see all jobs", "view jobs", "see more jobs",
     "unsubscribe", "edit alert", "see all", "more jobs"))
 
+# Anchors that are chrome but are not a fixed string, so the set above cannot
+# hold them. Each of these was observed sitting inside a real job's segment and
+# being chosen as that job's TITLE: "Learn why we included this." is the
+# recommendation footnote LinkedIn renders under a suggested req, "DevOps jobs"
+# is the digest's own section heading, and the widget promo runs on into the
+# following text once the HTML is flattened. Six records in a fortnight of mail
+# were filed under one of these instead of their real title, which also cost
+# them their employer name, since the company is recovered by subtracting the
+# title off the row.
+JUNK_RE = re.compile(r"^(?:learn why we included this|install linkedin widgets"
+                     r"|stay updated at a glance|manage (?:recommendations"
+                     r"|job alerts|alerts|settings)|(?:dev\s*ops|devops|sre|cloud"
+                     r"|engineering|software)\s+jobs\b|jobs?\s+(?:you|similar)"
+                     r"|see\s|view\s|apply\s|unsubscribe|get the new linkedin)",
+                     re.I)
+
+# The employer's logo carries its name in the img alt, inside that job's own
+# segment - "ElevenLabs", "KData AI", "Smile Digital Health". It is the only
+# place in a digest where the company appears as a FIELD rather than glued to
+# the title with no delimiter, which is what made it unrecoverable in the
+# single-anchor format. Measured over 349 records from 65 digests: it agrees
+# with the subtraction rule on all 305 the rule already got right (differing
+# only by a trailing period it preserves) and supplies a name for 43 of the 44
+# it left empty. Used as a FALLBACK rather than a replacement for exactly that
+# reason - the rule it backs up is not wrong, just incomplete.
+LI_ALT = re.compile(r'<img\b[^>]*\balt="([^"]{2,70})"', re.I)
+LI_ALT_CHROME = re.compile(
+    r"^(?:linkedin|.*\bicon|easy apply|promoted|viewed|applied|logo"
+    r"|company logo|profile photo|actively recruiting|.*\bwidget)$", re.I)
+
+
+def _alt_company(frag):
+    """Employer name from the logo alt in one segment, or ""."""
+    for a in LI_ALT.findall(frag):
+        a = htmlmod.unescape(a).strip()
+        if a and not LI_ALT_CHROME.match(a):
+            return a.strip(" .,·")
+    return ""
+
 
 def li_segments(html):
     """Split a LinkedIn digest into one HTML fragment per posting.
@@ -210,7 +249,7 @@ def _clean_loc(cell):
     return LI_LOC_NOISE.sub("", cell).strip(" .,·")
 
 
-def _title_from(frag):
+def _title_from(frag, jid=None):
     """Best anchor text in a fragment to use as the job title.
 
     Two digest formats are in circulation. One gives the title its own anchor
@@ -219,11 +258,27 @@ def _title_from(frag):
     Cerebras · Toronto, ON (Hybrid)"). Prefer an anchor with no middle dot,
     since that is the clean title, and fall back to the whole row for the
     caller to trim.
+
+    When the segment's job id is known, only anchors pointing at THAT posting
+    are considered. This is structural where a word list is not: the last
+    segment of a digest also contains the account footer, whose anchors are
+    "Help", "Manage recommendations", "Unsubscribe", "Install LinkedIn
+    Widgets" and whatever LinkedIn adds next, and every one of them is a
+    plausible-looking 4-to-140-character string. Blocklisting them by name
+    fixed six rows and immediately mis-titled eight more as "Help"; matching
+    on the href cannot be outrun that way, because a footer link never points
+    at the job.
     """
     best = ""
-    for _href, anchor in ANCHOR.findall(frag):
+    for href, anchor in ANCHOR.findall(frag):
+        if jid:
+            m = LI_VIEW.search(htmlmod.unescape(href))
+            if not m or m.group(1) != jid:
+                continue
         t = strip_html(anchor)
         if not t or not (4 <= len(t) <= 140) or t.lower() in JUNK_ANCHOR:
+            continue
+        if JUNK_RE.match(t):
             continue
         if "·" not in t:
             return t
@@ -232,7 +287,7 @@ def _title_from(frag):
 
 
 def _li_record(jid, frag):
-    title = _title_from(frag)
+    title = _title_from(frag, jid)
     if not title:
         return None
     blob = strip_html(frag)
@@ -256,8 +311,33 @@ def _li_record(jid, frag):
     company = ""
     if title and row.lower().startswith(title.lower()) and len(row) > len(title):
         company = row[len(title):].strip(" .,·-")
-    elif not title:
+    if not company:
+        company = _alt_company(frag)
+    # Subtraction the other way round, for the rows where every anchor in the
+    # segment was chrome. The row is still "<Title><Company>" with no
+    # delimiter, and once the logo has supplied the company the title is
+    # whatever precedes it - which is how adidas' "Platform & Site Reliability
+    # Engineer", BDO's "DevOps Engineer - New Grad (January 2027)" and six
+    # others stopped being filed under "Learn why we included this." and
+    # started being filed under their real titles.
+    if not title and company and row.lower().rstrip(" .").endswith(
+            company.lower().rstrip(" .")):
+        title = row[:len(row.rstrip(" .")) - len(company.rstrip(" ."))].strip(" .,·-")
+    if not title:
         title = row
+    if not title:
+        return None
+    # The row formats glue the company onto the end of the title with no
+    # delimiter ("Site Reliability Engineer MaintainX"). Once the logo has
+    # named the company it can simply be cut off, which it could not be while
+    # the name was unknown - and a title carrying the employer's name scores
+    # against the wrong keyword blob and reads wrong in the tracker.
+    if company and len(title) > len(company) + 2:
+        trimmed = title.rstrip(" .,·-")
+        if trimmed.lower().endswith(company.lower().rstrip(" .")):
+            cut = trimmed[:len(trimmed) - len(company.rstrip(" ."))].strip(" .,·-")
+            if len(cut) >= 4:
+                title = cut
     return {"title": title,
             "url": f"https://www.linkedin.com/jobs/view/{jid}",
             "company": company,
@@ -455,6 +535,198 @@ def report_boards(links, targets_path, add=False, workers=12):
     return "\n".join(L)
 
 
+# Not employers. Every one of these turned up in the mail where a company name
+# belongs: the aggregators re-mail other people's postings under their own
+# brand, and "Linkedin.com" is the sender domain leaking into the column on a
+# digest whose rows carried no name of their own.
+EMP_SKIP = re.compile(
+    r"^(?:linkedin|jobgether|indeed|ziprecruiter|glassdoor|monster|dice"
+    r"|talent\.com|jooble|careerbuilder|workopolis|eluta|neuvoo|adzuna"
+    r"|job\s*bank|simplyhired|lensa|jobget|recruiter\.com)\b", re.I)
+
+
+def all_employers(msg):
+    """Every employer named in one alert, with the titles it appeared under.
+
+    The companion to all_job_links, for the channel that one cannot serve. A
+    LinkedIn alert links only to linkedin.com/jobs/view/{id}, so there is no
+    ATS token anywhere in the message and board_from_url has nothing to read -
+    which is why 135 of 345 tracked rows are LinkedIn URLs with no board behind
+    them. The employer's NAME is the only handle the mail gives, and
+    discover.resolve_employer turns it into a board.
+
+    The titles travel with the name because they are the identity evidence:
+    the employer is in this mail BECAUSE of those reqs, so a board that still
+    lists one of them is that employer's board and not a lookalike token.
+
+    No title filter, deliberately - same reasoning as all_job_links. An
+    employer worth polling can easily turn up in one week's mail under a Sales
+    req, and the value test belongs on the board's own contents, which
+    resolve_employer applies, not on one alert's title.
+    """
+    h, _t = body_parts(msg)
+    out = {}
+    for jid, frag in li_segments(h or ""):
+        rec = _li_record(jid, frag)
+        if not rec:
+            continue
+        co = (rec.get("company") or "").strip()
+        if not co or EMP_SKIP.match(co) or len(co) < 2:
+            continue
+        out.setdefault(co, set()).add(rec["title"])
+    return out
+
+
+def employer_cache(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS employer_board("
+                 "name TEXT PRIMARY KEY, at TEXT, verdict TEXT, "
+                 "platform TEXT, token TEXT, postings INTEGER, evidence TEXT)")
+    return conn
+
+
+def report_employers(employers, targets_path, add=False, conn=None,
+                     stale_days=60, limit=None, deep=False):
+    """Resolve employers named in the mail into boards. Returns the report.
+
+    Every result is CACHED, because without that this is unaffordable on a
+    daily schedule: a fortnight of mail names ~200 distinct employers, and
+    re-probing all of them every night would be thousands of requests a day at
+    four ATS hosts to re-learn what it already knew. Cached, day one costs that
+    once and a steady night costs only the employers that are new - typically
+    a handful. A miss is re-probed after stale_days, since a company without a
+    board today may have one next quarter; a hit never needs re-probing,
+    because the board either went into targets.json or is reported again from
+    cache for free.
+    """
+    tg = json.load(open(targets_path))
+    have = {p: {v.lower() for v in tg.get(p, []) if isinstance(v, str)}
+            for p in dc.PROBES}
+
+    # Every employer already polled on ANY platform, not just the four whose
+    # account names can be guessed. Without this the report told you to go
+    # find a careers URL for RBC, BMO, Manulife, Scotiabank, TMX Group, PwC
+    # Canada, Amazon and Insight Global - all of which the radar has polled for
+    # weeks on Workday, SuccessFactors, Phenom or an in-house adapter. A name
+    # probe cannot find a tenant-based board, so they came back "dead" and the
+    # report believed it.
+    #
+    # Matched on the name and on its legal-suffix-stripped form, never on a
+    # prefix: "Interac Corp" has to reach the Workday target named "Interac",
+    # but "BMO Capital Markets" is left listed as missing rather than silently
+    # credited to "BMO". Over-claiming here HIDES a board worth adding, which
+    # is the more expensive error of the two.
+    def _names(s):
+        bare = s
+        while True:
+            nxt = dc.LEGAL_SUFFIX.sub("", bare).strip()
+            if nxt == bare or not nxt:
+                break
+            bare = nxt
+        return {re.sub(r"[^a-z0-9]+", "", x.lower()) for x in (s, bare) if x}
+
+    polled = set()
+    for k, v in tg.items():
+        if k.startswith("_") or k == "devops_vendors" or not isinstance(v, list):
+            continue
+        for x in v:
+            if isinstance(x, str):
+                polled |= _names(x)
+            elif isinstance(x, dict) and x.get("name"):
+                polled |= _names(x["name"])
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_days)).isoformat()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cached = {}
+    if conn is not None:
+        employer_cache(conn)
+        for n, at, v, p, t, c, ev in conn.execute(
+                "SELECT name, at, verdict, platform, token, postings, evidence "
+                "FROM employer_board"):
+            cached[n.lower()] = (at, v, p, t, c, ev)
+
+    todo, results = [], []
+    for name in sorted(employers):
+        # Already polled under one of its own name tokens - nothing to find.
+        if (_names(name) & polled
+                or any(t in have.get(p, ()) for t in dc.variants(name, 1)
+                       for p in dc.PROBES)):
+            results.append(("already", name, None, None, 0, None))
+            continue
+        hit = cached.get(name.lower())
+        if hit and (hit[1] not in ("dead", "unverified", "no-target-roles")
+                    or hit[0] > cutoff):
+            results.append((hit[1], name, hit[2], hit[3], hit[4] or 0, hit[5]))
+            continue
+        todo.append(name)
+    if limit:
+        todo = todo[:limit]
+
+    for name in todo:
+        titles = sorted(employers[name])
+        # Tier-1 variants only unless asked. Tier 2 is ~80% of the requests
+        # - a miss fires 48 of them instead of 12 - and all twelve boards this
+        # channel has ever found answered on tier 1, so paying for it on a
+        # nightly schedule would be four times the load at four ATS hosts for
+        # no measured return. `--employer-deep` turns it on for a backfill.
+        v, p, t, posts, ev = dc.resolve_employer(name, titles, have=have,
+                                                 tier2=deep)
+        evs = f"{ev[0]} -> {ev[1]}" if ev else None
+        results.append((v, name, p, t, len(posts), evs))
+        if conn is not None:
+            conn.execute("INSERT OR REPLACE INTO employer_board VALUES(?,?,?,?,?,?,?)",
+                         (name, now, v, p, t, len(posts), evs))
+    if conn is not None:
+        conn.commit()
+
+    by = lambda v: [r for r in results if r[0] == v]
+    verified, nt = by("verified"), by("no-target-roles")
+    unver, dead, already = by("unverified"), by("dead"), by("already")
+    L = ["", "## Employers found in the mail", "",
+         f"_{len(employers)} employers named · {len(todo)} newly probed · "
+         f"{len(results)-len(todo)} from cache or already polled · "
+         f"**{len(verified)} verified board(s)**_", ""]
+    if verified:
+        L += ["### Verified - the mailed title is still on the board", "",
+              "| employer | board | postings | evidence |", "|---|---|---|---|"]
+        for _v, n, p, t, c, ev in sorted(verified, key=lambda r: -r[4]):
+            L.append(f"| {n} | `{p}/{t}` | **{c}** | {ev or ''} |")
+        L.append("")
+    if nt:
+        L += ["### Identity confirmed, but no role the rules would match", "",
+              "Not added - polling these costs a request every sweep forever.", ""]
+        for _v, n, p, t, c, ev in nt:
+            L.append(f"- {n} — `{p}/{t}` ({c} postings)")
+        L.append("")
+    if unver:
+        L += ["### Live board, but the mailed title is not on it", "",
+              "Either the req closed since the alert, or the token is a "
+              "lookalike. Check before adding.", ""]
+        for _v, n, p, t, c, _e in unver:
+            L.append(f"- {n} — `{p}/{t}` ({c} postings)")
+        L.append("")
+    if dead:
+        L += ["### No board under any name variant", "",
+              "Mostly enterprises on Workday/SuccessFactors/Taleo/Oracle, whose "
+              "tenant cannot be guessed from a company name. Each needs one "
+              "`discover.py --url <careers page>`.", "",
+              "  " + ", ".join(n for _v, n, *_ in sorted(dead, key=lambda r: r[1])), ""]
+    if already:
+        L.append(f"_{len(already)} already polled: "
+                 + ", ".join(n for _v, n, *_ in already[:25]) + "_")
+        L.append("")
+
+    addable = [(p, t) for _v, _n, p, t, _c, _e in verified
+               if p and t and t not in have.get(p, ())]
+    if add and addable:
+        added = dc.add_boards(targets_path, addable)
+        L.append(f"**Added {len(added)} board(s) to targets.json.** "
+                 "Run `make_fast.py <digest>` after the next full sweep so the "
+                 "fast lane picks up the productive ones.")
+    elif addable:
+        L.append(f"_Re-run with `--add-employer-boards` to append the "
+                 f"{len(addable)} verified board(s)._")
+    return "\n".join(L)
+
+
 def guess_location(msg_text, title):
     """Alert emails rarely tag location; look for a Canadian marker nearby."""
     window = msg_text[:4000]
@@ -512,9 +784,19 @@ def main():
                     help="also report ATS boards found in the mail")
     ap.add_argument("--add-boards", action="store_true",
                     help="append confirmed-live boards to targets.json")
+    ap.add_argument("--employers", action="store_true",
+                    help="resolve employers named in the mail into ATS boards")
+    ap.add_argument("--add-employer-boards", action="store_true",
+                    help="append identity-verified employer boards to targets.json")
+    ap.add_argument("--employer-limit", type=int,
+                    help="probe at most N new employers this run")
+    ap.add_argument("--employer-deep", action="store_true",
+                    help="also try embellished name variants (4x the requests)")
     a = ap.parse_args()
     if a.add_boards:
         a.boards = True
+    if a.add_employer_boards:
+        a.employers = True
 
     if a.setup:
         if os.path.exists(CONFIG):
@@ -600,7 +882,7 @@ def main():
     jr.VENDORS.update(x.lower() for x in
                       json.load(open(jr.TARGETS)).get("devops_vendors", []))
 
-    rows, links = [], set()
+    rows, links, employers = [], set(), {}
     msgs, now = 0, datetime.now(timezone.utc).isoformat(timespec="seconds")
     for i in ids:
         try:
@@ -616,6 +898,9 @@ def main():
         source, subject, found = extract(msg)
         if a.boards:
             links |= all_job_links(msg)
+        if a.employers:
+            for co, titles in all_employers(msg).items():
+                employers.setdefault(co, set()).update(titles)
         for f in found:
             tier, fam = jr.title_match(f["title"], source)
             if not tier:
@@ -692,6 +977,10 @@ def main():
                  "employers in manual_check.md - that is what this channel is for._")
     if a.boards:
         L.append(report_boards(links, jr.TARGETS, add=a.add_boards))
+    if a.employers:
+        L.append(report_employers(employers, jr.TARGETS,
+                                  add=a.add_employer_boards, conn=conn,
+                                  limit=a.employer_limit, deep=a.employer_deep))
     out = "\n".join(L)
     print(out)
     if a.md:
