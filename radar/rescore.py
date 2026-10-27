@@ -226,7 +226,7 @@ def main():
                        "applications.%s-pre-rescore.md.bak" % stamp)
     os.makedirs(os.path.dirname(bak), exist_ok=True)
 
-    with jr.FileLock():
+    with jr.FileLock(timeout=60):
         src = open(a.tracker, encoding="utf-8").read()
         shutil.copy2(a.tracker, bak)
         print(">> backup %s" % bak)

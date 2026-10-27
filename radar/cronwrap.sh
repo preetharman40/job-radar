@@ -19,7 +19,31 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 label="$1"; shift
-out=$(mktemp); trap 'rm -f "$out"' EXIT
+
+# Refuse to run a lane on top of itself. Nothing prevented that before: the
+# fast lane fires every 300s and takes 147s at its worst today, but it took
+# ~110s when the board list was smaller and has grown with it - at 300s two
+# copies would overlap, contend for the same SQLite writer and do the same work
+# twice. verify_tracked already runs ~370s on an hourly cadence, so it has less
+# headroom than it looks.
+#
+# -n so a busy lock SKIPS this tick instead of queueing: a backlog of waiting
+# sweeps is worse than a missed one, because the next tick is only minutes away
+# and the work is idempotent. Exits 0, because a deliberate skip is not a
+# failure and must not page anyone - it is recorded in events.jsonl as
+# skipped=true so it is visible if it starts happening often.
+LOCKFILE="$(dirname "$0")/.lane-$label.lock"
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+  skipped_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  echo "$skipped_at $label: previous run still in progress, skipping this tick"
+  printf '{"ts":"%s","label":"%s","rc":0,"secs":0,"skipped":true}\n' \
+    "$skipped_at" "$label" >> "$(dirname "$0")/events.jsonl" 2>/dev/null || true
+  exit 0
+fi
+
+out=$(mktemp) || { echo "$label: mktemp failed, cannot capture output" >&2; exit 1; }
+trap 'rm -f "$out"' EXIT
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 t0=$(date +%s)
 "$@" > "$out" 2>&1

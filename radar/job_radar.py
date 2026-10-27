@@ -3108,9 +3108,28 @@ def main():
                 print(f"\n>> WARNING: {len(worth)} job(s) matched but NO "
                       "notification was delivered")
 
+    track_failed = False
     if a.track:
-        with FileLock():
-            n, _ = append_to_tracker(show, a.track_file, a.track_min_score)
+        # Guarded, and with a far longer timeout than the 15s default. Five
+        # processes write applications.md - both poller lanes, inbox.py,
+        # rescore.py and the web app - and an uncaught TimeoutError here killed
+        # the sweep AFTER notify() had already pushed. That is the precise
+        # shape of "jobs in my phone alerts that I cannot find in the web app":
+        # the alert goes out, the process dies, the row is never written, and
+        # the posting is already claimed in `seen` so no later sweep retries
+        # it. The lock is only ever held for a single read-modify-write, so 60s
+        # is generous rather than slow.
+        try:
+            with FileLock(timeout=60):
+                n, _ = append_to_tracker(show, a.track_file, a.track_min_score)
+        except TimeoutError as e:
+            track_failed = True
+            n = 0
+            print(f"\n>> WARNING: could not lock the tracker ({e}). "
+                  f"{len([j for j in show if j['score'] >= a.track_min_score])} "
+                  f"posting(s) were NOT written to applications.md"
+                  + (" and notifications for them have already been sent."
+                     if a.notify else "."), file=sys.stderr)
         rel = os.path.relpath(a.track_file, os.getcwd())
         if rel.count("..") > 1:
             rel = a.track_file
@@ -3120,10 +3139,14 @@ def main():
         else:
             print(f"\n>> Nothing new to track (score >= {a.track_min_score}); "
                   f"{rel} already covers what was shown.")
+    # Non-zero so cronwrap.sh alerts. A sweep that notified but could not
+    # record is a real incident, not a cosmetic warning, and returning 0 here
+    # would make it invisible to every check downstream.
+    return 1 if track_failed else 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main() or 0)
     except KeyboardInterrupt:
         sys.exit(130)

@@ -1034,9 +1034,18 @@ def main():
                     "updated": "", "url": r["url"], "title": r["title"]}
                    for r in fresh if r["score"] >= a.track_min_score]
         if payload:
-            with jr.FileLock():
-                n, _ = jr.append_to_tracker(payload, jr.TRACKER, a.track_min_score)
-            print(f"\n>> tracked {n} new posting(s)")
+            try:
+                with jr.FileLock(timeout=60):
+                    n, _ = jr.append_to_tracker(payload, jr.TRACKER,
+                                                a.track_min_score)
+                print(f"\n>> tracked {n} new posting(s)")
+            except TimeoutError as e:
+                # Same reasoning as the poller: this runs after --notify has
+                # already pushed, so dying here leaves an alert with no row.
+                print(f"\n>> WARNING: could not lock the tracker ({e}); "
+                      f"{len(payload)} mail posting(s) were NOT written",
+                      file=sys.stderr)
+                return 1
     return 0
 
 

@@ -1253,6 +1253,82 @@ validation failure it changes nothing and exits non-zero.
 
 ---
 
+## reliability audit: two real loopholes, and three of my own false positives
+
+Asked to find what could still break a lane, the audit turned up two genuine
+holes - and, usefully, three things that looked like holes and were not.
+
+### 1. no lane was protected from overlapping itself
+
+`flock` appeared nowhere as a lane guard. Nothing stopped a second copy of a
+lane starting on top of the first, contending for the single SQLite writer and
+doing the same work twice.
+
+It had not happened yet, but the margin is shrinking rather than growing: the
+fast lane fires every 300s and its worst observed run is **147s** - it was
+~110s when the board list was smaller, and it has grown with every board
+added. `verify_tracked` runs ~370s on an hourly cadence. The daily lane is
+~340s on a 1,800s cadence and is comfortable.
+
+`cronwrap.sh` now takes `flock -n` on a per-label lockfile, so one change
+covers all ten lanes. `-n` means a busy lock **skips** the tick rather than
+queueing: a backlog of waiting sweeps is worse than a missed one, because the
+next tick is minutes away and the work is idempotent. It exits 0, because a
+deliberate skip is not a failure and must not page anyone, and records
+`{"skipped":true}` in `events.jsonl` so it is visible if it starts happening
+often.
+
+### 2. a tracker-lock timeout killed the sweep AFTER it had notified
+
+`FileLock` raises `TimeoutError` when it cannot acquire in 15s, and the call in
+`job_radar.main()` was unguarded. Five processes write `applications.md` - both
+poller lanes, `inbox.py`, `rescore.py` and the web app - so contention is a
+normal condition.
+
+The ordering is what made it serious. `if a.notify:` runs **before**
+`if a.track:`, so the failure mode was: push the phone alert, raise, die, never
+write the row - and the posting is already claimed in `seen`, so no later sweep
+retries it. That is the precise shape of *"lots of jobs in my phone alerts that
+I cannot see on the job radar app"*, which was reported as a symptom earlier in
+this project and attributed to other causes.
+
+Now guarded, with `timeout=60` because the lock is only ever held for a single
+read-modify-write, and `main()` returns 1 so `cronwrap.sh` alerts - a sweep
+that notified but could not record is an incident, not a cosmetic warning, and
+returning 0 would have made it invisible to every check downstream. `inbox.py`
+has the same guard for the same reason: it also tracks after notifying.
+
+### three things that looked broken and were not
+
+Recorded because each cost time, and each was the same mistake in a different
+costume - a cheap check mistaken for a conclusion.
+
+- **`serve.py`'s locks are already safe.** The audit flagged all five
+  `FileLock()` call sites as unguarded by scanning six lines above each one.
+  `serve.py` catches `TimeoutError` at the HTTP handler and returns a clean
+  503; the guard was simply further up the call stack than the scan looked.
+  Acting on the false positive broke the file, which had to be restored from
+  git.
+- **`grep`, `printf` and `find` are not off cron's PATH.** A check that
+  compared `command -v` output against `/usr/bin:/bin` reported them as
+  missing, because they resolve as shell builtins. The only genuinely
+  off-PATH binary is `logrotate` at `/usr/sbin`, and it is already invoked by
+  absolute path.
+- **Disk and WAL are fine.** 126G free at 47% used; the SQLite WAL is 0 bytes,
+  so checkpointing is working and the weekly `VACUUM` is keeping up.
+
+### what the audit could not rule out
+
+- **ntfy.sh being down** silently swallows every alert. `curl -m 15` means it
+  cannot hang a lane, but a failed push is only visible in the lane's log.
+- **A machine that is off, or a disk that fills.** Neither can be reported by
+  anything running on the machine.
+- `rescore.py`'s lock is still unguarded, deliberately: it is a manual tool run
+  by hand, where a traceback is the right feedback. Its timeout was widened to
+  60s to match the batch writers.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
