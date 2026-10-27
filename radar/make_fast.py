@@ -9,6 +9,7 @@ Run a full sweep, then regenerate:
     python3 job_radar.py --all --level entry,mid,senior --md /tmp/who.md
     python3 make_fast.py /tmp/who.md
 """
+import argparse
 import collections, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +49,18 @@ NEVER_FAST = ("jobbank", "insightglobal")
 
 
 def main():
-    digest = sys.argv[1] if len(sys.argv) > 1 else "/tmp/who.md"
+    # argparse rather than sys.argv[1], so `--help` prints help instead of
+    # being treated as a digest filename and dying with FileNotFoundError.
+    # selftest.py found that on its first run: every other entry point here
+    # answers --help, and a tool that crashes when asked how to use it is a
+    # tool nobody reads the guard rail of.
+    ap = argparse.ArgumentParser(
+        description="Rebuild fast.json from a FULL sweep's digest. "
+                    "Refuses to shrink the fast lane by more than 40%.")
+    ap.add_argument("digest", nargs="?", default="/tmp/who.md",
+                    help="markdown digest from `job_radar.py --all --md ...` "
+                         "(NOT digest.md, which is incremental)")
+    digest = ap.parse_args().digest
     producers = {c.lower() for c in
                  collections.Counter(re.findall(r"^- \*\*(.+?)\*\* ·",
                                                 open(digest).read(), re.M))}

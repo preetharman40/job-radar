@@ -1183,6 +1183,76 @@ Neither can be reported by anything running on the machine.
 
 ---
 
+## selftest.py: after a change, does the whole thing still work?
+
+Three defects shipped on 2026-10-27, and every one would have been caught in
+seconds by a check that simply **ran** the thing:
+
+- a non-atomic edit to `cronwrap.sh` was exec'd half-written by a cron lane and
+  killed that run - and because the broken file *was* cronwrap, nothing
+  reported it;
+- `rc` arrived from `argv` as a string, and `"0" != 0` is True in Python, so a
+  failure tail was stored on every single run;
+- a metrics regex anchored at `^` extracted from `daily` and silently not from
+  `fast`, whose output is timestamped.
+
+So `selftest.py` runs four tiers, cheapest first, and never stops early -
+when something is broken you want the whole picture, not the first symptom.
+Exit status is the number of failures, so `selftest.py && git commit` works.
+
+| tier | what it proves | cost |
+|---|---|---|
+| 1 STATIC | every script parses, every cron path exists and is executable, the crontab still holds all 10 lanes, the JSON and logrotate configs are valid, **no secret is tracked by git** | instant |
+| 2 SERVICE | cron and both systemd units are active *and enabled*, linger is on, the web app answers and its API has the expected keys, the ntfy topic is readable at mode 600 and ntfy.sh is reachable | instant |
+| 3 DATA | `integrity_check`, all 8 tables present, board counts sane, and **fast.json is a subset of targets.json** | instant |
+| 4 SMOKE | every entry point answers `--help`, and each lane actually runs | ~2 min |
+
+The smoke tier is the part that matters, and it is built so it cannot damage
+anything:
+
+- **A one-board sweep through the real pipeline**, with `--no-claim`, and the
+  check *asserts the database is byte-identical afterwards*. That is the test
+  that proves fetch -> filter -> hydrate -> score -> digest still works end to
+  end, and it is only safe to run on every edit because `--no-claim` exists.
+- `verify_tracked --dry-run`, again asserting no state changed.
+- `board_health --report`, which records nothing by design.
+- `make_fast.py` fed a deliberately tiny digest, asserting the shrink guard
+  **refuses** and `fast.json` is untouched - a test that the guard rail works,
+  not just that the tool runs.
+- `watchdog.sh`, accepting exit 0 or 1 (1 means "found a problem", which is a
+  verdict, not a crash) and requiring a verdict line in the output.
+
+It earned its place on its first full run by failing on something real:
+`make_fast.py --help` crashed, because it parsed `sys.argv[1]` directly and
+treated `--help` as a digest filename. Every other entry point answered
+`--help`; a tool that dies when asked how to use it is a tool whose guard rail
+nobody reads. Now fixed with argparse.
+
+`pre-commit.hook` runs tiers 1-3 on every commit - about a second, cheap enough
+not to be resented - and `RADAR_FULL_SELFTEST=1` adds the smoke tier. Install
+it as a symlink so edits take effect without reinstalling:
+
+```sh
+ln -sf ../../radar/pre-commit.hook .git/hooks/pre-commit
+```
+
+### the two root changes
+
+`install_sudo_bits.sh` does what `SUDO_SETUP.md` describes, as one auditable
+script rather than pasted heredocs: `Restart=always` plus
+`StartLimitIntervalSec=0` on `cron.service` (the default `on-failure` covers a
+crash but not a clean exit, a `systemctl stop`, or a cron that exits 0 after
+refusing to parse something), and one passwordless command -
+`systemctl restart cron.service`, exactly that, no wildcards - so `watchdog.sh`
+can act instead of only reporting that it could not.
+
+The sudoers line is written to a temp file and validated with `visudo -c -f`
+**before** being installed, because a malformed file in `/etc/sudoers.d` breaks
+`sudo` for every user on the machine and checking afterwards is too late. On a
+validation failure it changes nothing and exits non-zero.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that

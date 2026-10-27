@@ -29,6 +29,9 @@ python3 serve.py                # web view on :8737
 | `logq.py` | **Query the run history.** `--failures`, `--gaps`, `--lane X`. Reads `events.jsonl`, which `cronwrap.sh` appends one JSON record to per run |
 | `alert.sh` | systemd `OnFailure=` handler, so a crash in the *watchdog* is not silent |
 | `logrotate.conf` | 12 weekly generations, compressed. Replaced a cron job that **deleted** any log over 5MB |
+| `selftest.py` | **Run after every change.** 23 checks in 4 tiers: scripts parse, cron paths exist, services up, DB sound, and each lane actually runs. `--quick` skips the network tier |
+| `pre-commit.hook` | Runs `selftest.py --quick` before each commit. `ln -sf ../../radar/pre-commit.hook .git/hooks/pre-commit` |
+| `install_sudo_bits.sh` | The two root changes, as one auditable script: `sudo bash radar/install_sudo_bits.sh` |
 | `discover.py` | Fingerprint one company's ATS · `--verify` prunes dead boards |
 | `harvest.py` | Bulk: company names → boards |
 | `hunt.py` | Workday / SuccessFactors tenants |
