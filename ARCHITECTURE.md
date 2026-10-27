@@ -1431,10 +1431,11 @@ when moving code. A sweep that completes happily while `classify_location` has
 started reading `Americana, Los Angeles` as American is a worse failure than a
 crash, because nothing reports it.
 
-26 tests over the pure functions - `classify_location`, `title_match`,
+46 tests over the pure functions - `classify_location`, `title_match`,
 `level_of`, `score`, `discover.variants`, `title_overlap`, the LinkedIn digest
-parsers, and ratecheck's two patterns. They run in 0.05s, so they sit in tier 1
-of the selftest and therefore run on every commit through the pre-commit hook.
+parsers, ratecheck's two patterns, `fetchcore`'s HTML and date helpers, and the
+adapters package's own contract. They run in 0.04s, so they sit in tier 1 of
+the selftest and therefore run on every commit through the pre-commit hook.
 
 Two rules shaped the file.
 
@@ -1594,6 +1595,94 @@ check fails and names `fetch_amazon`.
 
 Pointing those eleven callers at `fetchcore` and `adapters` directly is the
 next step, and a separate one.
+
+---
+
+## three modules, three declared surfaces
+
+The re-exports above were a bridge, and bridges get walked across. Each of the
+three modules now states its own surface and nothing else re-exports anything:
+
+| module | names | what it owns |
+|---|---|---|
+| `job_radar` | 30 | paths, the classifier, the scorer, the tracker, the locks, the push |
+| `fetchcore` | 9 | `req`, `get_text`, `strip_html`, `drop_scripts`, `job`, `days_ago`, `long_date`, `TAG`, `UA` |
+| `adapters` | 5 | `ADAPTERS`, `HYDRATORS`, `expand`, `platform`, `WD_TRUNCATED` |
+
+**A public API spelled with leading underscores is not one.** `_req` and
+`_get_text` were the transport every adapter and four other scripts depend on,
+so they are now `req` and `get_text` - 47 call sites, mechanical.
+
+Three reach-ins became functions, which is the part that actually improves the
+design rather than relabelling it:
+
+- `fetchcore.drop_scripts(html)` replaces `verify_tracked` reaching for the
+  `_SCRIPT` and `_COMMENT` regexes to build the same expression by hand.
+- `adapters.workday.probe_canada(api)` replaces `hunt.py` inlining
+  `_wd_country_facet` + a `_req` payload + `WD_CANADA` - **twice**, in two
+  functions, nine lines each. Both are now four. The facet constant and the
+  detector went back to being private.
+- `adapters.successfactors.looks_like(html)` replaces `hunt.py` testing
+  `SF_ROW` and `SF_TILE` itself to decide whether a careers page is an RMK
+  site. The adapter that will poll the board is the right place to answer what
+  counts as that board.
+
+`adapters.platform(name)` exists for the one caller that holds a platform
+string rather than an import; everything else does
+`from adapters import successfactors`, so the import line says which platform
+the file depends on.
+
+Two files stopped importing the engine altogether. `hunt.py` needed only those
+two functions, and `tailor/gaps.py` needed transport plus one GraphQL
+document - neither now pulls in sqlite3, the tracker, argparse or `main()` to
+fetch a web page.
+
+### the check is now `__all__`, not `hasattr`
+
+The previous version asserted that every `jr.X` still resolved. That is too
+weak: `jr.ADAPTERS` resolves - `job_radar` imports it for its own task loop -
+but reading it from another module is exactly the undeclared dependency that
+broke when the adapters moved. The check now requires membership in `__all__`,
+reports `file:line` and says which of three things is wrong (private, exists
+but undeclared, or gone), and covers 85 cross-module reads.
+
+It reads the tree with `ast`, not grep, for two reasons found the hard way: a
+regex for `job_radar\.X` also matches the string `"job_radar.py"` in a comment,
+which produced eleven phantom failures; and the alias has to be resolved per
+file, since `jr` is only `job_radar` because of that file's own import line.
+
+Verified in both directions: restoring `jr.ADAPTERS` in `board_health.py` is
+caught as *"exists but is not in `__all__`"*, and restoring `jr._req` in
+`verify_tracked.py` as *"is private"*.
+
+The new surface got tests too, taking `test_pure.py` from 26 to 46: `strip_html`
+had none at all despite feeding every score in the tracker, and the package
+contract now asserts that each registry entry really is its module's
+`fetch_*`, that the registry matches the modules on disk, and that `expand()`
+is the identity for the platforms with an all-jobs view. One of those tests
+failed on its first run and the **expectation** was wrong, again - `strip_html`
+returns `" Role Terraform "`, with the leading space the `<div>` leaves behind,
+and a column-aligned `print` had hidden it.
+
+### one ordering question, measured rather than argued
+
+`strip_html` removed `<script>` bodies before comments; `verify_tracked` built
+its own stripper the other way round. Folding both into `drop_scripts` had to
+pick one, and it had to be script-first, because `strip_html` feeds the scorer
+and the golden master. The orders genuinely differ on HTML where a comment
+opens before a `<script>` and closes inside its body. So it was measured on 60
+real tracked job pages: `strip_html` byte-identical to the pre-refactor
+version, and `drop_scripts` versus the old order identical in **output text**,
+not merely in the CLOSED verdict. Zero differences either way.
+
+### a latent bug the fan-out fix exposed
+
+`canada_employers.py` had its own copy of the per-keyword fan-out, and that
+copy only handled Workday and SuccessFactors. Replacing it with
+`adapters.expand()` took its task list from 1,078 to 1,126: **oracle +27,
+jobvite +9, avature +7, taleo +5**. Those four platforms were being polled with
+one unfiltered query instead of their keyword list every time that report ran.
+Duplicating a fan-out is how that happens, and there is now one copy.
 
 ---
 

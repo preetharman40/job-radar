@@ -4,7 +4,7 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # Public widget endpoint, no auth, and it ships full descriptions plus a real
@@ -15,7 +15,7 @@ from fetchcore import days_ago, job, strip_html, _req
 
 
 def fetch_workable(tok):
-    d = _req(f"https://apply.workable.com/api/v1/widget/accounts/{tok}?details=true")
+    d = req(f"https://apply.workable.com/api/v1/widget/accounts/{tok}?details=true")
     out = []
     for j in d.get("jobs", []):
         locs = j.get("locations") or []

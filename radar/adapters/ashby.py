@@ -7,7 +7,7 @@ adapters/__init__.py for the contract every module here implements.
 import threading
 import time
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # The board-level type (JobPostingBriefsWithIdsAndTeamId) exposes NO date field
@@ -56,8 +56,13 @@ _ASHBY_LOCK = threading.Lock()
 _ASHBY_LAST = [0.0]
 
 
-def _ashby_wait():
-    """Space out requests to jobs.ashbyhq.com across the whole sweep."""
+def wait():
+    """Space out requests to jobs.ashbyhq.com across the whole sweep.
+
+    Public because discover.py probes the same host and has to share the
+    budget: two unpaced probers trip the limit exactly as one unpaced sweep
+    does.
+    """
     with _ASHBY_LOCK:
         gap = time.time() - _ASHBY_LAST[0]
         if gap < ASHBY_GAP:
@@ -66,8 +71,8 @@ def _ashby_wait():
 
 
 def fetch_ashby(tok):
-    _ashby_wait()
-    d = _req("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams",
+    wait()
+    d = req("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobBoardWithTeams",
              {"operationName": "ApiJobBoardWithTeams",
               "variables": {"organizationHostedJobsPageName": tok},
               "query": ASHBY_LIST})
@@ -88,7 +93,7 @@ def fetch_ashby(tok):
 # On JobPostingDetails the description field is descriptionHtml (not
 # descriptionPlainText) and publishedDate IS available - this is where Ashby
 # dates come from.
-ASHBY_ONE = ("query ApiJobPosting($organizationHostedJobsPageName: String!, "
+ONE_QUERY = ("query ApiJobPosting($organizationHostedJobsPageName: String!, "
              "$jobPostingId: String!) { jobPosting("
              "organizationHostedJobsPageName: $organizationHostedJobsPageName, "
              "jobPostingId: $jobPostingId) { descriptionHtml publishedDate } }")
@@ -96,12 +101,12 @@ ASHBY_ONE = ("query ApiJobPosting($organizationHostedJobsPageName: String!, "
 def hydrate(j, kind):
     """publishedDate exists only on the single-posting GraphQL type."""
     _, tok, jid = kind
-    _ashby_wait()
-    d = _req("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting",
+    wait()
+    d = req("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting",
              {"operationName": "ApiJobPosting",
               "variables": {"organizationHostedJobsPageName": tok,
                             "jobPostingId": jid},
-              "query": ASHBY_ONE})
+              "query": ONE_QUERY})
     jp = (d.get("data") or {}).get("jobPosting") or {}
     j["blob"] += " " + strip_html(jp.get("descriptionHtml") or "")[:8000]
     if jp.get("publishedDate"):

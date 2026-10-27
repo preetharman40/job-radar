@@ -6,7 +6,7 @@ adapters/__init__.py for the contract every module here implements.
 
 import urllib.parse
 
-from fetchcore import days_ago, job, _req
+from fetchcore import days_ago, job, req
 
 
 # Used by universities, utilities and energy companies. A proper JSON REST API
@@ -29,7 +29,7 @@ def fetch_oracle(t):
            f"&finder=findReqs;siteNumber={site},limit=50,sortBy=POSTING_DATES_DESC")
     if q:
         api += f",keyword={urllib.parse.quote(q)}"
-    d = _req(api)
+    d = req(api)
     items = d.get("items") or []
     reqs = items[0].get("requisitionList", []) if items else []
     out = []

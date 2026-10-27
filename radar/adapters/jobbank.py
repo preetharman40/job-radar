@@ -9,7 +9,7 @@ import threading
 import time
 import urllib.parse
 
-from fetchcore import days_ago, job, long_date, strip_html, _get_text
+from fetchcore import days_ago, get_text, job, long_date, strip_html
 
 
 # The federal board, and the only source here that is neither an ATS product nor
@@ -94,7 +94,7 @@ def fetch_jobbank(t):
         url = (f"{JB_BASE}/jobsearch/jobsearch?sort=M&searchstring="
                + urllib.parse.quote(q))
         try:
-            h = _get_text(url)
+            h = get_text(url)
         except Exception:
             continue
         for row in JB_ROW.findall(h):
@@ -132,7 +132,7 @@ def hydrate(j, kind):
     # Same 5s courtesy as the list pass - the delay is per host, so the
     # hydrate pass shares the limiter rather than having its own.
     _jb_wait()
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     m = re.search(r'class="job-posting-detail-requirements".*', h, re.S) or \
         re.search(r'id="jobDescription".*', h, re.S)
     j["blob"] += " " + strip_html(m.group(0) if m else h)[:8000]

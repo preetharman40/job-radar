@@ -4,7 +4,7 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # Insight Global - a staffing agency running its own job board, not an ATS
@@ -62,7 +62,7 @@ def fetch_insightglobal(t):
     for prov in provinces:
         for page in range(1, IG_MAX_PAGES + 1):
             try:
-                d = _req(f"{IG_BASE}/all/jobs?size={IG_PER_PAGE}&page={page}"
+                d = req(f"{IG_BASE}/all/jobs?size={IG_PER_PAGE}&page={page}"
                          f"&filter.status=active&filter.locations={prov}")
             except Exception:
                 break
@@ -101,5 +101,5 @@ def hydrate(j, kind):
     # The SUMMARY endpoint already carries descriptionHtml, so there is
     # no reason to fetch /details as well - it returns the same text
     # under a different key. One request per finalist, no HTML scraping.
-    d = _req(f"{IG_BASE}/all/jobs/{kind[1]}")
+    d = req(f"{IG_BASE}/all/jobs/{kind[1]}")
     j["blob"] += " " + strip_html(d.get("descriptionHtml") or "")[:8000]

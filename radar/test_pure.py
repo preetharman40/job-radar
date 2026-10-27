@@ -22,6 +22,7 @@ because each one has already cost somebody a day.
 
 Standard library only - unittest, no pytest.
 """
+import glob
 import json
 import os
 import sys
@@ -29,6 +30,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import adapters                                                    # noqa: E402
+import fetchcore as fc                                             # noqa: E402
 import job_radar as jr                                             # noqa: E402
 
 # title_match consults VENDORS, which main() normally fills from targets.json.
@@ -318,6 +321,166 @@ class TestRatecheck(unittest.TestCase):
         self.assertEqual(m.group(1).strip(), "workday/TC Energy")
 
 
+class TestFetchcore(unittest.TestCase):
+    """The transport layer's pure half - the HTML and date helpers.
+
+    strip_html feeds the scorer, so a change here moves every score in the
+    tracker. It had no tests until the module boundaries were drawn, which is
+    also when drop_scripts() was pulled out of it.
+    """
+
+    def test_script_bodies_are_not_prose(self):
+        """A Global Relay posting arrived as 25,588 characters of Google Tag
+        Manager config in which 'Kubernetes' appeared only inside a JS string.
+        The tag stripper alone turns that into keywords the scorer believes."""
+        self.assertEqual(
+            fc.strip_html('<div>Role</div><script>var kw="Kubernetes";'
+                          '</script><p>Terraform</p>'),
+            " Role Terraform ")
+
+    def test_numeric_entities_are_folded_to_ascii(self):
+        """WordPress REST titles came through as 'Business Analyst &#8211;
+        Senior' - visible in the tracker and in push notifications."""
+        self.assertEqual(fc.strip_html("Business Analyst &#8211; Senior"),
+                         "Business Analyst - Senior")
+
+    def test_named_entities_are_unescaped(self):
+        self.assertEqual(fc.strip_html("<b>R&amp;D</b>&nbsp;Lead"), " R&D Lead")
+
+    def test_entities_outside_the_fold_table_survive_as_unicode(self):
+        """&#8230; is folded to '...' by hand, but &hellip; is not in the
+        table and html.unescape gives the real character. Asserted because it
+        is asymmetric, not because it is ideal."""
+        self.assertEqual(fc.strip_html("Dev&#x27;s &hellip; team"),
+                         "Dev's \u2026 team")
+
+    def test_empty_input_never_raises(self):
+        for x in ("", None):
+            with self.subTest(x=x):
+                self.assertEqual(fc.strip_html(x), "")
+                self.assertEqual(fc.drop_scripts(x), "")
+
+    def test_drop_scripts_keeps_the_markup(self):
+        """verify_tracked searches a page for 'no longer accepting
+        applications'. It needs the script bodies gone and the tags left, so
+        this is not strip_html."""
+        self.assertEqual(fc.drop_scripts("<script>x</script><!--c--><b>keep</b>"),
+                         "  <b>keep</b>")
+
+    def test_drop_scripts_removes_scripts_before_comments(self):
+        """The order is observable on malformed HTML: a comment that opens
+        before a <script> and closes inside its body. Script-first is the
+        choice, because strip_html - which feeds the scorer and the golden
+        master - has always done it that way. Measured over 60 real tracked
+        pages, the two orders produced identical output on all of them."""
+        self.assertEqual(fc.drop_scripts("a <!-- <script> --> b </script> c"),
+                         "a <!--   c")
+
+    def test_TAG_is_public_because_it_strips_without_a_space(self):
+        """SuccessFactors renders a title across adjacent spans, so inserting
+        a space the way strip_html does would split words."""
+        html = "<span>Cloud</span><span>Engineer</span>"
+        self.assertEqual(fc.TAG.sub("", html), "CloudEngineer")
+        self.assertEqual(fc.strip_html(html), " Cloud Engineer ")
+
+    def test_long_date_is_locale_independent(self):
+        """cron runs with a minimal environment, so strptime('%B') would make
+        the date silently None on exactly the runs that matter. Amazon also
+        space-pads to a fixed width."""
+        self.assertEqual(fc.long_date("September  1, 2026"), "2026-09-01")
+        self.assertEqual(fc.long_date("October 23, 2026"), "2026-10-23")
+
+    def test_long_date_returns_empty_not_none(self):
+        """days_ago() is called on the result, and '' is what it tolerates."""
+        for x in ("not a date", "Smarch 3, 2026", "", None):
+            with self.subTest(x=x):
+                self.assertEqual(fc.long_date(x), "")
+
+    def test_days_ago_tolerates_junk(self):
+        for x in (None, "", "x"):
+            with self.subTest(x=x):
+                self.assertIsNone(fc.days_ago(x))
+
+    def test_job_is_the_one_record_shape(self):
+        """Every adapter returns a list of these, and the whole pipeline
+        indexes them by these keys."""
+        j = fc.job("src", "co", "title", None, "url")
+        self.assertEqual(sorted(j), ["age", "blob", "company", "hyd",
+                                     "location", "offices", "posted",
+                                     "source", "title", "updated", "url"])
+        self.assertEqual(j["location"], "")
+        self.assertEqual(j["posted"], "")
+        self.assertEqual(j["updated"], "")
+        self.assertEqual(j["offices"], [])
+        self.assertIsNone(j["age"])
+
+
+class TestAdaptersContract(unittest.TestCase):
+    """The package's own surface - no network.
+
+    An adapter that is importable but not wired into the registry loses a
+    whole platform in silence, which is the failure these assert against.
+    """
+
+    def test_every_adapter_has_its_fetch_function(self):
+        for name, fn in adapters.ADAPTERS.items():
+            with self.subTest(name=name):
+                self.assertIs(fn, getattr(adapters.platform(name),
+                                          "fetch_" + name))
+
+    def test_registry_matches_the_modules_on_disk(self):
+        """A module that is importable but not wired in loses a whole platform
+        in silence. The package __init__ refuses to import in that case; this
+        asserts the same thing from the outside, off the filesystem."""
+        on_disk = {os.path.basename(f)[:-3]
+                   for f in glob.glob(os.path.join(HERE, "adapters", "*.py"))
+                   if not os.path.basename(f).startswith("_")}
+        self.assertEqual(set(adapters.ADAPTERS), on_disk)
+        self.assertEqual(len(adapters.ADAPTERS), 21)
+
+    def test_hydrators_are_a_subset_and_callable(self):
+        self.assertLessEqual(set(adapters.HYDRATORS), set(adapters.ADAPTERS))
+        for name, fn in adapters.HYDRATORS.items():
+            with self.subTest(name=name):
+                self.assertTrue(callable(fn))
+
+    def test_expand_is_identity_without_a_fan_out(self):
+        """Most platforms have an 'all jobs' view, so the target is the task."""
+        self.assertEqual(adapters.expand("greenhouse", {"t": 1}), [{"t": 1}])
+        self.assertEqual(adapters.expand("not-a-platform", {"t": 1}), [{"t": 1}])
+
+    def test_expand_fans_workday_out_per_keyword(self):
+        """Workday has no 'all IT jobs' view, so the board is swept once per
+        search term."""
+        out = adapters.expand("workday", {"t": 1})
+        self.assertEqual(len(out), 13)
+        self.assertEqual({q["_query"] for q in out}, set(adapters.platform(
+            "workday").WD_QUERIES))
+
+    def test_expand_reads_taleo_queries_off_the_target(self):
+        """Taleo facets are per-employer, so the queries live in the target.
+        The default is category 177, Information Technology."""
+        self.assertEqual(adapters.expand("taleo", {"base": "b"}),
+                         [{"base": "b", "_query": ("category", "177")}])
+        got = adapters.expand("taleo", {"base": "b",
+                                        "queries": [["keywords", "sre"]]})
+        self.assertEqual(got[0]["_query"], ("keywords", "sre"))
+
+    def test_platform_resolves_a_name_to_its_module(self):
+        self.assertEqual(adapters.platform("ashby").__name__, "adapters.ashby")
+        self.assertIsNone(adapters.platform("not-a-platform"))
+
+    def test_successfactors_identifies_both_result_shapes(self):
+        """hunt.py used to test SF_ROW and SF_TILE itself to decide whether a
+        careers page was an RMK site. RMK renders results as either."""
+        sf = adapters.platform("successfactors")
+        self.assertTrue(sf.looks_like('<table><tr class="data-row">x</tr></table>'))
+        self.assertTrue(sf.looks_like('<ul><li class="job-tile foo">x</li></ul>'))
+        for x in ("<p>careers</p>", "", None):
+            with self.subTest(x=x):
+                self.assertFalse(sf.looks_like(x))
+
+
 class TestGoldenMaster(unittest.TestCase):
     """259 real postings, with the verdict the code gives today.
 
@@ -340,19 +503,22 @@ class TestGoldenMaster(unittest.TestCase):
                         "testdata_golden.jsonl is missing - regenerate it")
         drift = []
         n = 0
-        for line in open(self.GOLDEN):
-            line = line.strip()
-            if not line:
-                continue
-            n += 1
-            c = json.loads(line)
-            tier, fam = jr.title_match(c["title"], c["company"])
-            bucket, keep = jr.classify_location(c["location"])
-            got = (tier, fam, bucket, keep, jr.level_of(c["title"]))
-            want = (c["tier"], c["family"], c["bucket"], c["keep"], c["level"])
-            if got != want:
-                drift.append(f"\n  {c['title'][:48]!r} @ {c['location'][:28]!r}"
-                             f"\n    was {want}\n    now {got}")
+        with open(self.GOLDEN) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                n += 1
+                c = json.loads(line)
+                tier, fam = jr.title_match(c["title"], c["company"])
+                bucket, keep = jr.classify_location(c["location"])
+                got = (tier, fam, bucket, keep, jr.level_of(c["title"]))
+                want = (c["tier"], c["family"], c["bucket"], c["keep"],
+                        c["level"])
+                if got != want:
+                    drift.append(
+                        f"\n  {c['title'][:48]!r} @ {c['location'][:28]!r}"
+                        f"\n    was {want}\n    now {got}")
         self.assertEqual(n, 259, "golden file changed size unexpectedly")
         self.assertFalse(drift,
                          f"{len(drift)} of {n} cases changed verdict:"

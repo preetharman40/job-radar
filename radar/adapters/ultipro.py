@@ -7,7 +7,7 @@ adapters/__init__.py for the contract every module here implements.
 import json
 import re
 
-from fetchcore import days_ago, job, strip_html, _get_text, _req
+from fetchcore import days_ago, get_text, job, req, strip_html
 
 
 # UKG's board is a JSON POST endpoint, not a REST GET:
@@ -69,7 +69,7 @@ def fetch_ultipro(t):
     out, skip, total = [], 0, None
     for _ in range(UKG_MAX_PAGES):
         try:
-            d = _req(board + "/JobBoardView/LoadSearchResults",
+            d = req(board + "/JobBoardView/LoadSearchResults",
                      {"opportunitySearch": {
                          "Top": UKG_TOP, "Skip": skip, "QuerySort": [],
                          "OpportunityFilter": {
@@ -110,7 +110,7 @@ def hydrate(j, kind):
     # The list call gives only a teaser. The detail page embeds the real
     # posting in a JSON "Description" string, so decode it as JSON
     # rather than hand-unescaping, then strip the HTML inside it.
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     m = UKG_DESC.search(h)
     body = h
     if m:

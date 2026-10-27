@@ -16,7 +16,10 @@ import argparse, concurrent.futures as cf, json, os, re, sys, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import job_radar as jr  # noqa: E402
+# Platform identification and the Workday probe belong to the adapters, which
+# is also what will poll the board once it is added - a token validated by
+# different code than the code that polls it is not validated.
+from adapters import successfactors, workday  # noqa: E402
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
@@ -87,7 +90,7 @@ def try_sf_url(url):
         return None
     if BOT.search(final):
         return None
-    if jr.SF_ROW.search(html) or jr.SF_TILE.search(html):
+    if successfactors.looks_like(html):
         # Redirects often land on /go/<saved-search>/<id> or /search/... - the
         # adapter needs the bare site root, not whatever view we arrived at.
         base = re.sub(r"/(search|go)/.*$", "", final).rstrip("/")
@@ -107,15 +110,9 @@ def try_wd_url(url):
         if site.lower() in ("en-us", "fr-ca", "en-ca", "job", "wday"):
             continue
         api = f"https://{t}.{c}.myworkdayjobs.com/wday/cxs/{t}/{site}/jobs"
-        facet = jr._wd_country_facet(api)
-        try:
-            d = jr._req(api, {"appliedFacets": {facet: [jr.WD_CANADA]} if facet else {},
-                              "limit": 1, "offset": 0, "searchText": "engineer"})
-        except Exception:
-            continue
-        if isinstance(d.get("total"), int):
-            return {"tenant": t, "cluster": c, "site": site,
-                    "country_facet": facet, "ca": d["total"]}
+        hit = workday.probe_canada(api)
+        if hit:
+            return {"tenant": t, "cluster": c, "site": site, **hit}
     return None
 
 
@@ -129,7 +126,7 @@ def try_sf(host):
             continue
         if BOT.search(final):
             return None
-        if jr.SF_ROW.search(html) or jr.SF_TILE.search(html):
+        if successfactors.looks_like(html):
             base = re.sub(r"/search/.*$", "", final).rstrip("/")
             return {"base": base}
     return None
@@ -149,15 +146,9 @@ def try_wd(host):
             if s.lower() in ("en-us", "fr-ca", "en-ca", "job", "wday"):
                 continue
             api = f"https://{t}.{c}.myworkdayjobs.com/wday/cxs/{t}/{s}/jobs"
-            facet = jr._wd_country_facet(api)
-            try:
-                d = jr._req(api, {"appliedFacets": {facet: [jr.WD_CANADA]} if facet else {},
-                                  "limit": 1, "offset": 0, "searchText": "engineer"})
-            except Exception:
-                continue
-            if isinstance(d.get("total"), int):
-                return {"tenant": t, "cluster": c, "site": s,
-                        "country_facet": facet, "ca": d["total"]}
+            hit = workday.probe_canada(api)
+            if hit:
+                return {"tenant": t, "cluster": c, "site": s, **hit}
     return None
 
 

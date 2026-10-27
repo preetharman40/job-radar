@@ -6,7 +6,7 @@ adapters/__init__.py for the contract every module here implements.
 
 import re
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # WordPress job plugins cap per_page at 100 and serve newest-first by default,
@@ -73,7 +73,7 @@ def fetch_wpjobs(t):
     out = []
     for page in range(1, WP_MAX_PAGES + 1):
         try:
-            rows = _req(f"{base}/wp-json/wp/v2/{rb}"
+            rows = req(f"{base}/wp-json/wp/v2/{rb}"
                         f"?per_page={WP_PER_PAGE}&page={page}"
                         f"&orderby=date&order=desc")
         except Exception:

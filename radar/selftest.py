@@ -31,6 +31,7 @@ Exit status is the number of failed checks, so `selftest.py && git commit`
 works. Standard library only.
 """
 import argparse
+import ast
 import glob
 import json
 import os
@@ -149,17 +150,25 @@ def _units():
     return False, "; ".join(fails[:3]) or out.strip()[-120:]
 
 
-@check(1, "every adapter is wired in, and every reach-in still resolves")
+@check(1, "module boundaries: every cross-module read is a declared name")
 def _interface():
-    """Eleven modules - and tailor/gaps.py, outside this tree - read attributes
-    off job_radar. The adapter extraction moved most of those attributes into
-    fetchcore and adapters/, so they survive only as re-exports. A dropped
-    re-export does not fail at import: it fails later, inside a try/except, as
-    a board that quietly returns nothing. Check the whole surface here."""
+    """Three modules declare a public surface - job_radar, fetchcore and
+    adapters - and every other script reads only from those lists.
+
+    Before this existed, nine scripts reached for privates: jr._req,
+    jr.SF_TILE, jr._ashby_wait, jr._SCRIPT. That is how the adapter extraction
+    nearly broke discover.py silently, so the rule is checked rather than
+    documented. hasattr() is not enough: a name that happens to exist but is
+    not in __all__ is a reach-in that works today and moves tomorrow.
+
+    Read with ast, not grep - a regex for `job_radar.X` also matches the
+    string "job_radar.py" in a comment, and the import aliases have to be
+    resolved per file anyway."""
     sys.path.insert(0, HERE)
     try:
-        import job_radar as jr
         import adapters
+        import fetchcore
+        import job_radar
     except Exception as e:
         return False, f"cannot import: {type(e).__name__}: {e}"
 
@@ -167,11 +176,10 @@ def _interface():
     # The layering only holds if it is one-way. An adapter that imports
     # job_radar makes the package circular and pointless.
     for f in sorted(glob.glob(os.path.join(HERE, "adapters", "*.py"))):
-        body = open(f).read()
-        if re.search(r"^\s*(?:import|from)\s+job_radar\b", body, re.M):
+        if re.search(r"^\s*(?:import|from)\s+job_radar\b", open(f).read(), re.M):
             problems.append(f"adapters/{os.path.basename(f)} imports job_radar")
 
-    targets = json.load(open(jr.TARGETS))
+    targets = json.load(open(job_radar.TARGETS))
     # keys starting with _ are the per-platform notes kept in targets.json
     platforms = {k for k in targets
                  if k != "devops_vendors" and not k.startswith("_")}
@@ -179,44 +187,80 @@ def _interface():
         problems.append(f"targets.json has no adapter for "
                         f"{sorted(platforms - set(adapters.ADAPTERS))}")
 
+    WATCHED = {"job_radar": job_radar, "fetchcore": fetchcore,
+               "adapters": adapters}
     files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
                    ["/home/harman/devops/tailor/gaps.py",
                     "/home/harman/devops/tailor/tailor.py"])
-    # job_radar.py defines the surface; this file quotes the patterns it greps
-    # for, so both would match themselves.
-    SELF_SKIP = ("job_radar.py", "selftest.py")
-    reach = {}
+    # job_radar and fetchcore define their own surfaces, and this checker has
+    # to read __all__ and _MODULES to do the checking, so all three would flag
+    # themselves.
+    reads = 0
     for f in files:
-        if os.path.basename(f) in SELF_SKIP or not os.path.exists(f):
+        if os.path.basename(f) in ("job_radar.py", "fetchcore.py",
+                                   "selftest.py") or not os.path.exists(f):
             continue
-        for m in re.finditer(r"\bjr\.([A-Za-z_][A-Za-z0-9_]*)", open(f).read()):
-            reach.setdefault(m.group(1), set()).add(os.path.basename(f))
-    for attr in sorted(reach):
-        if not hasattr(jr, attr):
-            problems.append(f"jr.{attr} is gone (read by "
-                            f"{', '.join(sorted(reach[attr]))})")
+        name = os.path.basename(f)
+        tree = ast.parse(open(f).read())
 
-    # Dynamic lookups are the dangerous ones: discover.py used
-    # getattr(jr, "fetch_" + platform, None), which returns None without
-    # raising, so the adapter move turned every board probe into a no-op and
-    # nothing said so. A literal `jr.X` grep cannot see that shape.
-    for f in files:
-        if os.path.basename(f) in SELF_SKIP or not os.path.exists(f):
-            continue
-        body = open(f).read()
-        for m in re.finditer(r'getattr\(\s*jr\s*,\s*"([A-Za-z_]+)"\s*\+', body):
-            for plat in sorted(adapters.ADAPTERS):
-                if not hasattr(jr, m.group(1) + plat):
-                    problems.append(f"{os.path.basename(f)} builds "
-                                    f"jr.{m.group(1)}<platform>, but "
-                                    f"{m.group(1)}{plat} does not resolve")
-                    break
-        if re.search(r"getattr\(\s*jr\s*,(?!\s*\")", body) or "vars(jr)" in body:
-            problems.append(f"{os.path.basename(f)} reads job_radar "
-                            f"attributes dynamically - cannot be verified here")
+        alias = {}                       # local name -> watched module
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    if a.name in WATCHED:
+                        alias[a.asname or a.name] = WATCHED[a.name]
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)):
+                continue
+            mod = alias.get(n.value.id)
+            if mod is None:
+                continue
+            reads += 1
+            if n.attr in getattr(mod, "__all__", ()):
+                continue
+            # a submodule reached through the package is fine: the import
+            # names the platform, which is the point
+            if mod is adapters and n.attr in adapters._MODULES:
+                continue
+            why = ("is private" if n.attr.startswith("_") else
+                   "exists but is not in __all__" if hasattr(mod, n.attr)
+                   else "does not exist")
+            problems.append(f"{name}:{n.lineno} reads "
+                            f"{n.value.id}.{n.attr} - {why}")
+
+            # Dynamic lookups are the dangerous ones: discover.py used
+            # getattr(jr, "fetch_" + platform, None), which returns None
+            # without raising, so the adapter move turned every board probe
+            # into a no-op and nothing said so.
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "getattr" and n.args
+                    and isinstance(n.args[0], ast.Name)):
+                continue
+            mod = alias.get(n.args[0].id)
+            if mod is None:
+                continue
+            arg = n.args[1] if len(n.args) > 1 else None
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                continue                 # a literal name: checked above in spirit
+            prefix = (arg.left.value if isinstance(arg, ast.BinOp)
+                      and isinstance(arg.left, ast.Constant) else None)
+            if isinstance(prefix, str):
+                for plat in sorted(adapters.ADAPTERS):
+                    if not hasattr(mod, prefix + plat):
+                        problems.append(f"{name}:{n.lineno} builds "
+                                        f"{n.args[0].id}.{prefix}<platform>, "
+                                        f"but {prefix}{plat} does not resolve")
+                        break
+            else:
+                problems.append(f"{name}:{n.lineno} reads "
+                                f"{n.args[0].id}.<computed> - "
+                                f"cannot be verified here")
+
     return not problems, (f"{len(adapters.ADAPTERS)} adapters, "
-                          f"{len(adapters.HYDRATORS)} hydrators, "
-                          f"{len(reach)} reach-ins ok"
+                          f"{len(job_radar.__all__)}+{len(fetchcore.__all__)}"
+                          f"+{len(adapters.__all__)} declared names, "
+                          f"{reads} cross-module reads ok"
                           if not problems else "; ".join(problems))
 
 

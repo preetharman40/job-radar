@@ -4,11 +4,11 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 def fetch_greenhouse(tok):
-    d = _req(f"https://boards-api.greenhouse.io/v1/boards/{tok}/jobs?content=false")
+    d = req(f"https://boards-api.greenhouse.io/v1/boards/{tok}/jobs?content=false")
     out = []
     for j in d.get("jobs", []):
         loc = (j.get("location") or {}).get("name", "")
@@ -29,6 +29,6 @@ def fetch_greenhouse(tok):
 def hydrate(j, kind):
     """The job detail carries the full content plus the office tags."""
     _, tok, jid = kind
-    d = _req(f"https://boards-api.greenhouse.io/v1/boards/{tok}/jobs/{jid}")
+    d = req(f"https://boards-api.greenhouse.io/v1/boards/{tok}/jobs/{jid}")
     j["blob"] += " " + strip_html(d.get("content", ""))[:8000]
     j["offices"] = [o.get("name", "") for o in (d.get("offices") or [])]

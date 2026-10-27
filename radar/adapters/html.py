@@ -8,7 +8,7 @@ from html import unescape as html_unescape
 import re
 import urllib.parse
 
-from fetchcore import days_ago, job, strip_html, _get_text
+from fetchcore import days_ago, get_text, job, strip_html
 
 
 # Last resort for careers sites that render their job list server-side but run
@@ -35,7 +35,7 @@ def fetch_html(t):
     keep = re.compile(t["link_re"], re.I) if t.get("link_re") else None
     default_loc = t.get("default_location", "")
     try:
-        h = _get_text(url)
+        h = get_text(url)
     except Exception:
         return []
 

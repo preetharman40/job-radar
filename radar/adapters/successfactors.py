@@ -8,7 +8,7 @@ from html import unescape as html_unescape
 import re
 import urllib.parse
 
-from fetchcore import job, strip_html, _TAG, _get_text
+from fetchcore import TAG, get_text, job, strip_html
 
 
 # Rogers, Scotiabank, Bombardier and much of Canadian enterprise. No JSON API
@@ -41,8 +41,19 @@ SF_QUERIES = ["devops", "sre", "reliability", "kubernetes", "linux", "cloud",
               "infrastructure", "platform", "automation", "support"]
 
 
+
+def looks_like(html):
+    """Does this page's markup say "SuccessFactors RMK"?
+
+    Public because hunt.py identifies careers pages before it knows which
+    adapter to hand them to, and the two result-row shapes this adapter parses
+    are the identifying evidence. It used to read SF_ROW and SF_TILE directly.
+    """
+    return bool(SF_ROW.search(html or "") or SF_TILE.search(html or ""))
+
+
 def _sf_text(x):
-    return re.sub(r"\s+", " ", html_unescape(_TAG.sub("", x))).strip()
+    return re.sub(r"\s+", " ", html_unescape(TAG.sub("", x))).strip()
 
 
 def _sf_date(x):
@@ -65,7 +76,7 @@ def fetch_successfactors(t):
         url = (f"{base}/search/?q={urllib.parse.quote(query)}"
                f"&startrow={start}")
         try:
-            h = _get_text(url)
+            h = get_text(url)
         except Exception:
             break
         rows, tiled = SF_ROW.findall(h), False
@@ -116,7 +127,7 @@ def expand(tok):
 
 def hydrate(j, kind):
     """The description sits in a jobdescription div on the posting page."""
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     m = re.search(r'<div[^>]*class="[^"]*jobdescription[^"]*"[^>]*>(.*?)'
                   r'</div>\s*(?:<div[^>]*class="[^"]*(?:jobbottom|clear))',
                   h, re.S | re.I)

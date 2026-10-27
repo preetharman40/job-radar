@@ -6,11 +6,11 @@ adapters/__init__.py for the contract every module here implements.
 
 from datetime import datetime, timezone
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 def fetch_lever(tok):
-    d = _req(f"https://api.lever.co/v0/postings/{tok}?mode=json")
+    d = req(f"https://api.lever.co/v0/postings/{tok}?mode=json")
     out = []
     for j in d if isinstance(d, list) else []:
         cat = j.get("categories") or {}

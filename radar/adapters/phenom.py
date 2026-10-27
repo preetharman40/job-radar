@@ -7,7 +7,7 @@ adapters/__init__.py for the contract every module here implements.
 import json
 import re
 
-from fetchcore import days_ago, job, strip_html, _get_text
+from fetchcore import days_ago, get_text, job, strip_html
 
 
 def _braces(h, i):
@@ -38,7 +38,7 @@ def fetch_phenom(t):
     out, frm, total = [], 0, None
     while frm < 120:
         try:
-            html = _get_text(f"{base}/search-results?from={frm}&s=1")
+            html = get_text(f"{base}/search-results?from={frm}&s=1")
         except Exception:
             break
         m = re.search(r"phApp\.ddo\s*=", html)
@@ -94,7 +94,7 @@ def hydrate(j, kind):
     # affected, City of Edmonton and Bell among them. The job page
     # carries the full text twice: in the phApp.ddo blob and in a
     # schema.org JobPosting block. Prefer the blob, fall back to JSON-LD.
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     desc = ""
     m = re.search(r'"description"\s*:\s*"((?:[^"\\]|\\.){200,})"', h)
     if m:

@@ -8,7 +8,7 @@ from html import unescape as html_unescape
 import re
 import urllib.parse
 
-from fetchcore import job, strip_html, _get_text, _req
+from fetchcore import get_text, job, req, strip_html
 
 
 # Taleo behind a Radancy TalentBrew career site (careers.<employer>.ca). Three
@@ -49,7 +49,7 @@ def fetch_taleo(t):
     claim = (f"{base}/ajax/jobs/{t['search_id']}/add/{facet}/{enc}"
              f"?keywords={enc}")
     try:
-        d = _req(claim)
+        d = req(claim)
     except Exception:
         return []
     if (d.get("Status") or "") != "OK":
@@ -69,7 +69,7 @@ def fetch_taleo(t):
     for pg in range(1, pages + 1):
         url = f"{base}/jobs/search/{sid}" + (f"/page{pg}" if pg > 1 else "")
         try:
-            h = _get_text(url)
+            h = get_text(url)
         except Exception:
             break
         for blk in re.findall(

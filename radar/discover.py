@@ -27,6 +27,16 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TARGETS = os.path.join(HERE, "targets.json")
+
+# The adapters package is the one part of the radar this file can depend on
+# eagerly: it imports nothing from job_radar, so a broken engine cannot take
+# board probing down with it. job_radar itself stays lazy, in _radar() below.
+sys.path.insert(0, HERE)
+try:
+    import adapters
+except Exception:                       # pragma: no cover - diagnostics tool
+    adapters = None
+
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Accept": "*/*", "Content-Type": "application/json"}
@@ -391,8 +401,7 @@ def probe_board(platform, target):
             return PROBES[platform](target)
         except Exception:
             return 0
-    jr = _radar()
-    fn = jr.ADAPTERS.get(platform) if jr else None
+    fn = adapters.ADAPTERS.get(platform) if adapters else None
     if not fn:
         return -1
     t = dict(target) if isinstance(target, dict) else target
@@ -414,8 +423,8 @@ def probe_board(platform, target):
 # produced a burst of HTTP 429s from Ashby during an earlier expansion pass.
 # The gap is per-platform so four hosts still progress in parallel.
 #
-# Ashby is deliberately NOT given a number here: it defers to the radar's own
-# _ashby_wait, so the probe and the sweep share ONE budget for
+# Ashby is deliberately NOT given a number here: it defers to the adapter's
+# own ashby.wait(), so the probe and the sweep share ONE budget for
 # jobs.ashbyhq.com. Setting it to 0 on the reasoning that "fetch_ashby paces
 # itself" was wrong and worth recording - the scan does not go through
 # fetch_ashby at all, it goes through p_ashby, which is this file's own
@@ -428,9 +437,8 @@ _GAP_LAST = {}
 
 def _probe_wait(platform):
     if platform == "ashby":
-        jr = _radar()
-        if jr and hasattr(jr, "_ashby_wait"):
-            jr._ashby_wait()
+        if adapters:
+            adapters.platform("ashby").wait()
             return
     gap = PROBE_GAP.get(platform, 0.35)
     if not gap:
@@ -453,8 +461,7 @@ def board_postings(platform, target):
     probe_board does: a token validated by different code than the code that
     will poll it is not validated.
     """
-    jr = _radar()
-    fn = jr.ADAPTERS.get(platform) if jr else None
+    fn = adapters.ADAPTERS.get(platform) if adapters else None
     if not fn:
         return None
     _probe_wait(platform)
@@ -674,17 +681,12 @@ def main():
 
         # Workday and Phenom targets are dicts, not tokens - verify them via
         # the radar's own adapters so a broken tenant/site shows up here.
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "job_radar", os.path.join(HERE, "job_radar.py"))
-        jr = importlib.util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(jr)
-        except Exception:
-            jr = None
-        if jr:
+        # This used to load job_radar.py by hand to reach its ADAPTERS; the
+        # registry lives in the adapters package now, so the engine does not
+        # have to be imported to verify a board.
+        if adapters:
             for src in ("workday", "phenom", "successfactors"):
-                fn = jr.ADAPTERS.get(src)
+                fn = adapters.ADAPTERS.get(src)
                 for tgt in tg.get(src, []):
                     if not fn:
                         continue

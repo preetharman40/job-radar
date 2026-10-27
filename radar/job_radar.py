@@ -52,16 +52,28 @@ if HERE not in sys.path:
 import adapters                                                   # noqa: E402
 from adapters import ADAPTERS, WD_TRUNCATED                       # noqa: E402
 
-# Compat shim, not used here. board_health, canada_employers, discover, hunt,
-# verify_tracked and tailor/gaps.py read these off this module; re-exporting
-# keeps every one of them working across the move. Pointing them at
-# `fetchcore` and `adapters` directly is the next architecture step, and
-# selftest asserts this list still covers every attribute they read.
-from fetchcore import (UA, _COMMENT, _SCRIPT, _get_text, _req,     # noqa: E402,F401
-                       strip_html)
-from adapters import (ASHBY_ONE, SF_QUERIES, SF_ROW, SF_TILE,      # noqa: E402,F401
-                      WD_CANADA, WD_QUERIES, _ashby_wait,
-                      _wd_country_facet)
+# What the rest of the radar may read off this module. Everything here is
+# this file's own: paths, the classifier, the scorer, the tracker, the locks
+# and the push. Transport lives in `fetchcore` and anything platform-specific
+# in `adapters`, and callers import those directly - this module used to
+# re-export both, which is how nine scripts ended up depending on privates
+# like `jr._req` and `jr.SF_TILE`. selftest asserts every `jr.X` in the tree
+# is named below.
+__all__ = [
+    # paths and config
+    "DB", "TARGETS", "TRACKER", "NTFY_FILE", "HERE", "VENDORS",
+    # title / level / location / score - the pure core
+    "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
+    "title_match", "level_of", "classify_location", "provinces_of",
+    "arrangement", "canadian_option", "score", "band_of",
+    # per-posting checks that need the classifier
+    "offshore_marker", "office_mismatch",
+    # pipeline
+    "hydrate", "append_to_tracker", "main",
+    # infrastructure
+    "FileLock", "TRACKER_LOCK", "db", "db_write", "atomic_write",
+    "notify", "ntfy_topic",
+]
 
 VENDORS = set()   # filled from targets.json at startup
 

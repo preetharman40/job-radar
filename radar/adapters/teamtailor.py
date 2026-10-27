@@ -4,7 +4,7 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # The best-shaped platform in this file. `{tenant}.teamtailor.com/jobs.json` is
@@ -64,7 +64,7 @@ def fetch_teamtailor(t):
     out, seen = [], set()
     for page in range(1, TT_MAX_PAGES + 1):
         try:
-            d = _req(f"{base}/jobs.json?per_page={TT_PER_PAGE}&page={page}")
+            d = req(f"{base}/jobs.json?per_page={TT_PER_PAGE}&page={page}")
         except Exception:
             break
         items = d.get("items") or []

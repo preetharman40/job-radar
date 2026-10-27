@@ -25,6 +25,9 @@ from html import unescape as html_unescape
 from datetime import datetime, timezone
 
 
+__all__ = ["UA", "TAG", "days_ago", "drop_scripts", "get_text", "job",
+           "long_date", "req", "strip_html"]
+
 UA = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -51,7 +54,7 @@ class _Redirect308(urllib.request.HTTPRedirectHandler):
 urllib.request.install_opener(urllib.request.build_opener(_Redirect308))
 
 
-def _req(url, data=None, timeout=25, retries=2):
+def req(url, data=None, timeout=25, retries=2):
     """Retry on transport failures - at 400+ concurrent tasks a single blip
     would otherwise silently drop a whole board from the results."""
     last = None
@@ -69,13 +72,15 @@ def _req(url, data=None, timeout=25, retries=2):
     raise last
 
 
-def _get_text(url, timeout=25):
+def get_text(url, timeout=25):
     r = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(r, timeout=timeout) as f:
         return f.read().decode("utf-8", "replace")
 
 
-_TAG = re.compile(r"<[^>]+>")
+# Public, unlike the rest of these: SuccessFactors needs tag removal without
+# the space strip_html() inserts, so the regex itself is part of the interface.
+TAG = re.compile(r"<[^>]+>")
 _ENT = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'",
         "&nbsp;": " ", "&rsquo;": "'", "&ndash;": "-", "&mdash;": "-"}
 _NUM_ENT = {"&#8211;": "-", "&#8212;": "-", "&#8217;": "'", "&#8216;": "'",
@@ -93,12 +98,22 @@ _SCRIPT = re.compile(r"(?is)<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>
 _COMMENT = re.compile(r"(?s)<!--.*?-->")
 
 
+def drop_scripts(h):
+    """HTML with script/style bodies and comments removed, markup intact.
+
+    What you want when you are searching the page's own text for a phrase
+    rather than extracting prose - verify_tracked looks for "no longer
+    accepting applications", and a Google Tag Manager blob can contain
+    anything.
+    """
+    return _COMMENT.sub(" ", _SCRIPT.sub(" ", h or ""))
+
+
 def strip_html(h):
     if not h:
         return ""
-    h = _SCRIPT.sub(" ", h)
-    h = _COMMENT.sub(" ", h)
-    t = _TAG.sub(" ", h)
+    h = drop_scripts(h)
+    t = TAG.sub(" ", h)
     for k, v in _ENT.items():
         t = t.replace(k, v)
     # Numeric entities survived this stripper until now, so WordPress REST

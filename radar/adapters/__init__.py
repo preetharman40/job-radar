@@ -19,6 +19,9 @@ that needs a posting re-classified changes `job["location"]` and lets
 job_radar.hydrate() re-derive the geo fields.
 
 Adding a platform is therefore: write one module here, add two lines below.
+
+Nothing here imports job_radar, and nothing here may: the dependency runs one
+way, and selftest asserts it.
 """
 
 import os
@@ -49,15 +52,21 @@ def expand(src, tok):
     return fn(tok) if fn else [tok]
 
 
-# Names the rest of the radar reads. Re-exported here so callers need one
-# import, not one per platform.
-from .workday import WD_CANADA, WD_QUERIES, WD_TENANT_BURST, WD_TRUNCATED  # noqa: E402,F401
-from .workday import _wd_country_facet                                    # noqa: E402,F401
-from .successfactors import SF_QUERIES, SF_ROW, SF_TILE                   # noqa: E402,F401
-from .oracle import ORC_QUERIES                                           # noqa: E402,F401
-from .jobvite import JV_QUERIES                                           # noqa: E402,F401
-from .avature import AV_QUERIES                                           # noqa: E402,F401
-from .ashby import ASHBY_ONE, _ashby_wait                                 # noqa: E402,F401
+# The package's own surface. Anything platform-specific is reached through its
+# module - `from adapters import successfactors` then `successfactors.
+# looks_like(html)` - so that a caller's import says which platform it depends
+# on. WD_TRUNCATED is here because the sweep report is written by job_radar and
+# the truncation it reports is detected by the adapter.
+__all__ = ["ADAPTERS", "HYDRATORS", "WD_TRUNCATED", "expand", "platform"]
+
+from .workday import WD_TRUNCATED                                  # noqa: E402,F401
+
+
+def platform(name):
+    """The module that handles `name`, or None. For callers that hold a
+    platform string rather than an import."""
+    return _MODULES.get(name)
+
 
 # A module that is importable but not wired in would silently drop every board
 # on its platform - the failure mode that costs a day to notice. Fail at import

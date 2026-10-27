@@ -4,11 +4,11 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import job, _req
+from fetchcore import job, req
 
 
 def fetch_rippling(tok):
-    d = _req(f"https://api.rippling.com/platform/api/ats/v1/board/{tok}/jobs")
+    d = req(f"https://api.rippling.com/platform/api/ats/v1/board/{tok}/jobs")
     out = []
     for j in d if isinstance(d, list) else []:
         loc = j.get("workLocation", {}).get("label", "") or j.get("locationName", "")

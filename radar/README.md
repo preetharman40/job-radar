@@ -13,7 +13,7 @@ python3 serve.py                # web view on :8737
 |---|---|
 | `job_radar.py` | The engine — filtering, scoring, state, tracker, notification, reporting |
 | `adapters/` | **One module per ATS platform**, 21 of them. `fetch_*` (pass 1), `hydrate` (pass 2), `expand` (per-query fan-out). Adding a platform is one file plus two lines in `adapters/__init__.py` |
-| `fetchcore.py` | HTTP transport, HTML→text, and `job()` — the record shape the whole pipeline agrees on. Imports nothing from the radar |
+| `fetchcore.py` | HTTP transport (`req`, `get_text`), HTML→text, and `job()` — the record shape the whole pipeline agrees on. Imports nothing from the radar |
 | `fast.sh` | Cron lane 1: the productive boards from `fast.json`, every 5 min |
 | `daily.sh` | Cron lane 2: all 544 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
@@ -45,6 +45,15 @@ python3 serve.py                # web view on :8737
 | `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot. `--boards` reads ATS tokens out of the links; `--employers` resolves the employer **by name** for LinkedIn mail, which carries no token at all, and vets each board against the title that was mailed. Runs daily 19:52 with `--notify --track --add-employer-boards` |
 | `hn.py` | Hacker News "Who is hiring?" |
 | `signals.py` | Funding rounds, before the requisition exists |
+
+**Module boundaries.** Three modules declare a public surface and nothing
+re-exports anything: `job_radar.__all__` (paths, classifier, scorer, tracker,
+locks, push), `fetchcore.__all__` (transport and HTML), `adapters.__all__`
+(`ADAPTERS`, `HYDRATORS`, `expand`, `platform`, `WD_TRUNCATED`). Platform
+specifics are reached through the module — `from adapters import workday` —
+so an import line says which platform a file depends on. `selftest.py`
+tier 1 reads the tree with `ast` and fails if any script reads a name that is
+private or absent from the owning module's `__all__`.
 
 | Data | |
 |---|---|

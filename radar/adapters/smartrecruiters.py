@@ -4,7 +4,7 @@ Part of the adapters package: one module per ATS platform. See
 adapters/__init__.py for the contract every module here implements.
 """
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # SmartRecruiters sorts every listing newest-first, so capping pages keeps the
@@ -30,7 +30,7 @@ def fetch_smartrecruiters(tok):
     """
     out, offset = [], 0
     for _ in range(SR_MAX_PAGES):
-        d = _req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
+        d = req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
                  f"/postings?limit=100&offset={offset}")
         rows = d.get("content") or []
         for j in rows:
@@ -61,7 +61,7 @@ def fetch_smartrecruiters(tok):
 def hydrate(j, kind):
     """The posting detail splits the description across three jobAd sections."""
     _, tok, jid = kind
-    d = _req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
+    d = req(f"https://api.smartrecruiters.com/v1/companies/{tok}"
              f"/postings/{jid}")
     secs = (d.get("jobAd") or {}).get("sections") or {}
     j["blob"] += " " + strip_html(" ".join(

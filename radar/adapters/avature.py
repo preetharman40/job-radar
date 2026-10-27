@@ -8,7 +8,7 @@ from html import unescape as html_unescape
 import re
 import urllib.parse
 
-from fetchcore import job, strip_html, _get_text
+from fetchcore import get_text, job, strip_html
 
 
 # Avature is the first adapter here with no JSON endpoint AND no date anywhere.
@@ -66,7 +66,7 @@ def fetch_avature(t):
         if q:
             url += "&search=" + urllib.parse.quote(q)
         try:
-            h = _get_text(url)
+            h = get_text(url)
         except Exception:
             break
         rows = AV_ROW.findall(h)
@@ -111,6 +111,6 @@ def hydrate(j, kind):
     # datePosted either - so this pass only enriches the blob. The
     # description lives in article__content__view; fall back to the
     # whole page rather than returning nothing if the class is renamed.
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     m = re.search(r'class="article__content__view"[^>]*>(.*)', h, re.S)
     j["blob"] += " " + strip_html(m.group(1) if m else h)[:8000]

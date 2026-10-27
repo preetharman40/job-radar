@@ -7,7 +7,7 @@ adapters/__init__.py for the contract every module here implements.
 import re
 import urllib.parse
 
-from fetchcore import days_ago, job, strip_html, _get_text
+from fetchcore import days_ago, get_text, job, strip_html
 
 
 # Server-rendered HTML, no JSON API, but the markup is stable and simple:
@@ -31,7 +31,7 @@ def fetch_jobvite(t):
     q = t.get("_query", "")
     url = f"{base}/search" + (f"?q={urllib.parse.quote(q)}" if q else "")
     try:
-        h = _get_text(url)
+        h = get_text(url)
     except Exception:
         return []
     out = []
@@ -55,7 +55,7 @@ def expand(tok):
 
 def hydrate(j, kind):
     """The posting page is the only place Jobvite exposes datePosted."""
-    h = _get_text(kind[1])
+    h = get_text(kind[1])
     m = JV_DATE.search(h)
     if m:
         j["posted"] = m.group(1)

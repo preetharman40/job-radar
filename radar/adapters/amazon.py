@@ -7,7 +7,7 @@ adapters/__init__.py for the contract every module here implements.
 import re
 import urllib.parse
 
-from fetchcore import days_ago, job, long_date, strip_html, _req
+from fetchcore import days_ago, job, long_date, req, strip_html
 
 
 # amazon.jobs caps result_limit at 100 and pages with offset. Asking for more
@@ -46,7 +46,7 @@ def fetch_amazon(t):
     query = t.get("query", "")
     out, seen = [], set()
     for page in range(AMZ_MAX_PAGES):
-        d = _req("https://www.amazon.jobs/en/search.json"
+        d = req("https://www.amazon.jobs/en/search.json"
                  f"?base_query={urllib.parse.quote(query)}&loc_query="
                  f"&country={urllib.parse.quote(country)}"
                  f"&result_limit={AMZ_PER_PAGE}&offset={page * AMZ_PER_PAGE}")

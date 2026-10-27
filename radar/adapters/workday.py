@@ -8,7 +8,7 @@ import re
 import threading
 import time
 
-from fetchcore import days_ago, job, strip_html, _req
+from fetchcore import days_ago, job, req, strip_html
 
 
 # Workday's GUID for Canada is the same value in every tenant, but the NAME of
@@ -39,7 +39,7 @@ def _wd_country_facet(api):
         return _WD_FACET_CACHE[api]
     name = None
     try:
-        d = _req(api, {"appliedFacets": {}, "limit": 1, "offset": 0,
+        d = req(api, {"appliedFacets": {}, "limit": 1, "offset": 0,
                        "searchText": ""})
 
         def walk(vals):
@@ -63,6 +63,27 @@ def _wd_country_facet(api):
 # Enterprise Workday tenants carry thousands of Canadian reqs (TD alone has
 # ~1,029). Paging all of them costs ~51 requests per tenant to then throw 98%
 # away. Ask the server for the roles we want instead.
+
+def probe_canada(api):
+    """Is this a live Workday jobs API, and how many Canadian reqs has it?
+
+    -> {"country_facet": <name or None>, "ca": <count>} or None.
+
+    The facet parameter that carries Country is named per tenant, so a probe
+    has to detect it before it can filter; hunt.py had both halves of this
+    inlined twice. Keeping it here means the discovery probe and the sweep
+    agree about what a Workday board is.
+    """
+    facet = _wd_country_facet(api)
+    try:
+        d = req(api, {"appliedFacets": {facet: [WD_CANADA]} if facet else {},
+                      "limit": 1, "offset": 0, "searchText": "engineer"})
+    except Exception:
+        return None
+    return {"country_facet": facet, "ca": d["total"]} \
+        if isinstance(d.get("total"), int) else None
+
+
 WD_QUERIES = ["devops", "site reliability", "platform engineer", "cloud engineer",
               "infrastructure engineer", "kubernetes", "linux", "support engineer",
               "automation engineer", "systems engineer",
@@ -194,7 +215,7 @@ def fetch_workday(t):
         shallow_by_choice = bool(want)
         out, offset, total = [], 0, None
         for _ in range(max_pages):
-            d = _req(api, {"appliedFacets": applied, "limit": WD_PAGE,
+            d = req(api, {"appliedFacets": applied, "limit": WD_PAGE,
                            "offset": offset, "searchText": query})
             posts = d.get("jobPostings", [])
             if not posts:
@@ -236,7 +257,7 @@ def expand(tok):
 def hydrate(j, kind):
     """The posting detail carries the real description, the exact start date,
     and - behind a "N Locations" placeholder - the actual city list."""
-    d = _req(kind[1])
+    d = req(kind[1])
     ji = d.get("jobPostingInfo") or {}
     j["blob"] += " " + strip_html(ji.get("jobDescription", ""))[:8000]
     if WD_NLOC.match(j.get("location") or ""):
