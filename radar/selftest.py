@@ -134,6 +134,19 @@ def _logrotate():
     return not errs, "no errors" if not errs else "; ".join(errs)
 
 
+@check(1, "unit tests for the pure functions")
+def _units():
+    """Tier 1 because they are instant (~0.05s) and because they catch the
+    class of bug selftest's own smoke tests cannot: a sweep that completes
+    happily while classify_location has quietly changed its mind."""
+    rc, out = sh(sys.executable, "-m", "unittest", "test_pure", timeout=120)
+    if rc == 0:
+        n = re.search(r"Ran (\d+) tests", out)
+        return True, f"{n.group(1) if n else '?'} tests pass"
+    fails = [l for l in out.splitlines() if l.startswith(("FAIL:", "ERROR:"))]
+    return False, "; ".join(fails[:3]) or out.strip()[-120:]
+
+
 @check(1, "no secret is tracked by git")
 def _secrets():
     must_ignore = ["radar/inbox.json", "radar/.ntfy_topic", "applications.md",

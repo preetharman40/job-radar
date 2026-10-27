@@ -1422,6 +1422,62 @@ exits 0 only if all five pass.
 
 ---
 
+## unit tests, as the safety net a refactor needs
+
+`selftest.py` proves the lanes **run**. `test_pure.py` proves they still
+**decide the same way**, which is a different question and the one that matters
+when moving code. A sweep that completes happily while `classify_location` has
+started reading `Americana, Los Angeles` as American is a worse failure than a
+crash, because nothing reports it.
+
+26 tests over the pure functions - `classify_location`, `title_match`,
+`level_of`, `score`, `discover.variants`, `title_overlap`, the LinkedIn digest
+parsers, and ratecheck's two patterns. They run in 0.05s, so they sit in tier 1
+of the selftest and therefore run on every commit through the pre-commit hook.
+
+Two rules shaped the file.
+
+**Every expectation was produced by running the function, never by reasoning
+about what it ought to return.** That is not pedantry. Two expectations written
+the other way round earlier the same day were wrong, and
+`Remote (United States / Canada)` returns `CA`, not the `CA-OPTION` the name
+suggests. The first run of the suite also failed on
+`test_li_segments_groups_by_job_id` - and the **fixture** was wrong, not the
+parser: `LI_VIEW` anchors on the `linkedin.com` host, so a relative href is not
+a posting link. Keeping the real URL shape rather than the convenient one is
+the point of the test.
+
+**Most cases are regressions for bugs that actually happened**, taken from the
+comments that record them: `Americana` as a Brazilian city and a Los Angeles
+mall, `Burlington, MA` read as Canadian, `Kubernetes (K8s)` scoring one skill
+twice, `Power BI & Power Platform Administrator` slipping past the platform
+rule, `enterprise` resolving to a Recruitee demo account, `SRE` matching half
+the internet, `429` matched as a substring of a job id, and `workday/TC Energy`
+dropped from a report because `\S+` cannot hold a space. Each of those has
+already cost somebody a day; they are the highest-value assertions in the file.
+
+### the golden master is what protects the refactor
+
+The hand-written cases cover what someone thought to write down.
+`testdata_golden.jsonl` covers what nobody did: **259 real postings**,
+stratified across every one of the 24 `(bucket, tier)` combinations present in
+a 56,524-posting snapshot, each carrying the verdict the code gives today. A
+uniform random sample would have been 95% `OTHER`/tier-0 and would have tested
+almost nothing.
+
+It asserts only that behaviour has not **changed**, not that it is right. When
+a change is deliberate, regenerating the file turns the diff into a record of
+exactly which postings moved - which is the review you actually want before
+shipping a scoring or geography change.
+
+Verified by breaking the code on purpose: changing one character in the
+Americas rule (`americas` -> `america`) failed three hand-written cases and
+named the six real postings that moved, including `United States of America`
+flipping from `US-ONLY` to `NA-REMOTE`. A failing unit test fails the selftest,
+which blocks the commit.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that

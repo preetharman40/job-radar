@@ -31,6 +31,7 @@ python3 serve.py                # web view on :8737
 | `alert.sh` | systemd `OnFailure=` handler, so a crash in the *watchdog* is not silent |
 | `notify_send.py` | **The only path to your phone.** Retries, then queues anything ntfy cannot take and re-sends it on recovery. `--status` shows the backlog, `--drain` flushes it |
 | `logrotate.conf` | 12 weekly generations, compressed. Replaced a cron job that **deleted** any log over 5MB |
+| `test_pure.py` | **26 unit tests** for the pure functions, plus a 259-case golden master over real postings. 0.05s, runs inside `selftest` on every commit |
 | `selftest.py` | **Run after every change.** 23 checks in 4 tiers: scripts parse, cron paths exist, services up, DB sound, and each lane actually runs. `--quick` skips the network tier |
 | `pre-commit.hook` | Runs `selftest.py --quick` before each commit — **installed** as a symlink at `.git/hooks/pre-commit`, so edits here take effect with no reinstall. Verified to refuse a commit whose Python does not parse. Bypass once with `git commit --no-verify`; add the smoke tier with `RADAR_FULL_SELFTEST=1` |
 | `install_sudo_bits.sh` | The two root changes, as one auditable script: `sudo bash radar/install_sudo_bits.sh` |
