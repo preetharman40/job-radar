@@ -166,7 +166,18 @@ def gaps(rows, days):
         by[r["label"]].append(r)
     print(f"  lanes whose last run is overdue for their cadence:\n")
     found = False
+    skipped = []
     for lane_name, (desc, hours) in sorted(CADENCE.items()):
+        # A window shorter than the cadence cannot prove anything. Asking
+        # "did the Sunday lane run?" on a Tuesday with --days 1 is not a
+        # question the data can answer, and reporting it as a gap made this
+        # command cry wolf about seven lanes at once - the weekly ones, the
+        # Monday one, and the two that simply had not come round yet today.
+        # 1.5x so a daily lane needs a day and a half of silence, not 24h
+        # and a minute, before it is called missing.
+        if days * 24 < hours * 1.5:
+            skipped.append((lane_name, hours))
+            continue
         rs = by.get(lane_name)
         if not rs:
             print(f"  {lane_name:11} NO RUNS in {days}d   ({desc})")
@@ -183,6 +194,13 @@ def gaps(rows, days):
             found = True
     if not found:
         print("  none - every lane has run within its expected interval")
+    if skipped:
+        need = max(h * 1.5 / 24 for _n, h in skipped)
+        print(f"\n  not assessed, window too short to tell ({days}d):")
+        print("    " + ", ".join(f"{n} (every {h:g}h)" for n, h in skipped))
+        # Computed, not guessed: a hint that names a window still too short to
+        # answer the question is worse than no hint.
+        print(f"    use --days {need:.0f} or more to assess all of these")
 
 
 def main():

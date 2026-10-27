@@ -26,6 +26,7 @@ python3 serve.py                # web view on :8737
 | `cronwrap.sh` | Wraps a cron lane and pushes its failure to ntfy. A silent failure is a data gap |
 | `refresh_fast.sh` | Weekly `fast.json` rebuild from a full `--no-claim` sweep (Sun 05:10) |
 | `SUDO_SETUP.md` | The two root commands that let cron be restarted automatically |
+| `morning_check.sh` | **One command for "is it fine?"** — lane activity, gaps, failures with tails, undelivered pushes, and the selftest. Exits 0 only if all five are clean |
 | `logq.py` | **Query the run history.** `--failures`, `--gaps`, `--lane X`. Reads `events.jsonl`, which `cronwrap.sh` appends one JSON record to per run |
 | `alert.sh` | systemd `OnFailure=` handler, so a crash in the *watchdog* is not silent |
 | `notify_send.py` | **The only path to your phone.** Retries, then queues anything ntfy cannot take and re-sends it on recovery. `--status` shows the backlog, `--drain` flushes it |

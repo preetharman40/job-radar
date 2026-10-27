@@ -1394,6 +1394,34 @@ the control in a test.
 
 ---
 
+## a gap check that cannot tell must say so
+
+`logq.py --gaps` reports lanes overdue for their cadence. Run on a Tuesday with
+`--days 1` it flagged **seven of ten lanes as missing** - the three weekly ones
+and the Monday one, which were not due; and `backup` and `inbox`, which run at
+18:40 and 19:52 and had simply not come round yet.
+
+All seven were false. A window shorter than a lane's cadence cannot answer the
+question at all: asking "did the Sunday lane run?" on a Tuesday within a
+one-day window is not a gap, it is an unanswerable query. A health check that
+cries wolf about most of the system is worse than none, because the real
+signal is then indistinguishable from the noise.
+
+It now assesses a lane only when the window is at least 1.5x its cadence - so a
+daily lane needs a day and a half of silence, not twenty-four hours and a
+minute - and prints the lanes it could *not* assess, with the window that would
+be long enough. That figure is computed from the cadences present rather than
+written down, because a hint naming a window still too short to answer the
+question is worse than no hint: the first version suggested `--days 8` for
+lanes needing 10.5.
+
+`morning_check.sh` wraps the five things that together mean "clean", because
+any one of them alone can look fine while another is broken: did every lane
+run, did any fail, is anything undelivered, and is the system itself sound. It
+exits 0 only if all five pass.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
