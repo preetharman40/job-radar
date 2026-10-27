@@ -29,7 +29,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -117,6 +117,38 @@ def db():
 def tracked_urls(path):
     src = open(path, encoding="utf-8").read()
     return re.findall(r"^- \*\*Apply:\*\* (\S+)", src, re.M)
+
+
+# How long an aggregator row is given before it is called stale. The posting
+# cannot be fetched to find out (see SKIP_HOSTS), so the only evidence is when
+# it entered the tracker. 45 days is deliberately generous: the radar already
+# refuses anything over --max-age 30 at discovery, so a row found 45 days ago
+# describes a requisition that was open at least 45 days and usually much
+# longer. Short enough to clear the backlog, long enough that nothing current
+# gets labelled.
+AGGREGATOR_STALE_DAYS = 45
+
+
+def tracked_found(path):
+    """{apply_url: Found date} for every tracked row that records one.
+
+    Aggregator rows carry no fetchable state, so their age is the only signal
+    available, and `- **Found:** YYYY-MM-DD` is the one date inbox.py writes
+    that is definitely true - `Posted` is "? (unknown age)" for mail rows
+    because a digest snippet carries no publication date.
+    """
+    src = open(path, encoding="utf-8").read()
+    out, url = {}, None
+    for line in src.splitlines():
+        m = re.match(r"^- \*\*Apply:\*\* (\S+)", line)
+        if m:
+            url = m.group(1)
+            continue
+        m = re.match(r"^- \*\*Found:\*\* (\d{4}-\d{2}-\d{2})", line)
+        if m and url:
+            out[url] = m.group(1)
+            url = None
+    return out
 
 
 def check(url):
@@ -214,12 +246,43 @@ def main():
     # A row written before SKIP_HOSTS existed could still be sitting at
     # state='gone', hiding a job nothing will ever re-check. Clear them.
     if skip and not a.dry_run:
-        stale = [(u,) for u in skip if u in
-                 {r[0] for r in conn.execute("SELECT url FROM tracked_live")}]
-        if stale:
-            conn.executemany("DELETE FROM tracked_live WHERE url=?", stale)
+        legacy = [(u,) for u in skip if u in
+                  {r[0] for r in conn.execute(
+                      "SELECT url FROM tracked_live WHERE state='gone'")}]
+        if legacy:
+            conn.executemany("DELETE FROM tracked_live WHERE url=?", legacy)
             conn.commit()
-            print(f"  cleared {len(stale)} stale row(s) for skipped hosts")
+            print(f"  cleared {len(legacy)} stale 'gone' row(s) for skipped hosts")
+
+        # Age aggregator rows instead of leaving them in no state at all.
+        # Absent from tracked_live was the right call for "do not hide it", but
+        # it also meant these rows never changed: 135 LinkedIn rows had no
+        # state, no first_seen and no way to tell a req found yesterday from
+        # one found in September, so the tracker kept showing all of them as
+        # current forever.
+        #
+        # `stale` is deliberately NOT `gone`. serve.py's expired set collects
+        # only state='gone', and purge_expired.py deletes on that field, so a
+        # stale row is surfaced to the reader and can never be deleted by the
+        # purge - which matters, because one of these may be a job that was
+        # applied to and a lost application record cannot be rebuilt.
+        found = tracked_found(a.tracker)
+        # Its own timestamp: `now` further down is assigned after this block,
+        # and closing over it here referenced it before assignment.
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=AGGREGATOR_STALE_DAYS)).strftime("%Y-%m-%d")
+        aged = [(u, "stale", 0, stamp, f"not fetchable; found {found[u]}")
+                for u in skip if found.get(u) and found[u] < cutoff]
+        if aged:
+            def _age():
+                conn.executemany(
+                    "INSERT INTO tracked_live VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(url) DO UPDATE SET state=excluded.state, "
+                    "checked=excluded.checked, detail=excluded.detail", aged)
+            if jr.db_write(conn, _age, label="aggregator ageing"):
+                print(f"  marked {len(aged)} aggregator row(s) stale "
+                      f"(found over {AGGREGATOR_STALE_DAYS} days ago)")
     prior = {u: (s, m) for u, s, m in
              conn.execute("SELECT url, state, misses FROM tracked_live")}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

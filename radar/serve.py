@@ -99,9 +99,10 @@ def live_urls():
         rows = list(c.execute("SELECT url, state FROM tracked_live"))
         checked = c.execute("SELECT MAX(checked) FROM tracked_live").fetchone()[0]
         c.close()
-        return {u for u, st in rows if st == "gone"}, checked
+        return ({u for u, st in rows if st == "gone"},
+                {u for u, st in rows if st == "stale"}, checked)
     except Exception:
-        return set(), None
+        return set(), set(), None
 
 
 def parse(path):
@@ -128,7 +129,7 @@ def parse(path):
         blocks[n] = {"title": title, "fields": fields, "checks": checks,
                      "prose": prose}
 
-    gone, swept = live_urls()
+    gone, aged, swept = live_urls()
     jobs = []
     for m in ROW.finditer(src):
         n = int(m.group(1))
@@ -171,10 +172,18 @@ def parse(path):
             # Expired only if verify_tracked.py has confirmed it gone. Absence
             # of evidence is not evidence - an unchecked job stays visible.
             "expired": f.get("Apply", "") in gone,
+            # Separate from `expired` on purpose. These are aggregator rows -
+            # LinkedIn and friends - that cannot be fetched to find out whether
+            # the req is still open, so they are judged on age alone. Calling
+            # them expired would be a claim the tool cannot support, and would
+            # also hand them to purge_expired.py, which deletes on that field.
+            # `stale` means "probably closed, unverifiable, decide yourself".
+            "stale": f.get("Apply", "") in aged,
         })
     jobs.sort(key=lambda j: -j["score"])
     return {"jobs": jobs, "count": len(jobs),
             "expired": sum(1 for j in jobs if j["expired"]),
+            "stale": sum(1 for j in jobs if j["stale"]),
             "swept": swept or "",
             "updated": time.strftime("%Y-%m-%d %H:%M:%S")}
 
