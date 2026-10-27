@@ -5,7 +5,7 @@ ATS APIs directly — the same JSON endpoints a careers page calls in your brows
 — so a requisition surfaces **minutes after a recruiter clicks Publish**, hours
 to weeks before it reaches LinkedIn, Indeed or Google Jobs.
 
-**469 boards · 20 ATS adapters · ~49,200 postings scanned in ~215 seconds.**
+**529 boards · 21 ATS adapters · ~49,200 postings scanned in ~215 seconds.**
 
 Design notes, per-platform quirks, and the things that turned out not to work:
 **[ARCHITECTURE.md](ARCHITECTURE.md)**.
@@ -23,7 +23,7 @@ Design notes, per-platform quirks, and the things that turned out not to work:
 | Duplicates | same req posted by 4 recruiters | one row per req |
 | Blocking | scraping gets your account limited | these are public JSON endpoints |
 
-The trade-off is coverage: this is an **allowlist, not a crawl**. It sees the 469
+The trade-off is coverage: this is an **allowlist, not a crawl**. It sees the 529
 boards it has been told about and nothing else. Growing that list is covered in
 [§8](#8-growing-coverage).
 
@@ -69,7 +69,7 @@ python3 serve.py          # http://localhost:8737
 Two passes. The first is cheap and wide, the second is expensive and narrow.
 
 ```
-  469 boards × 20 adapters          ~1,000 parallel fetches
+  529 boards × 21 adapters          ~1,000 parallel fetches
             │
             ▼
   PASS 1   listing data only        ~48,000 postings, titles + locations
@@ -81,7 +81,7 @@ Two passes. The first is cheap and wide, the second is expensive and narrow.
   TITLE filter    ──── 21 regex rules → (weight, family)   no match = dropped
             │                                               ~1.2% survive
             ▼
-  LOCATION filter ──── CA / NA-REMOTE / MULTI kept
+  LOCATION filter ──── CA / CA-OPTION / NA-REMOTE / MULTI / GLOBAL kept
             │          US-ONLY / OTHER dropped
             ▼
   PASS 2   hydrate ──── fetch the FULL job description, but only for the
@@ -149,19 +149,21 @@ Tune the thresholds for your own search:
 --family vendor          only vendor support roles
 --province AB,BC         only these provinces
 --bucket CA              Canada-based only, drop US/Canada-ambiguous remote
+--bucket CA,CA-OPTION    Canada-based plus reqs offering a Canadian city
+                         among several (drops worldwide-remote)
 ```
 
 ---
 
 ## 3. The two lanes
 
-Polling all 469 boards every five minutes would be abusive and slow. Polling
+Polling all 529 boards every five minutes would be abusive and slow. Polling
 only the productive ones is neither.
 
 | Lane | Boards | Cadence | Runtime |
 |---|---|---|---|
 | `fast.sh` | **60** — the ones that have actually produced a match | every 5 min | ~52 s |
-| `daily.sh` | **all 469** | every 30 min | ~215 s |
+| `daily.sh` | **all 529** | every 30 min | ~215 s |
 
 They share `seen.sqlite3` and claim postings atomically, so nothing is reported
 twice. Regenerate the fast lane after any full sweep:
@@ -401,7 +403,7 @@ Logs: `radar.log`, `fast.log`, `verify.log`, `web.log`, `health.log`, `rate.log`
 
 ## 11. What this tool cannot do
 
-- **See boards nobody named.** It is an allowlist. 469 boards is roughly 1% of
+- **See boards nobody named.** It is an allowlist. 529 boards is roughly 1% of
   the ~31,000 companies on these platforms.
 - **Read sites behind a bot manager.** Njoyn sits behind Radware Bot Manager;
   getting past it would mean fingerprint spoofing. Out of scope by choice.
@@ -423,8 +425,8 @@ Logs: `radar.log`, `fast.log`, `verify.log`, `web.log`, `health.log`, `rate.log`
 ├── applications.md            your tracker          ← gitignored (contains PII)
 ├── backups/                   30 daily snapshots    ← gitignored
 └── radar/
-    ├── job_radar.py           the engine: 20 adapters, filters, scoring, output
-    ├── targets.json           469 boards + 85 vendor tags
+    ├── job_radar.py           the engine: 21 adapters, filters, scoring, output
+    ├── targets.json           529 boards + 85 vendor tags
     ├── fast.json              the 60 productive boards  (make_fast.py writes it)
     ├── seen.sqlite3           memory                ← gitignored
     ├── .ntfy_topic            push topic            ← gitignored (it is a secret)

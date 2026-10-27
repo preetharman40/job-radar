@@ -88,52 +88,63 @@
     "zscaler"
   ],
   "greenhouse": [
+    "abcellera",
     "appnovation",
+    "aylo",
     "beyondtrust",
-    "chainguard",
+    "capco",
+    "catonetworks",
+    "censys",
+    "coconutsoftware",
     "dropbox",
     "elastic",
+    "geotab",
     "gitlab",
-    "globalrelay",
     "later",
     "okta",
-    "pagerduty",
     "stay22",
     "tailscale",
+    "trolley",
+    "workleap",
     "zscaler"
   ],
   "lever": [
     "crypto",
-    "eqbank",
-    "pointclickcare",
+    "smiledigitalhealth",
     "sophos",
     "telesat"
   ],
   "ashby": [
     "1password",
     "airbyte",
+    "benevity",
     "camunda",
+    "cerebras",
     "coder",
     "cohere",
-    "docker",
+    "elevenlabs",
+    "facilityos",
+    "homebase",
     "influxdata",
     "klue",
     "lightspeedhq",
+    "maintainx",
+    "people-culture-talent",
+    "reflow",
+    "resend",
     "sentry",
-    "wealthsimple"
+    "supabase",
+    "telus-digital"
   ],
   "recruitee": [],
   "rippling": [],
-  "workable": [
-    "mlabs"
-  ],
+  "workable": [],
   "smartrecruiters": [
-    "AristaNetworks",
     "Dexterra",
     "EgisGroup",
     "GDMSI",
     "Medfar",
-    "Ubisoft2"
+    "SGS"
   ],
   "workday": [
     {
@@ -162,7 +173,8 @@
       "tenant": "cibc",
       "cluster": "wd3",
       "site": "search",
-      "country_facet": "Country"
+      "country_facet": "Country",
+      "max_pages": 15
     },
     {
       "name": "Sun Life",
@@ -186,10 +198,24 @@
       "country_facet": "Country"
     },
     {
+      "name": "Aritzia",
+      "tenant": "aritzia",
+      "cluster": "wd3",
+      "site": "External",
+      "country_facet": "Location_Country"
+    },
+    {
       "name": "Canadian Tire",
       "tenant": "canadiantirecorporation",
       "cluster": "wd3",
       "site": "Enterprise_External_Careers_Site",
+      "country_facet": "locationCountry"
+    },
+    {
+      "name": "Suncor",
+      "tenant": "suncor",
+      "cluster": "wd1",
+      "site": "Suncor_External",
       "country_facet": "locationCountry"
     },
     {
@@ -232,6 +258,19 @@
       "tenant": "recurrentenergy",
       "cluster": "wd12",
       "site": "RecurrentEnergy"
+    },
+    {
+      "name": "TMX Group",
+      "tenant": "tmx",
+      "cluster": "wd3",
+      "site": "TMX_Careers"
+    },
+    {
+      "name": "PwC Canada",
+      "tenant": "pwc",
+      "cluster": "wd3",
+      "site": "Global_Experienced_Careers",
+      "max_pages": 2
     }
   ],
   "phenom": [
@@ -240,11 +279,20 @@
       "base": "https://jobs.bell.ca/ca/en"
     },
     {
-      "name": "Just Eat Takeaway / SkipTheDishes",
-      "base": "https://careers.justeattakeaway.com/global/en"
+      "name": "Air Canada",
+      "base": "https://careers.aircanada.com/ca/en"
+    },
+    {
+      "name": "City of Edmonton",
+      "base": "https://recruitment.edmonton.ca",
+      "default_location": "Edmonton, AB"
     }
   ],
   "successfactors": [
+    {
+      "name": "Rogers",
+      "base": "https://jobs.rogers.com"
+    },
     {
       "name": "Scotiabank",
       "base": "https://jobs.scotiabank.com"
@@ -271,7 +319,39 @@
   "oracle": [],
   "jobvite": [],
   "html": [],
-  "taleo": [],
+  "taleo": [
+    {
+      "name": "Alberta Health Services",
+      "base": "https://careers.albertahealthservices.ca",
+      "search_id": "146469417",
+      "queries": [
+        [
+          "category",
+          "177"
+        ],
+        [
+          "keywords",
+          "analyst"
+        ],
+        [
+          "keywords",
+          "cloud"
+        ],
+        [
+          "keywords",
+          "infrastructure"
+        ],
+        [
+          "keywords",
+          "network"
+        ],
+        [
+          "keywords",
+          "security"
+        ]
+      ]
+    }
+  ],
   "wpjobs": [
     {
       "name": "David Aplin Group",
@@ -284,10 +364,25 @@
       "type": "matador-job-listings"
     }
   ],
-  "amazon": [
+  "amazon": [],
+  "avature": [
     {
-      "name": "Amazon",
-      "country": "CAN"
+      "name": "Electronic Arts",
+      "base": "https://jobs.ea.com/en_US/careers"
     }
-  ]
+  ],
+  "teamtailor": [
+    {
+      "name": "commonsku",
+      "base": "https://commonsku.na.teamtailor.com"
+    }
+  ],
+  "ultipro": [
+    {
+      "name": "Haventree Bank",
+      "board": "https://recruiting.ultipro.ca/HAV5100HBANK/JobBoard/cac8df59-088b-4449-aa9d-7a419f8521f1"
+    }
+  ],
+  "jobbank": [],
+  "insightglobal": []
 }

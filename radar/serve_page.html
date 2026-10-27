@@ -32,6 +32,8 @@ h1{font-size:20px;margin:0;letter-spacing:-.02em}
 .chip{border:1px solid var(--rule);background:var(--card);color:var(--muted);
   padding:4px 11px;border-radius:5px;font-size:12.5px;cursor:pointer;font-family:inherit}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
+/* Marks a score derived from an email snippet rather than a full JD. */
+.snip{color:var(--muted);font-weight:400;margin-left:2px;cursor:help}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
 .sp{flex:1}
 .find{border:1px solid var(--rule);background:var(--card);color:var(--ink);
@@ -149,12 +151,33 @@ const esc = s => (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;
 // year of hands-on DevOps, so they should not crowd out the roles that convert.
 // The `senior` chip shows them on demand; `everything` shows the lot.
 const junior = j => !j.expired && j.level !== 'senior' && j.level !== 'exec';
+const AGENCIES = new Set(['insightglobal']);
 const FILTERS = [
   ['open',        junior],
   ['to apply',    j => junior(j) && j.status==='toapply'],
   ['25+',         j => junior(j) && j.score>=25],
   ['vendor',      j => junior(j) && /support|solutions|customer success|sales engineer|escalation/i.test(j.role)],
   ['devops',      j => junior(j) && /devops|sre|site reliability|platform|cloud|infrastructur/i.test(j.role)],
+  // Roles that arrived by job-alert EMAIL, not from a polled board.
+  // They are scored from a digest snippet, so they sit low on a scale
+  // built for full descriptions and a score sort buries all of them
+  // under the board rows. This chip is how you see them as a set.
+  ['from alerts', j => junior(j) && j.snippet],
+  // Insight Global is a STAFFING AGENCY, not an employer, so its rows behave
+  // differently from every other board: the client is usually withheld ("a
+  // leading home healthcare organization"), the company column always reads
+  // Insight Global, and the inventory is ~74% contract. Worth seeing as a set
+  // rather than scattered through a score sort. `ats` is the platform key for
+  // board rows, so this matches the adapter, not the company name a recruiter
+  // might type differently. Add more keys here if another agency board lands.
+  // NOTE this one does NOT use junior(). Every other chip hides senior/exec
+  // because the default view should not be full of roles above the target
+  // band. But this is a SOURCE tab: clicking "insight global" and being shown
+  // a filtered subset of Insight Global is the wrong answer, and on the first
+  // run it would have hidden the Markham `Senior Kubernetes / Cloud Platform
+  // Engineer` at 36 - one of the two best matches on the board. Expired rows
+  // are still excluded, because those are gone rather than out of band.
+  ['insight global', j => !j.expired && AGENCIES.has(j.ats)],
   ['senior',      j => !j.expired && (j.level==='senior' || j.level==='exec')],
   ['applied',     j => !j.expired && j.status!=='toapply'],
   ['expired',     j => j.expired],
@@ -185,7 +208,8 @@ function draw(){
     const kws=(j.matched||'').split(',').map(k=>k.trim()).filter(Boolean);
     const isNew = !first && !known.has(j.url);
     return `<tr class="r${isNew?' flash':''}${j.expired?' gone':''}" data-i="${i}">
-        <td class="sc ${band(j.score)}">${j.score}</td>
+        <td class="sc ${band(j.score)}">${j.score}${j.snippet
+          ? `<span class="snip" title="Scored from an email-alert snippet, not the full job description - expect the real score to be higher">~</span>` : ''}</td>
         <td class="role">${esc(j.role)}</td>
         <td class="co">${esc(j.company)}</td>
         <td class="loc hide">${esc(j.location)}</td>

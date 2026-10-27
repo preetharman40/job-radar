@@ -11,9 +11,9 @@ python3 serve.py                # web view on :8737
 
 | Script | Purpose |
 |---|---|
-| `job_radar.py` | The engine — 20 ATS adapters, 469 boards, filters, scoring, output |
+| `job_radar.py` | The engine — 21 ATS adapters, 529 boards, filters, scoring, output |
 | `fast.sh` | Cron lane 1: the 60 productive boards, every 5 min |
-| `daily.sh` | Cron lane 2: all 469 boards, every 30 min |
+| `daily.sh` | Cron lane 2: all 529 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
@@ -27,13 +27,13 @@ python3 serve.py                # web view on :8737
 | `hunt.py` | Workday / SuccessFactors tenants |
 | `agencies.txt` | Curated staffing-firm list, input for `harvest.py` |
 | `canada_employers.py` | Which companies can legally employ you in Canada |
-| `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot, and `--boards` turns each alert into new targets. Runs daily 19:52 with `--notify` |
+| `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot. `--boards` reads ATS tokens out of the links; `--employers` resolves the employer **by name** for LinkedIn mail, which carries no token at all, and vets each board against the title that was mailed. Runs daily 19:52 with `--notify --track --add-employer-boards` |
 | `hn.py` | Hacker News "Who is hiring?" |
 | `signals.py` | Funding rounds, before the requisition exists |
 
 | Data | |
 |---|---|
-| `targets.json` | 469 boards + 85 DevOps-vendor tags |
+| `targets.json` | 529 boards + 85 DevOps-vendor tags |
 | `fast.json` | The productive subset — generated, not hand-edited |
 | `seen.sqlite3` | Local memory. Delete and re-`--seed` to reset. |
 | `.ntfy_topic` | Push topic — **this string is a password** |

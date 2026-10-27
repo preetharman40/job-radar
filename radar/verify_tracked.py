@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -71,6 +72,37 @@ CLOSED = re.compile(
 def _closed_text(html):
     """HTML with <script>/<style> removed, for CLOSED to search."""
     return jr._SCRIPT.sub(" ", jr._COMMENT.sub(" ", html or ""))
+
+
+# Hosts this script must never fetch, matched on the host or any subdomain.
+#
+# inbox.py tracks jobs out of job-alert email, and those rows carry the
+# aggregator's own link - 116 of them are www.linkedin.com/jobs/view/{id}.
+# Verifying them would be wrong twice over:
+#
+#  1. Volume against a host that polices it. The walk below groups by host and
+#     goes serially, so one shared host is one chain: 116 URLs x 11 runs a day
+#     is ~1,276 requests/day to linkedin.com from a single residential IP.
+#     Scraping LinkedIn risks the account and the IP, and we deliberately do
+#     not do it anywhere else in this tool.
+#  2. The verdict would be noise anyway. A logged-out aggregator page is a
+#     login wall or an SEO stub, not the posting, so "is this req still open"
+#     has no reliable answer in the HTML - and a false `gone` is not harmless:
+#     three consecutive ones hide the row, and purge_expired.py deletes it.
+#
+# Absent from tracked_live is the right state for these: serve.py:99 only
+# collects rows whose state is `gone`, so a skipped row shows normally and is
+# never purged.
+SKIP_HOSTS = (
+    "linkedin.com", "indeed.com", "glassdoor.com", "glassdoor.ca",
+    "ziprecruiter.com", "monster.com", "monster.ca", "jobillico.com",
+)
+
+
+def skipped(url):
+    """True if url's host is in SKIP_HOSTS (exact host or a subdomain)."""
+    host = urlparse(url).netloc.split("@")[-1].split(":")[0].lower()
+    return any(host == h or host.endswith("." + h) for h in SKIP_HOSTS)
 
 
 def db():
@@ -176,7 +208,18 @@ def main():
     a = ap.parse_args()
 
     urls = tracked_urls(a.tracker)
+    skip = [u for u in urls if skipped(u)]
+    urls = [u for u in urls if not skipped(u)]
     conn = db()
+    # A row written before SKIP_HOSTS existed could still be sitting at
+    # state='gone', hiding a job nothing will ever re-check. Clear them.
+    if skip and not a.dry_run:
+        stale = [(u,) for u in skip if u in
+                 {r[0] for r in conn.execute("SELECT url FROM tracked_live")}]
+        if stale:
+            conn.executemany("DELETE FROM tracked_live WHERE url=?", stale)
+            conn.commit()
+            print(f"  cleared {len(stale)} stale row(s) for skipped hosts")
     prior = {u: (s, m) for u, s, m in
              conn.execute("SELECT url, state, misses FROM tracked_live")}
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -185,7 +228,6 @@ def main():
     # requests at one Workday tenant earned a 403 from RBC, TD, Sun Life and
     # Desjardins every run; different hosts still run in parallel, so this
     # costs almost nothing in wall-clock.
-    from urllib.parse import urlparse
     by_host = {}
     for u in urls:
         by_host.setdefault(urlparse(u).netloc, []).append(u)
@@ -226,7 +268,11 @@ def main():
     if not a.dry_run:
         conn.commit()
     print(f"\n  {counts['open']} open · {counts['gone']} not found · "
-          f"{counts['unknown']} unclear   ({len(urls)} tracked)")
+          f"{counts['unknown']} unclear   ({len(urls)} checked)")
+    if skip:
+        hosts = sorted({urlparse(u).netloc for u in skip})
+        print(f"  {len(skip)} not checked - aggregator links we don't fetch: "
+              f"{', '.join(hosts)}")
     print(f"  a job is hidden only after {MISSES_BEFORE_GONE} consecutive misses")
 
 

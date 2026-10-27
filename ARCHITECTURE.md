@@ -376,6 +376,195 @@ obvious lever and nearly the worst one.**
 
 ---
 
+## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
+
+`inbox.py --boards` has always read ATS account tokens out of the links in an
+alert email. That works for mail sent *by* an ATS, and it cannot work at all
+for the sender that dominates the channel. A LinkedIn digest links only to
+`linkedin.com/jobs/view/{id}` — there is no Greenhouse token, no Lever token,
+no careers host anywhere in the message — so `board_from_url` has nothing to
+read. The measured consequence: **135 of 345 tracked rows (39%) are LinkedIn
+URLs**, each one a posting with no board behind it, which is why a role could
+be read on the phone and then never be found in the web app by company.
+
+The employer's **name** is the only handle such a message gives. Turning that
+name into a board is `discover.resolve_employer`, and `inbox.py --employers`
+runs it over every employer the mail names.
+
+This is the one expansion channel that escapes the verdict in *Coverage is an
+allowlist* above — "adding boards is the obvious lever and nearly the worst
+one". Brute expansion sweeps 425 Amazon reqs to find one match. This is
+**demand-driven**: the employers that turn up are the ones already mailing
+about these titles in this geography, so the Canada density is far higher than
+anything a remote-jobs directory produces. The first 11 boards it found run
+trolley 23/26 Canadian, smiledigitalhealth 12/16, shyftlabs 17/25,
+coconutsoftware 3/3, layerzerolabs 6/7, maintainx 98/197.
+
+### a name probe plus HTTP 200 is not identity, so there are two checks
+
+An earlier expansion pass added four boards that answered 200 under a
+plausible name and belonged to somebody else. A token is only vetted here when
+it passes both of:
+
+1. **Identity — the title from the email is still listed on the board.** This
+   evidence is specific to this channel and available nowhere else in the
+   tool: the employer is in the mail *because of that requisition*, so a board
+   still carrying it is that employer's board and not a lookalike. It is what
+   rejected `greenhouse/nasdaq`, which answers 200 with two postings — an AVP
+   and a sysadmin — and nothing resembling the mailed `DevOps Cloud Engineer`.
+   Matching is containment in either direction, because the two sources trim
+   differently (the mail said `Cloud Engineer`, Smile Digital Health's board
+   says `Cloud Engineer, Automation (Remote Ontario)`), with an 8-character
+   floor so `SRE` cannot match half the internet.
+2. **Value — the board carries a matching title in a location the radar would
+   keep.** Measured on the board's own contents, deliberately *not* on the
+   alert's title: an employer worth polling can easily appear in one week's
+   mail under a Sales req, and dropping Autodesk on that basis would be the
+   expensive mistake — the same reasoning that makes `all_job_links` ignore
+   the title filter. It is also what keeps a seniors' home that mailed one
+   `Second Cook` out of `targets.json`.
+
+   Both halves are the tool's own existing definitions — `title_match` and
+   `classify_location` — so the test asks exactly "would this board ever have
+   shown me a row" rather than inventing a second rule set. The location half
+   is not decoration. `ashby/ramp` carries 173 postings, 25 of them Canadian
+   and 3 with matching titles, but the matching three are all New York and San
+   Francisco, so the intersection is empty; a title-only test would have added
+   it for nothing. `ashby/cerebras` has 7 in the intersection. Without the
+   location half an auto-adding nightly job drifts into exactly the board
+   bloat that *Coverage is an allowlist* warns about, and because a miss is
+   re-probed once `stale_days` elapses, a US company that later opens a
+   Toronto infra req is picked up then rather than never.
+
+   `title_match`'s second argument is the **company**, not the platform — it
+   is what decides `is_vendor`, and a vendor-family title only counts at a
+   vendor. The adapters set each posting's company to the board token, which
+   is what the sweep passes, so this passes the same thing. Judging a board by
+   different inputs than the sweep uses is how a token gets added that then
+   behaves differently in production.
+
+Only `verified` — both checks — is ever added. `unverified` and
+`no-target-roles` are reported and left alone.
+
+The two checks also catch a trap this repo has already paid for once.
+`recruitee/accenture` resolves from the mail, answers HTTP 200 and returns 2
+postings — and it is the **demo account** documented in `_recruitee_note`, one
+of five that were added on the strength of a status code in an earlier pass and
+later removed. Identity rejects it, because `Senior Marketer (Sample)` is not
+the title that was mailed.
+
+The identity check has one honest failure mode: **mail is days old and a req
+can close before the probe runs.** MaintainX verified on
+`Site Reliability Engineer` one afternoon and failed the same check 40 minutes
+later, because the board had gone 197 → 195 postings and that req was one of
+the two. The mitigation is to pass *every* title the employer appeared under,
+not one — MaintainX re-verified immediately on
+`Infrastructure Developer, Platform Engineering`.
+
+### the logo `alt` is where the employer name actually lives
+
+A digest glues the company onto the end of the title with no delimiter —
+`Infrastructure Engineer ElevenLabs` — and the old subtraction rule could only
+recover it when the title had its own anchor to subtract. The employer name is
+present as a *field* in exactly one place: the `alt` of its logo image, inside
+that job's own segment.
+
+Measured over **349 records from 65 digests** across a fortnight:
+
+| | before | after |
+|---|---|---|
+| records parsed | 349 | 349 |
+| with an employer name | 305 | **348** |
+| titles the rules match | 226 | **232** |
+| records lost | — | **0** |
+
+Used as a fallback rather than a replacement: on all 305 the subtraction rule
+already got right the two agree, differing only by a trailing period. The rule
+is not wrong, just incomplete.
+
+Naming the employer then unlocked two things that were impossible without it.
+The company can be **cut off the end of the title**, so `DevOps Analyst TMX
+Group` is filed as `DevOps Analyst` — a title carrying the employer's name
+scores against the wrong blob. And where every anchor in a segment was chrome,
+the title can be recovered by subtracting the company off the row instead,
+which is how adidas' `Platform & Site Reliability Engineer`, BDO's `DevOps
+Engineer - New Grad (January 2027)` and four more stopped being filed under
+`Learn why we included this.`
+
+That last bug is worth recording for how it was fixed. Blocklisting the junk
+anchor by name fixed six rows and immediately mis-titled eight others as
+`Help`, then as `Manage recommendations` — the account footer falls inside the
+last segment and every one of its links is a plausible 4-to-140-character
+string. The durable fix is structural: **consider only anchors whose href
+points at this segment's own job id.** A footer link never does, so LinkedIn
+cannot add a seventh one and break it again.
+
+### the request budget is the design constraint
+
+Probing names is the only thing in the tool that fires dozens of requests at
+one host in seconds, and an unpaced run of it has drawn 429s from Ashby
+before. Three measures keep it affordable:
+
+- **Tiered variants.** Tier 1 is the plain concatenation, the dashed form, and
+  both with any legal suffix stripped; tier 2 adds `+inc`, `+hq`, `+labs` and
+  the rest. Of the 12 boards this channel has found, **all twelve answered on
+  tier 1** — not one needed a dash or a suffix. Tier 2 is ~80% of the requests
+  (48 per miss against 12), so the nightly run stops at tier 1 and
+  `--employer-deep` turns it on for a backfill. Stripping the legal suffix is
+  what makes `Tecsys Inc.` probe `tecsys` at all; only true suffixes are
+  stripped, never descriptive words, because taking `Solutions` off
+  `Enterprise Solutions Inc` would probe `enterprise`, a live Recruitee *demo*
+  account (see `_recruitee_note`).
+- **A 404 is an answer, not a blip.** `discover._fetch` retried every failure
+  twice with 1.5s and 3.0s of backoff, which turned a definitive "no board"
+  into 4.5 wasted seconds — and a miss 404s on nearly every variant. Ruling an
+  employer out took **~30s before, ~4s after**; only `408/425/429/5xx` are
+  retried now. `job_radar._req` deliberately keeps retrying everything, because
+  there a blip silently drops a whole board from a 1,100-task sweep.
+- **Everything is cached** in `employer_board`, keyed on the name. A fortnight
+  of mail names ~200 distinct employers; re-probing all of them nightly would
+  be thousands of requests a day at four hosts to re-learn what it already
+  knew. A miss is re-probed after 60 days — a company without a board today may
+  have one next quarter — and a hit never needs re-probing, because the board
+  either entered `targets.json` or is reported again from cache for free.
+
+The scan and the title fetch are also split: the cheap single-request probes in
+`PROBES` rule names out, and only the winning token is read through the
+radar's own adapter, which is the one that has to agree with what the sweep
+will later see. One expensive call per employer instead of up to 36.
+
+### "no board found" must not mean "not already polled"
+
+A name probe covers the four platforms whose account names are guessable, so a
+tenant-based board always comes back dead. The first run of the report believed
+that and listed **RBC, BMO, Manulife, Scotiabank, TMX Group, PwC Canada,
+Interac, Strathcona Resources, Amazon and Insight Global** under "no board
+under any name variant" — every one of them a board the radar had been polling
+for weeks on Workday, SuccessFactors, Phenom or an in-house adapter. The report
+was telling you to go hunt careers URLs for boards you already had.
+
+The already-polled test therefore runs against every platform in
+`targets.json`, matching the employer name and its legal-suffix-stripped form
+against both the string tokens and the `name` of every dict target. It matches
+on those two forms and never on a prefix: `Interac Corp` has to reach the
+Workday target named `Interac`, but `BMO Capital Markets` stays listed as
+missing rather than being silently credited to `BMO`. Over-claiming here
+*hides* a board worth adding, which is the more expensive of the two errors.
+
+### what it cannot reach
+
+Every enterprise it misses, it misses structurally. `--company` probing covers
+Greenhouse, Lever, Ashby and Recruitee, whose account names are *guessable from
+a company name*. Workday, SuccessFactors, Taleo and Oracle are **tenant-based**
+— Loblaw's Workday tenant is `myview` — so no token guess can ever find them.
+BMO, WestJet, Tecsys, CI Financial, Tangerine, Porter Airlines, Roche, Alstom,
+Broadridge, Livingston, OCS, MDA Space and Stikeman Elliott all came back dead
+for that reason and not because they are unreachable. Each needs one
+`discover.py --url <careers page>`, which costs a single request but requires
+the careers URL — the one input this pipeline cannot derive.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
@@ -909,3 +1098,351 @@ from harvesting: it arrived in a LinkedIn job-alert email and was surfaced by
 `inbox.py`, then the posting URL inverted straight into a target. That is the
 whole intended path from alert mail to polled board, working end to end for the
 first time.
+
+---
+
+## `insightglobal` — the agency board that *is* pollable, and a wrong verdict
+
+"Staffing agencies: the platforms they are actually on" above concluded that
+agencies are structurally hard: their names defeat token guessing, and the ones
+with real boards post through their own sites. Insight Global is the
+counter-example that fits that conclusion rather than contradicting it. It was
+found by a human — a recruiter pointed it out, 2026-10-23 — and its board is
+not an ATS product at all. Like `amazon`, it is an **in-house ATS**, so
+`harvest.py` and `discover.py --company` can never fingerprint it; it belongs
+with "the rest of the in-house class", not with the agency-token experiment.
+
+### The verdict that was wrong, and why
+
+The board was first investigated and reported as **unreachable**. That was
+wrong, and the way it was wrong is the useful part.
+
+`/jobs/` is an Angular SPA. Its runtime config names an API and a Microsoft
+Entra CIAM tenant, and every path probed under that API answered
+`401 WWW-Authenticate: Bearer` — `/my/jobs`, `/my/jobs/search`, GET, POST, even
+OPTIONS. A blanket 401 across an entire prefix reads exactly like a login wall,
+and it was reported as one. The bundle says otherwise:
+
+```js
+get jobsBasePath() {
+  return this.msalService.instance.getActiveAccount() ? "/my/jobs" : "/all/jobs"
+}
+```
+
+There are **two lanes**. `/my/` is the signed-in one and really is gated;
+`/all/` is anonymous and entirely open. The 401s were real but proved only that
+the wrong door had been knocked on. `/all/jobs/suggested` and `/all/locations`
+were both sitting in the grep output that produced the wrong verdict and were
+read straight past.
+
+The lesson is narrow and worth keeping: **an auth gate on one prefix is not
+evidence about the origin.** Before calling an SPA's data unreachable, find the
+base-path expression in the bundle rather than probing paths — a ternary on
+"is anyone signed in" is a common shape, and it is invisible to path guessing.
+
+Two other dead ends were real, and are why the first pass went looking for a
+scraper at all: the search route has **no SSR** (`/jobs/search/...` and every
+`/jobs/{id}` shape return the same 29,697-byte shell), and the **old board is
+decommissioned** — `insightglobal.com/jobs/find_a_job/.../job-433450/` style
+URLs, still indexed by search engines, now answer **HTTP 410 Gone**. Anything
+found for this employer in a search index is a ghost of that board.
+
+### The API
+
+| call | gives |
+|---|---|
+| `GET /all/jobs?filter.status=active&filter.locations=ON&page=1&size=50` | the list, plus `pageMetadata{size,number,totalElements,totalPages}` |
+| `GET /all/jobs/{requisitionId}` | the same row **plus `descriptionHtml`** |
+| `GET /all/jobs/{requisitionId}/details` | the same description under a different key — redundant, not fetched |
+
+Other accepted facets, from the bundle: `keyword`, `sort`, `filter.jobType`,
+`filter.includeOnlyRemoteWork`, `filter.minimumPayRateGreaterThan`,
+`filter.distance`. Nested filters flatten to dot notation (`filter.locations`)
+because the client builds params with a recursive flattener.
+
+`size` is **capped at 50 and clamps silently** — ask for 500 and the response
+says `"size": 50`. This is the `AMZ_PER_PAGE` trap again in a politer form: it
+does not fail, it just quietly returns less. Paging reads
+`pageMetadata.totalPages` rather than trusting the request.
+
+Human URL is `https://insightglobal.com/jobs/{requisitionId}` (the SPA's
+`:id` route), which is what the tracker links to.
+
+### Enumerate by province, not by keyword
+
+This is the first adapter here where **keyword search is the wrong axis**, and
+the numbers are not close. Measured 2026-10-23:
+
+| approach | requests | Canadian reqs found | truncation |
+|---|---|---|---|
+| 13 × `WD_QUERIES`, 6 pages each | 78 | 60 | heavy — `platform engineer` reported 1,486 hits, 300 read |
+| 13 × province via `filter.locations` | ~11 | **282 (all of them)** | none |
+
+The endpoint ORs loosely, so a two-word query matches most of the US
+inventory and the relevance ranking decides what survives. Enumerating
+provinces makes the server do the only filtering it is good at — geography —
+and leaves title filtering to `TITLE_RULES`, which is better at it than a
+remote ranker. Fewer requests, complete recall, and no truncation register to
+maintain.
+
+Full Canadian inventory at the time of writing: ON 192, BC 45, QC 25, AB 9,
+NS 4, MB 3, SK 2, NB 2 — **282 active**, six pages' worth.
+
+### `administrativeArea` is not country-safe
+
+The field looks like a province code and is not one. In this feed:
+
+| value | what it means |
+|---|---|
+| `CA` | **California** — 22 US cities carried it (San Diego, Irvine, San Jose…) |
+| `TG`, `KA`, `MH`, `AN` | Indian states (Telangana, Karnataka, Maharashtra, Andaman) |
+| `São Paulo`, `Rio de Janeiro` | Brazilian states, spelled out |
+
+So the country filter **must** be the server-side `filter.locations` facet,
+which is exact — `ON` returns Ontario only. Filtering this field locally would
+have swept 22 California jobs in as Canadian on the first run.
+`classify_location` reads `San Diego, CA` as `OTHER` and would have caught most
+of it one stage later, but the right place to be correct is in the fetch, before
+282 rows become 500. The province codes are safe to drive the facet from for a
+separate reason worth stating: **none of the 13 collides with a US state code**
+— Nebraska is `NE`, Pennsylvania is `PA`.
+
+`workRemote` is a real boolean, and the location string stays the client's city
+regardless, so the adapter appends `/ Remote` for those rows — without it a
+remote req reads as on-site and `arrangement()` never sees it. 26 of 282.
+
+### Offshore markers in the title: flagged, not dropped
+
+Staffing agencies sell offshore hiring, and Insight Global marks it in the
+**title** while filing the req at the client's Canadian address. `MLOps
+Engineer - INTL India` sits at `workAddress: Vancouver, BC` and scores **39** —
+well above the notify threshold — and its description mentions neither India
+nor Canada. The title is the only geographic signal that exists.
+
+`offshore_marker()` adds a `⚠️` line to the digest instead of filtering the row
+out. Three of 282 rows carry a marker, and the evidence is thin in both
+directions: `Marketing Campaign Manager (Intl.)` in Kanata is plausibly a
+Canadian role with an international remit, and silently hiding a Vancouver req
+on one title token is the worse error. The check requires a **country name**
+after `INTL` (or a bare `LATAM`/`EMEA`/`APAC`) *and* a Canadian location, so it
+stays quiet on `LATAM - Lead Data Engineer` in San Francisco, which is simply a
+US job. Run against all 295 titles then in the tracker: **zero** false flags.
+
+### Hydrate, and the `make_fast.py` invariant
+
+The list call carries no description, so this sets `hyd` and takes the JD from
+`/all/jobs/{id}` in pass 2 — one request per finalist, no HTML scraping, the
+same bargain `greenhouse` and `ashby` make. It is *not* in the no-hydrate class
+with `wpjobs`, `amazon` and `teamtailor`.
+
+`insightglobal` was added to `make_fast.py`'s `DICT_SRC` **in the same change**,
+and the both-ways diff against `targets.json` keys was run before the change was
+called done: 21 adapters, 21 entries, no gaps in either direction. `avature` and
+`teamtailor` each hit that omission silently; writing the invariant down was
+supposed to end it, and this is the first platform added since, so it is the
+first test of whether it did.
+
+**Measured (2026-10-23):** 282 reqs scanned → **7 matches**, in 20.5s with zero
+non-Canadian leakage and zero duplicate URLs. Top of the run: `Platform
+Engineer, Network Operations` (Vancouver) **44**, `Senior Kubernetes / Cloud
+Platform Engineer` (Markham, remote) **36**, `AI Platform Engineer` (Toronto)
+**21**. Mix across the Canadian inventory is 40 contract / 14 perm / 5
+contract-to-perm — agency-shaped, as expected, and the pay rates are published
+(`payRate.min`, hourly or salary) which most employer boards do not do.
+
+`robots.txt` was read before anything was fetched. It is unusually explicit —
+it names search and AI agents and states that "every public page is open",
+closing only `/wp-content/uploads/`, the WordPress admin, internal site search,
+and the job board's **logged-in** areas (`/jobs/applied`, `/jobs/saved`,
+`/jobs/profile`). `/all/jobs` is unauthenticated and not disallowed, and job
+search results and job pages are permitted by name.
+
+## Ashby rate-limits by volume, so the fix is a gap and not a worker cap
+
+Growing the Ashby list from **55 to 95 boards** in one day broke boards that had
+worked for months. Every sweep from that point answered `HTTP 429` for 6-14 of
+them, rotating with whichever ones the thread pool reached after the limit
+tripped, and **7 of the 16 casualties were pre-existing** boards — `slant`,
+`solace`, `synthetic`, `telus-digital`, `thinkific`, `trulioo`, `wealthsimple`.
+Nothing was wrong with any of them: asked serially, all 95 answer 200. So the
+digest's **"Dead boards"** footer was reporting live boards, which is the
+dangerous part — that footer is the signal `discover.py --verify` acts on.
+
+The instinct is to cap concurrency, and it is wrong. 55 boards through the same
+24-worker pool never tripped the limit, so what Ashby counts is requests per
+window rather than simultaneous connections, and a semaphore does not reduce
+volume. A minimum gap does, and `_jb_wait` was already the precedent.
+
+Picking the value took two measurements, and the first was wrong:
+
+| gap | test | result |
+|---|---|---|
+| 0.4s | one sweep, 95 boards | 95/95, 2,484 postings, 37.9s |
+| 0.4s | a second sweep immediately after | **failed partway** |
+| 0.8s | two sweeps back to back | 95/95 both, **zero 429s** |
+
+That the *second* 0.4s run failed is the whole lesson: the bucket is depleted by
+sustained rate, not just by the opening burst, so a value that survives one
+sweep in isolation proves very little. It refills quickly — every board answered
+200 again within two minutes — and Ashby sends no `Retry-After` or rate headers,
+so the shape can only be inferred by probing it.
+
+0.8s costs a 76s serialised chain on the 30-minute lane and ~11s on the fast
+lane's 14 Ashby boards, both running alongside the other platforms rather than
+adding to them. The two back-to-back sweeps are ~190 requests over ~160s of
+continuous load, which is harsher than the worst real overlap: the fast lane at
+`:35` running into the 30-minute lane at `:37`, about 109 requests in ~87s.
+
+Both passes take the gate, because `hydrate` asks the same host once per
+finalist. `board_health.py` inherits it for free by calling `jr.ADAPTERS` — which
+matters, because it polls every board at 06:50 with its own 12-worker pool, and
+its entire job is to alert when a board returns nothing. Without the gate it
+would have rate-limited itself and pushed a false "stopped returning jobs"
+alert for a dozen healthy Ashby boards.
+
+## the location filter was silently dropping worldwide-remote work
+
+`classify_location` sorts every posting into a bucket and the sweep keeps only
+some of them. For most of this tool's life that list was `CA,NA-REMOTE,MULTI`,
+and the failure it caused was invisible precisely because it looked like
+correct behaviour: nothing errored, no board went quiet, the digest just never
+mentioned a whole class of job.
+
+Four wordings fell through to `OTHER`, which is dropped:
+
+| location string | old bucket | new bucket |
+|---|---|---|
+| `Remote, Global` · `Global Remote` · `Home based - Worldwide` | `OTHER` | **`GLOBAL`** |
+| `Americas Remote` | `OTHER` | **`NA-REMOTE`** |
+| `Americas` · `Home Based - Americas` | `OTHER` | **`NA-REMOTE`** |
+| `London / Dublin / Hungary / Toronto / Berlin` | `OTHER` | **`CA-OPTION`** |
+| `Calgary, Alberta / Atlanta, GA / Arizona` | `US-ONLY` | **`CA-OPTION`** |
+
+Each has its own cause. **Global remote** had no rule at all. **`Americas
+Remote`** did have one — `remote\s*[-,]?\s*americas?` — but only in that word
+order, so `Remote - Americas` classified and `Americas Remote` did not; that one
+regex hid Customer.io's entire Americas lane. **`CA-OPTION`** is the subtlest: a
+Canadian city in a multi-location req lost to the foreign veto, because
+`NOT_CANADA` saw Germany in the same string and threw the whole posting away.
+Judging each `/`-separated segment on its own fixes it, and `canadian_option`
+recurses exactly one level deep because a segment contains no separator.
+
+`GLOBAL` is kept deliberately narrow. A bare `Remote` or `Fully remote` does
+**not** qualify, because in practice those mean remote-within-the-US, and
+`work from anywhere in the United States` says so outright — the regex carries a
+negative lookahead for it. `Latin America Remote` is the mirror-image trap on
+the Americas rule: the reverse word order would have admitted it, so
+`AMERICAS_LATAM` vetoes latin/south/central — and `latam` — explicitly.
+
+The fourth wording is the same rule read one notch wider. `Americas Remote`
+was fixed by matching either word order, but both orders still need the word
+`remote` to be present, and two wordings in the wild do not supply it: a plain
+`Americas` (how **every Resend req** is filed, including its `Platform
+Engineer`) and `Home Based - Americas`, the EOR phrasing, which accounted for
+**74 postings in one sweep**. A bare `Americas` is matched **plural only**,
+because an unqualified singular `America` is vanishingly rare while
+`Americana` is both a Brazilian city and a Los Angeles mall — all three appear
+in real location fields, and the singular would have claimed them. Dropping
+the `remote` requirement from the veto too means `Americas (LATAM)` is still
+rejected; `North & South America` survives because `NORTH_AMERICA` claims that
+string one branch earlier.
+
+### vendor-family titles do not ride in on GLOBAL
+
+The first measured run of this change was wrong in a way worth recording.
+`GLOBAL` exists only because a req is open to the whole world, so it carries no
+evidence that *this role* suits you — and the vendor-family rules (support,
+sales, field, solutions engineer) are the loosest in `TITLE_RULES`. Admitted
+together, they put seven Canonical support and sales reqs **above every real SRE
+role in the same batch**: `Associate Linux Support Engineer` scored 24 while
+`Site Reliability / Gitops Engineer` scored 15. Support roles are excluded by
+request, so `NO_VENDOR_BUCKETS = {"GLOBAL"}` drops them. `CA-OPTION` is
+deliberately *not* in that set: a named Canadian city on the req is the same
+evidence `CA` has, where vendor-family already counts.
+
+### what it actually changed, measured over one full sweep
+
+56,524 postings, 505 boards:
+
+```
+bucket        before    after   delta
+CA             11400    11400      +0     <- bit-identical
+MULTI           1257     1257      +0     <- bit-identical
+NA-REMOTE        128      147     +19
+GLOBAL             0      148    +148
+CA-OPTION          0       15     +15
+OTHER          30189    30009    -180
+US-ONLY        13550    13548      -2
+```
+
+**Postings kept before and dropped after: 0.** The change is purely additive by
+construction — `shadow`/`classify_location` returns the existing verdict
+untouched whenever `keep` is already true, so nothing that reached the tracker
+before can be reclassified or lost. That also means no migration: unlike the
+scorer rebuild, no tracker row needs rescoring.
+
+20 postings are newly admitted with a matching title, 0 of them vendor-family.
+**Only 9 actually surface**, because `--max-age 30` suppresses the rest, and
+that is the honest number — the scoping pass that predicted 17 had not applied
+the age filter. The suppressed 11 are evergreen reqs nobody ever closes:
+Canonical's `Site Reliability / Gitops Engineer` is **2,678 days** old and its
+`Senior SRE / Gitops Engineer` 1,071, while Metabase's `Senior SRE/DevOps
+Engineer` is 2,359. Ashby boards supply no `posted` date before hydrate, so
+Supabase's rows carry `age=None` and pass — pre-existing behaviour, not
+something this change introduced.
+
+The nine: eight Supabase platform/SRE reqs (`Remote, Global`, scoring 29–45) and
+the ElevenLabs `Infrastructure Engineer` filed in **Toronto** at 29.
+
+### the bare-Americas rule, measured on its own
+
+The same 56,524-posting snapshot, classifier before vs after that one rule:
+
+```
+NA-REMOTE        147 ->   221    +74
+OTHER          30009 -> 29935    -74
+```
+
+Every other bucket bit-identical, **0 kept before and dropped after**. All 74
+are Canonical `Home Based - Americas` rows and exactly **one** carries a
+matching title — `Telco Cloud Field Engineer`, vendor family, tier 3 — which
+`--max-age 30` suppresses anyway at **1,645 days** old. So the measurable gain
+is not in the snapshot at all: it is Resend, added after the snapshot was taken,
+whose entire board is filed `Americas` and whose `Platform Engineer` and
+`Security Engineer, Platform` were invisible for that reason alone.
+
+That single Canonical hit is worth recording for a second reason. `NA-REMOTE`
+is **not** in `NO_VENDOR_BUCKETS`, so vendor-family titles do count there. The
+snapshot's 147 pre-existing `NA-REMOTE` rows contain **zero** vendor postings
+and this rule adds one stale one, so the pressure that justified the `GLOBAL`
+gate does not exist in this bucket — gating `NA-REMOTE` too would retire a
+working bucket/family combination to fix nothing that happens.
+
+### blast radius
+
+Two edits in one file. `bucket` is never written to `applications.md` and is
+never read by `serve.py` or `serve_page.html`, so the web app needed nothing;
+neither `daily.sh` nor `fast.sh` passes `--bucket`, so both inherit the new
+default. The only other place a bucket is recomputed is the Workday
+`N Locations` path inside `hydrate`, which calls `classify_location` and so
+picks up the new rules for free — the post-hydrate re-filter repeats the
+vendor-family condition so a Workday row cannot enter `GLOBAL` through it.
+
+### the class this does NOT fix
+
+Two Canada-eligible reqs stay invisible because their location field carries no
+Canadian signal at all, and only the JD does:
+
+- KoBold `Staff Client Platform Engineer` — filed `Remote - US`, JD reads
+  *"open to candidates residing anywhere in the United States or Canada"*.
+- Databento `Site Reliability Engineer` — filed `Remote / San Francisco / New
+  York / Salt Lake City`, JD reads *"100% remote, teammates living around the
+  globe and paid in their local currency"*.
+
+This cannot be fixed with a location rule, and it cannot be fixed cheaply with a
+JD rule either: the evidence lives in the description, descriptions are only
+hydrated for finalists, and finalists are chosen *after* the location filter
+runs. The pool is **286 US-ONLY postings carrying a tier-4 title**, so checking
+them means 286 extra fetches per sweep — far too much for a lane that fires
+every five minutes. If it is ever worth doing it belongs in a separate
+once-daily pass, not here.
