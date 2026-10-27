@@ -30,28 +30,70 @@ LOG = os.path.join(HERE, "radar.log")
 # hard enough to lose postings.
 PER_SWEEP_ALERT = 5
 
+# A real rate-limit line, not the digits 4-2-9 anywhere in a line. This was
+# `"429" in line` until 2026-10-27, which counted 6 extra "errors" out of 714
+# across the log: four sweep-summary lines whose scanned-posting count happened
+# to contain 429, and two job URLs. Every genuine one in 40 days of log has the
+# same shape - `- workday/TC Energy: HTTPError HTTP Error 429: Too Many
+# Requests` - and the alternatives below cover plausible rewordings without
+# ever being able to match a job id.
+HTTP_429 = re.compile(r"HTTP\s*Error\s*429\b"
+                      r"|\b429\s*:?\s*Too\s+Many\s+Requests"
+                      r"|\bHTTPError\b[^\n]*\b429\b", re.I)
+
+# The board label runs to the colon before the error. `- (\S+):` could not
+# match a name containing a space, so every Workday tenant - TC Energy, Sun
+# Life, Canadian Tire - was silently absent from the "boards affected" tally,
+# on the one platform this script exists to watch. It is the Workday tenants
+# that produced 708 of the 714 lines.
+BOARD_RE = re.compile(r"^\s*-\s+([^:]+):")
+
+
+def _local_day(utc_date, utc_hm):
+    """The LOCAL date a sweep belongs to.
+
+    radar.log stamps sweeps in UTC and cron runs in local time, so grouping on
+    the UTC date splits one day's cron window across two rows: the 07:00-19:55
+    MDT window is 13:00Z-01:55Z, so every evening sweep landed on the NEXT
+    day's row. That made a fixed problem look live - the Ashby regression of
+    2026-10-26 evening was reported under 2026-10-27, the day after the fix
+    went in, while the real 2026-10-27 sweeps were all clean.
+    """
+    dt = datetime.strptime(f"{utc_date} {utc_hm}", "%Y-%m-%d %H:%M")
+    return dt.replace(tzinfo=timezone.utc).astimezone().strftime("%Y-%m-%d")
+
 
 def scan(days):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Cutoff in LOCAL dates, to match how sweeps are now grouped.
+    cutoff = (datetime.now().astimezone()
+              - timedelta(days=days)).strftime("%Y-%m-%d")
     cur = None
     sweeps, errs, boards = collections.Counter(), collections.Counter(), collections.Counter()
+    day_of = {}
     worst = (0, None)
     for line in open(LOG, errors="replace"):
         m = re.match(r"^# Job Radar.*?(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})Z", line)
         if m:
-            cur = m.group(0)[-17:-1] if False else f"{m.group(1)} {m.group(2)}Z"
-            day = m.group(1)
+            # Two separate things, deliberately not mashed into one key: the
+            # sweep is identified by its TRUE UTC stamp, exactly as the log
+            # prints it so it can be grepped, and `day_of` maps that to the
+            # local day it belongs to for grouping. A composite
+            # "local-date + UTC-clock" key reads like a timestamp and is not
+            # one - "2026-10-26 00:11Z" appears nowhere in the log.
+            cur = f"{m.group(1)}T{m.group(2)}Z"
+            day = _local_day(m.group(1), m.group(2))
+            day_of[cur] = day
             if day >= cutoff:
                 sweeps[day] += 1
             continue
-        if "429" in line and cur and cur[:10] >= cutoff:
+        if cur and day_of.get(cur, "") >= cutoff and HTTP_429.search(line):
             errs[cur] += 1
-            b = re.search(r"- (\S+):", line)
+            b = BOARD_RE.match(line)
             if b:
-                boards[b.group(1)] += 1
+                boards[b.group(1).strip()] += 1
             if errs[cur] > worst[0]:
                 worst = (errs[cur], cur)
-    return sweeps, errs, boards, worst
+    return sweeps, errs, boards, worst, day_of
 
 
 def main():
@@ -59,17 +101,17 @@ def main():
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--notify", action="store_true")
     a = ap.parse_args()
-    sweeps, errs, boards, worst = scan(a.days)
+    sweeps, errs, boards, worst, day_of = scan(a.days)
     if not sweeps:
         print(f"  no sweeps logged in the last {a.days} days")
         return 0
 
     byday = collections.Counter()
     for k, v in errs.items():
-        byday[k[:10]] += v
+        byday[day_of.get(k, k[:10])] += v
     print(f"  {'day':12}{'sweeps':>8}{'429s':>8}{'worst sweep':>14}")
     for d in sorted(sweeps):
-        w = max([v for k, v in errs.items() if k.startswith(d)] or [0])
+        w = max([v for k, v in errs.items() if day_of.get(k) == d] or [0])
         print(f"  {d:12}{sweeps[d]:>8}{byday.get(d, 0):>8}{w:>14}")
     total = sum(byday.values())
     print(f"\n  {sum(sweeps.values())} sweeps, {total} rate-limit errors")
@@ -85,7 +127,8 @@ def main():
     # whether the most recent day is still throttled.
     today = max(sweeps)
     recent = byday.get(today, 0)
-    recent_worst = max([v for k, v in errs.items() if k.startswith(today)] or [0])
+    recent_worst = max([v for k, v in errs.items()
+                        if day_of.get(k) == today] or [0])
     bad = recent_worst >= PER_SWEEP_ALERT
     if worst[0] >= PER_SWEEP_ALERT and not bad:
         print(f"  note   : worst sweep in window was {worst[0]} on {worst[1]}, "

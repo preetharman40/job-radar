@@ -1029,6 +1029,73 @@ time to build it.
 
 ---
 
+## ratecheck was crying wolf, and hiding its worst offender
+
+Three bugs, all found by wiring `ratecheck.py` into `cronwrap.sh` and reading
+what it printed.
+
+**A substring is not a status code.** The test was `if "429" in line`. Across
+40 days of `radar.log` that counted 714 "rate-limit errors" where 708 were
+real; the other six were four sweep-summary lines whose scanned-posting count
+happened to contain those digits, and two job URLs. Every genuine line has the
+same shape - `- workday/TC Energy: HTTPError HTTP Error 429: Too Many
+Requests` - so the pattern now requires 429 adjacent to an error, and cannot
+match a job id.
+
+**Grouping by UTC date splits a day's cron window in half.** Sweeps run
+07:00-19:55 local, which is 13:00Z-01:55Z, so every evening sweep landed on the
+*next* UTC day's row. The consequence was not cosmetic: the Ashby regression of
+2026-10-26 evening was reported under **2026-10-27**, the day *after* the fix
+went in, while the real 2026-10-27 sweeps were all clean. The script's own
+"only alert on CURRENT trouble" logic then fired, because it compares against
+`max(sweeps)` - so the old version pushed
+
+```
+!! Radar rate-limited: 14 429s in one sweep (2026-10-27), 39 over 3d
+```
+
+an urgent phone alert for a problem that had been fixed the previous evening.
+The same log through the fixed version reads
+
+```
+note   : worst sweep in window was 14 on 2026-10-27T00:11Z,
+         but 2026-10-27 is clean - already fixed
+OK - no sweep exceeded 5 rate-limit errors
+```
+
+Grouping is now by local day. The sweep's own identity stays the **true UTC
+stamp** exactly as the log prints it, with a separate `day_of` map for
+grouping, because a composite "local-date + UTC-clock" key reads like a
+timestamp and is not one - `2026-10-26 00:11Z` appears nowhere in the log and
+could not be grepped for.
+
+**`- (\S+):` cannot match a board name containing a space.** This is the worst
+of the three, because naming the throttled board is the script's entire
+purpose. `\S+` must be followed immediately by the colon, which fails on
+`- workday/TC Energy:`, so every Workday tenant with a space in its name -
+TC Energy, Sun Life, Canadian Tire - was silently dropped from the "boards
+affected" tally. Over 45 days that is **146 of 714 errors attributed to no
+board at all (20%)**, and the single worst offender, `workday/TC Energy` with
+**116** errors, never appeared in the report. After the fix every error is
+attributed and TC Energy ranks first.
+
+Measured old vs new over the same log:
+
+| | old | new |
+|---|---|---|
+| errors counted | 714 | **708** |
+| attributed to a board | 568 | **708** |
+| unattributed | **146** | **0** |
+| days with errors (14d window) | `10-22: 1, 10-23: 1, 10-27: 39` | **`10-26: 39`** |
+| verdict on a clean day | **false urgent alert** | `OK ... already fixed` |
+
+The pattern across all three is the same one that produced four wrong
+conclusions elsewhere on 2026-10-27: a regex that matches a token being read as
+a fact about the world. `429` is not an HTTP status, a UTC date is not a local
+day, and `\S+` is not a name.
+
+---
+
 ## Design decisions
 
 **No dependencies.** Standard library only, Python 3.8+. A job-search tool that
