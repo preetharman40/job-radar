@@ -482,6 +482,93 @@ class TestAdaptersContract(unittest.TestCase):
                 self.assertFalse(sf.looks_like(x))
 
 
+class TestSuccessFactorsFeed(unittest.TestCase):
+    """RMK's whole-board RSS feed - the "feed": true target mode. No network.
+
+    Deloitte Canada is only reachable this way: its search page renders no
+    rows server-side and the XHR endpoint it uses is robots-disallowed.
+    """
+
+    def setUp(self):
+        self.sf = adapters.platform("successfactors")
+
+    def test_a_feed_target_is_not_fanned_out_per_keyword(self):
+        """Ten tasks would mean ten copies of the same 9 MB download."""
+        tok = {"base": "https://careers.deloitte.ca", "feed": True}
+        self.assertEqual(adapters.expand("successfactors", tok), [tok])
+
+    def test_a_search_target_is_still_fanned_out(self):
+        out = adapters.expand("successfactors", {"base": "b"})
+        self.assertEqual(len(out), len(self.sf.SF_QUERIES))
+        self.assertEqual({q["_query"] for q in out}, set(self.sf.SF_QUERIES))
+
+    def test_the_whole_description_survives_the_tag_stripper(self):
+        """The trap this adapter exists to avoid.
+
+        <description> is a CDATA block of ESCAPED html, so its only literal
+        angle brackets are the CDATA delimiters - and fc.TAG is
+        <[^>]+>, which therefore matches the entire description as ONE tag.
+        Strip first and a 14 KB job description becomes one space, leaving
+        every posting to be scored on its title alone. Unescaping first is
+        load-bearing, not tidiness.
+        """
+        item = ("<item><description><![CDATA[&lt;p&gt;We run &lt;b&gt;"
+                "Kubernetes&lt;/b&gt; on AWS with Terraform.&lt;/p&gt;]]>"
+                "</description></item>")
+        raw = re.search(r"<description>(.*)</description>", item).group(1)
+        self.assertEqual(len(fc.strip_html(raw)), 1)      # the bug
+        got = fc.strip_html(self.sf._feed_field(item, "description"))
+        self.assertIn("Kubernetes", got)
+        self.assertIn("Terraform", got)
+        self.assertNotIn("<", got)
+        self.assertNotIn("&lt;", got)
+
+    def test_a_field_outside_cdata_is_unescaped_too(self):
+        item = "<item><title>Ops &amp; Platform (M&amp;A)</title></item>"
+        self.assertEqual(self.sf._feed_field(item, "title"),
+                         "Ops & Platform (M&A)")
+
+    def test_a_missing_field_is_empty_not_none(self):
+        self.assertEqual(self.sf._feed_field("<item></item>", "link"), "")
+
+    def test_namespaced_fields_are_readable(self):
+        item = "<item><g:location>Calgary, AB, CA, T2P 5C5</g:location></item>"
+        self.assertEqual(self.sf._feed_field(item, "g:location"),
+                         "Calgary, AB, CA, T2P 5C5")
+
+    def test_postal_codes_and_repeats_leave_the_location(self):
+        """Noise in the tracker and in a push notification. Verified against
+        all 18 distinct values on Deloitte's board: no classification moves."""
+        for raw, want in (
+                ("Toronto, ON, CA, M5H 0A9", "Toronto, ON, CA"),
+                ("Toronto, ON, ON, CA, M5H 0A9", "Toronto, ON, CA"),
+                ("Calgary, AB, AB, CA, T2P 5C5", "Calgary, AB, CA"),
+                ("St. John's, NL, CA, A1B 3M2", "St. John's, NL, CA"),
+                ("", "")):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.sf._feed_loc(raw), want)
+
+    def test_tidying_a_location_never_changes_its_bucket(self):
+        for raw in ("Toronto, ON, CA, M5H 0A9", "Montréal, QC, CA, H3B 4T9",
+                    "Vancouver, BC, CA, V7X 1P4", "Halifax, NS, CA, B3J 3R7"):
+            with self.subTest(raw=raw):
+                self.assertEqual(jr.classify_location(raw),
+                                 jr.classify_location(
+                                     self.sf._feed_loc(raw)))
+                self.assertEqual(jr.provinces_of(raw),
+                                 jr.provinces_of(
+                                     self.sf._feed_loc(raw)))
+
+    def test_a_postal_code_is_not_mistaken_for_a_city(self):
+        """SF_POSTAL must match a postal code and nothing that reads as
+        placename - 'Quebec City' and a bare province must survive."""
+        self.assertTrue(self.sf.SF_POSTAL.match("M5H 0A9"))
+        self.assertTrue(self.sf.SF_POSTAL.match("T2P5C5"))
+        for keep in ("Toronto", "ON", "CA", "Quebec City", "St. John's"):
+            with self.subTest(keep=keep):
+                self.assertFalse(self.sf.SF_POSTAL.match(keep))
+
+
 class TestRuleData(unittest.TestCase):
     """The shipped rules/*.json, checked through the public surface.
 

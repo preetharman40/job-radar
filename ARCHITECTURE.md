@@ -58,7 +58,10 @@ Bank finalists spends ~105s of that total waiting on purpose.
 Workday and SuccessFactors targets fan out to one task per search keyword rather
 than one per tenant — `adapters.expand()` asks the adapter — so a nine-tenant
 sweep parallelises across the shared pool instead of running ten queries back
-to back. That change alone took a run from over two minutes to under thirty
+to back. The adapter decides per target, not per platform: a SuccessFactors
+target carrying `"feed": true` reads the whole board in one request, so
+`expand()` hands back a single task rather than ten copies of the same 9 MB
+download. That change alone took a run from over two minutes to under thirty
 seconds.
 
 State is a SQLite table of seen URLs, so a run reports only what is new.
@@ -216,10 +219,11 @@ exact `startDate`, which beats the list view's "Posted 12 Days Ago". Without
 them, Workday postings score on title alone and systematically lose to platforms
 whose descriptions are cheap to fetch.
 
-### SuccessFactors — two themes, three traps
+### SuccessFactors — two themes, four traps, and a feed worth more than both
 
-No JSON API and no RSS. The search page renders server-side, which is workable,
-but:
+Two ways in. The search page renders server-side, which is workable but full of
+traps; and a per-tenant RSS feed that is the best-shaped source on the platform
+(below). The scrape path first:
 
 **1. Two different themes.** Most tenants use a table (`<tr class="data-row">`);
 others use tiles (`<li class="job-tile">`) with **no location column at all** —
@@ -258,6 +262,69 @@ labelled as what it is, rather than inventing a freshness number.
 adding `sortColumn` makes the endpoint **ignore `q=` entirely** and return
 everything by date, which looks like a working search returning irrelevant
 results.
+
+#### The feed: `"feed": true`
+
+RMK also publishes a **Google-Jobs RSS feed of the entire board**, and where a
+tenant serves it, it beats everything above: **one request** returns every
+posting with the **full description inline**, so the target needs no keyword
+fan-out (`expand` returns a single task) and **no hydrate pass** at all. It is
+the Teamtailor shape — the whole board, dates and descriptions in one GET —
+arriving on the platform we had written off as the worst-shaped here.
+
+It is also the only way into some tenants. Deloitte Canada runs RMK's newer
+`SearchResultsUnify` theme, which renders **no result rows server-side** —
+`SF_ROW` and `SF_TILE` both find zero on a page that looks completely normal in
+a browser — and fetches them by XHR from `/services/recruiting/v1/jobs`, which
+`careers.deloitte.ca/robots.txt` **disallows**. The scrape path cannot work and
+the allowed path is better anyway: 609 postings, all Canadian, in one request.
+
+Four traps, every one of them silent:
+
+**1. The path is a catch-all on the file extension, not an endpoint.**
+`/sitemap.xml`, `/jobs.xml`, `/feed.xml` and `/totally-bogus-path-xyz.xml` all
+return **byte-identical** bodies. A 200 here says nothing about the path being
+right — the same silent-success class as Oracle's unvalidated `siteNumber` and
+SmartRecruiters' `totalFound: 0`. Confirm a new feed by its `<item>` count and
+`g:employer`, never by the status code.
+
+**2. `<description>` is CDATA holding *escaped* HTML, and the tag stripper eats
+all of it.** The field is `<![CDATA[&lt;p&gt;…]]>`, so the **only literal angle
+brackets in 14 KB of job description are the CDATA delimiters themselves** —
+and `fetchcore.TAG` is `<[^>]+>`, which therefore matches the whole description
+as a single tag. Measured: `strip_html` on the raw field returns **1
+character**. Every posting would have been scored on its title alone, which on
+this board is the difference between *Senior DevOps Engineer - Healix* scoring
+**61** and scoring **10**. `_feed_field` unescapes **before** stripping; the
+ordering is load-bearing, and `test_pure.py` asserts both the bug and the fix.
+
+**3. `g:expiration_date` is not a date.** It is the *same value for every
+posting on the board* — `2026-11-27` for all 609 — which is the 28-day
+reference-date trap above wearing a new hat. Age is reported as unknown rather
+than as a number that means nothing, so `--max-age` cannot suppress a stale req
+on a feed target.
+
+**4. The title repeats the location.** `Senior DevOps Engineer (Toronto, ON,
+CA, M5H 0A9)`, true of 609 of 609. It is stripped only when it matches
+`g:location` **exactly**, because titles legitimately end in a parenthetical —
+`Senior Cloud Infrastructure Engineer - Operate (Future Opportunity)` has both.
+
+**Cost, and why it is not in the fast lane.** The whole board is 9.16 MB plain
+and 1.53 MB gzipped (13.3s → 2.8s), so `get_text` grew an opt-in
+`accept_gzip=True` rather than turning compression on for all 400+ tasks in a
+sweep. 26 sweeps a day on the 30-minute lane is the right trade; 156 on the
+5-minute lane is not, so `make_fast.py` excludes any target carrying `"feed"`
+**by shape rather than by name** — the platform itself stays in the fast lane
+for the 14 ordinary kilobyte-sized tenants, and the next feed board inherits
+the protection without anyone remembering to add it.
+
+**Not yet switched over.** The feed is per-tenant, not universal:
+`jobs.rogers.com` and `jobs.scotiabank.com` serve it, while `careers.telus.com`
+and `jobs.toronto.ca` serve a real XML sitemap at the same path. Moving the
+existing 14 tenants onto it would trade 10 keyword queries plus a per-posting
+hydrate for one request, but it is a separate change needing its own
+before/after measurement: `SF_QUERIES` reaches titles the feed surfaces
+differently, and the search page carries a reference date the feed does not.
 
 ### Phenom — often just a skin, and `postedDate` lies
 
