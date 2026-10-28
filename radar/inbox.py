@@ -39,6 +39,7 @@ Standard library only.
 """
 
 import argparse
+import collections
 import email
 import email.policy
 import getpass
@@ -208,6 +209,61 @@ def _alt_company(frag):
     return ""
 
 
+LI_VIEW_HREF = re.compile(r'<a\b[^>]*href="([^"]*)"')
+
+# LinkedIn pads a message with blocks it chose itself, under their own
+# headings, and they are NOT the alerts you subscribed to. The application
+# confirmation for J&M Group carried the job applied to, then "similar jobs you
+# may be interested in", then three more - Keyfactor, Borrowell and CARET, all
+# of which reached the digest as if they were alerts you had asked for, and
+# which also carried the oldest job ids in the batch. They are labelled, not
+# dropped - see _reco_ids.
+#
+# "Jobs similar to <title> at <company>" is deliberately NOT here: that one is
+# a digest's own HEADER and sits at the top, so keying on it would relabel every
+# row in the message. _reco_ids guards against that anyway by requiring a job
+# anchor before the heading, but naming the reason is cheaper than
+# rediscovering it.
+LI_RECO = re.compile(
+    r"similar\s+jobs\s+you\s+may\s+be\s+interested\s+in"
+    r"|people\s+also\s+viewed"
+    r"|more\s+jobs\s+for\s+you", re.I)
+
+# "Applied on October 28, 2026" - LinkedIn says so on the job you just applied
+# to. Only the dated form is matched: a bare "Applied" appears as a card badge
+# but also inside prose ("Applied Sciences", "applied research"), and dropping
+# a real posting is worse than letting one duplicate through - which the
+# tracker check in main() catches anyway.
+LI_APPLIED = re.compile(r"\bApplied\s+on\s+\w+\s+\d{1,2},\s*\d{4}", re.I)
+
+
+def _reco_ids(html):
+    """Job ids that appear ONLY under a recommendation heading.
+
+    These are LABELLED, never removed. An earlier draft truncated the message
+    at the heading, which would have been a coverage regression: the three jobs
+    below J&M Group's "similar jobs" heading were a Keyfactor, a Borrowell and
+    a CARET DevOps role in Toronto - real postings worth reading, just not ones
+    that arrived because you subscribed to them. Losing a real job to cut noise
+    is the wrong trade; the digest keeps everything and the label says where it
+    came from.
+
+    Refuses to treat anything as a recommendation unless a job anchor appears
+    BEFORE the heading, so a digest whose own header matches can never have
+    every row relabelled.
+    """
+    h = html or ""
+    m = LI_RECO.search(h)
+    if not m:
+        return set()
+    ids = lambda t: {a.group(1) for x in LI_VIEW_HREF.finditer(t)
+                     for a in [LI_VIEW.search(x.group(1))] if a}
+    before = ids(h[:m.start()])
+    if not before:
+        return set()
+    return ids(h[m.start():]) - before
+
+
 def li_segments(html):
     """Split a LinkedIn digest into one HTML fragment per posting.
 
@@ -218,7 +274,7 @@ def li_segments(html):
     and every one of them the first job's city.
     """
     marks = []
-    for m in re.finditer(r'<a\b[^>]*href="([^"]*)"', html or ""):
+    for m in LI_VIEW_HREF.finditer(html or ""):
         j = LI_VIEW.search(m.group(1))
         if j and (not marks or marks[-1][1] != j.group(1)):
             marks.append((m.start(), j.group(1)))
@@ -342,7 +398,12 @@ def _li_record(jid, frag):
             "url": f"https://www.linkedin.com/jobs/view/{jid}",
             "company": company,
             "location": _clean_loc(m.group("loc")),
-            "blob": blob}
+            "blob": blob,
+            # LinkedIn mails a confirmation when you apply, and it renders the
+            # job you applied to exactly like an alert row. One of those was
+            # pushed to the phone as a new role at score 14 while the tracker
+            # already held it as `applied` from the day before.
+            "applied": bool(LI_APPLIED.search(blob))}
 
 
 def _window(html, pos, before=300, after=1500):
@@ -376,12 +437,14 @@ def extract(msg):
 
     out, seen = [], set()
 
+    reco = _reco_ids(h or "")
     for jid, frag in li_segments(h or ""):
         if jid in seen:
             continue
         rec = _li_record(jid, frag)
         if rec:
             seen.add(jid)
+            rec["reco"] = jid in reco
             out.append(rec)
     if out:
         return source, subject, out
@@ -581,12 +644,24 @@ def employer_cache(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS employer_board("
                  "name TEXT PRIMARY KEY, at TEXT, verdict TEXT, "
                  "platform TEXT, token TEXT, postings INTEGER, evidence TEXT)")
+    # Added after the cache already existed, so ALTER rather than a new
+    # schema: re-probing 165 employers to backfill one column would be
+    # thousands of requests to re-learn what is already known. An older row
+    # simply carries NULL here and is re-probed when it goes stale.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(employer_board)")}
+    if "apply_url" not in cols:
+        conn.execute("ALTER TABLE employer_board ADD COLUMN apply_url TEXT")
+        conn.commit()
     return conn
 
 
 def report_employers(employers, targets_path, add=False, conn=None,
                      stale_days=60, limit=None, deep=False):
-    """Resolve employers named in the mail into boards. Returns the report.
+    """Resolve employers named in the mail into boards.
+
+    Returns (report, resolved) - the markdown, and what was learned about each
+    employer keyed on its lowercased name, so the caller can act on a verdict
+    instead of only printing it.
 
     Every result is CACHED, because without that this is unaffordable on a
     daily schedule: a fortnight of mail names ~200 distinct employers, and
@@ -638,23 +713,39 @@ def report_employers(employers, targets_path, add=False, conn=None,
     cached = {}
     if conn is not None:
         employer_cache(conn)
-        for n, at, v, p, t, c, ev in conn.execute(
-                "SELECT name, at, verdict, platform, token, postings, evidence "
-                "FROM employer_board"):
-            cached[n.lower()] = (at, v, p, t, c, ev)
+        for n, at, v, p, t, c, ev, au in conn.execute(
+                "SELECT name, at, verdict, platform, token, postings, "
+                "evidence, apply_url FROM employer_board"):
+            cached[n.lower()] = (at, v, p, t, c, ev, au)
 
-    todo, results = [], []
+    # Built alongside `results`, whose tuple shape is deliberately left alone:
+    # six call sites unpack it positionally and this needs to carry two extra
+    # fields back to the caller. Keyed on the lowercased employer name, which
+    # is how the cache is keyed too.
+    todo, results, resolved = [], [], {}
+
+    def _resolve(name, verdict, platform, token, apply_url, mail_title):
+        resolved[name.lower()] = {"verdict": verdict, "platform": platform,
+                                  "token": token, "apply_url": apply_url,
+                                  "mail_title": mail_title}
+
     for name in sorted(employers):
         # Already polled under one of its own name tokens - nothing to find.
         if (_names(name) & polled
                 or any(t in have.get(p, ()) for t in dc.variants(name, 1)
                        for p in dc.PROBES)):
             results.append(("already", name, None, None, 0, None))
+            _resolve(name, "already", None, None, None, None)
             continue
         hit = cached.get(name.lower())
         if hit and (hit[1] not in ("dead", "unverified", "no-target-roles")
                     or hit[0] > cutoff):
             results.append((hit[1], name, hit[2], hit[3], hit[4] or 0, hit[5]))
+            # evidence is stored as "<mailed title> -> <board title>"; the
+            # mailed half is what says WHICH of this employer's titles the
+            # cached apply_url belongs to.
+            _resolve(name, hit[1], hit[2], hit[3], hit[6],
+                     (hit[5] or "").split(" -> ")[0] or None)
             continue
         todo.append(name)
     if limit:
@@ -671,6 +762,17 @@ def report_employers(employers, targets_path, add=False, conn=None,
                                                  tier2=deep)
         evs = f"{ev[0]} -> {ev[1]}" if ev else None
         results.append((v, name, p, t, len(posts), evs))
+        # The posting the mailed title matched, on a board whose identity that
+        # same match confirms - so this is the employer's OWN apply URL for
+        # the job the alert was about. Worth carrying because a linkedin.com
+        # link is unverifiable by design (see verify_tracked.SKIP_HOSTS) while
+        # an ATS URL is exactly what the expiry check already knows how to
+        # read.
+        apply_url = None
+        if v == "verified" and ev and ev[1]:
+            apply_url = next((j.get("url") for j in posts
+                              if j.get("title") == ev[1] and j.get("url")), None)
+        _resolve(name, v, p, t, apply_url, ev[0] if ev else None)
         if conn is not None:
             # Commit per employer, not once at the end. seen.sqlite3 is shared
             # with both poller lanes and SQLite in WAL mode allows exactly one
@@ -681,8 +783,9 @@ def report_employers(employers, targets_path, add=False, conn=None,
             # "database is locked" once its 30s busy_timeout expires. A commit
             # per row costs nothing at this volume and bounds the lock to one
             # insert.
-            conn.execute("INSERT OR REPLACE INTO employer_board VALUES(?,?,?,?,?,?,?)",
-                         (name, now, v, p, t, len(posts), evs))
+            conn.execute("INSERT OR REPLACE INTO employer_board "
+                         "VALUES(?,?,?,?,?,?,?,?)",
+                         (name, now, v, p, t, len(posts), evs, apply_url))
             conn.commit()
 
     by = lambda v: [r for r in results if r[0] == v]
@@ -732,7 +835,7 @@ def report_employers(employers, targets_path, add=False, conn=None,
     elif addable:
         L.append(f"_Re-run with `--add-employer-boards` to append the "
                  f"{len(addable)} verified board(s)._")
-    return "\n".join(L)
+    return "\n".join(L), resolved
 
 
 def guess_location(msg_text, title):
@@ -749,11 +852,128 @@ def guess_location(msg_text, title):
     return ""
 
 
+def _norm_key(s):
+    """Letters and digits only, lowercased - for comparing two spellings."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def ats_apply_url(info, title):
+    """The employer's OWN apply URL for this row, if one was proved.
+
+    Only for a `verified` employer, and only for the exact title the board
+    match was made on: an employer can appear in one week's mail under several
+    titles, and the cached URL belongs to whichever one matched. Attaching it
+    to a different row would point an application at the wrong req.
+    """
+    if not info or info.get("verdict") != "verified":
+        return None
+    mailed, url = info.get("mail_title"), info.get("apply_url")
+    if not mailed or not url or _norm_key(mailed) != _norm_key(title):
+        return None
+    return url
+
+
+def _clean_url(u):
+    """The form append_to_tracker compares on: no query, no trailing punctuation."""
+    return (u or "").split("?")[0].rstrip(".,)")
+
+
+def _tracker_urls(conn):
+    """Every posting URL already in the tracker, plus everything dismissed.
+
+    This is the set append_to_tracker itself dedupes against, which is why a
+    mailed job never produced a duplicate ROW - but --notify compared against
+    `live` and `seen`, the ATS poller's tables, and those hold no linkedin.com
+    URLs at all. So a job already in the tracker could be pushed again every
+    time LinkedIn put it in a new message. On 2026-10-27 that pushed a GCP SRE
+    role at J&M Group that the tracker already held as `applied` from the day
+    before.
+    """
+    urls = set()
+    try:
+        with open(jr.TRACKER) as fh:
+            urls |= {_clean_url(u) for u in
+                     re.findall(r"https?://[^\s)\]]+", fh.read())}
+    except OSError:
+        # No tracker yet is not an error - it just means nothing is known.
+        pass
+    try:
+        urls |= {_clean_url(u) for (u,) in
+                 conn.execute("SELECT url FROM dismissed")}
+    except sqlite3.Error:
+        pass
+    return urls
+
+
+# Only corporate-structure words. "canada", "global", "digital" and
+# "technology" are deliberately absent: they are part of real distinctive
+# names, and stripping them merged Canada Life with Sun Life when this was
+# first measured.
+CO_GENERIC = frozenset(("the", "group", "holdings", "holding"))
+
+
+def _co_tokens(name):
+    """A company name as comparable tokens, legal suffix removed.
+
+    Mail and ATS boards spell the same employer differently - the mail says
+    "BMO Capital Markets" where the board says "BMO" - so exact string
+    equality under-matches and let a known duplicate through to the phone.
+    Token SUBSET, not substring: raw containment reads "Interac" inside
+    "GuestTek Interactive Entertainment" and would have dropped a real job.
+    Measured over all 11,325 company pairs in `seen`: zero false merges.
+
+    Note this is deliberately NOT the matcher report_employers uses. There,
+    over-claiming hides a board worth adding, so "BMO Capital Markets" is left
+    uncredited on purpose. Here the cost runs the other way - under-claiming
+    buzzes the phone with a job you already have - so the two stay separate.
+    """
+    bare = name or ""
+    while True:
+        stripped = dc.LEGAL_SUFFIX.sub("", bare).strip()
+        if stripped == bare or not stripped:
+            break
+        bare = stripped
+    return frozenset(t for t in re.split(r"[^a-z0-9]+", bare.lower())
+                     if t and t not in CO_GENERIC)
+
+
+def _same_employer(a, b):
+    """Is one token set the same employer as the other, or a parent of it?"""
+    if not a or not b:
+        return a == b
+    return a <= b or b <= a
+
+
 def db():
     c = sqlite3.connect(jr.DB)
     c.execute("CREATE TABLE IF NOT EXISTS mail_seen("
               "msgid TEXT PRIMARY KEY, at TEXT)")
+    # When this URL was FIRST mailed to us. The only honest age signal the
+    # mail channel has: LinkedIn alert mail carries no posting date and no
+    # relative age - measured across 15 segments in 6 messages, not one
+    # contained "2 days ago" or anything like it - and its pages cannot be
+    # fetched. So a posting's true age on the day it first arrives is simply
+    # unknown, while every day after that is exact.
+    c.execute("CREATE TABLE IF NOT EXISTS mail_role("
+              "url TEXT PRIMARY KEY, first_seen TEXT, title TEXT)")
     return c
+
+
+def role_ages(conn, rows, now_iso):
+    """Stamp each row with how many days we have been seeing its URL."""
+    for r in rows:
+        conn.execute("INSERT OR IGNORE INTO mail_role VALUES(?,?,?)",
+                     (_clean_url(r["url"]), now_iso, r.get("title") or ""))
+    conn.commit()
+    first = dict(conn.execute("SELECT url, first_seen FROM mail_role"))
+    today = datetime.fromisoformat(now_iso).date()
+    for r in rows:
+        try:
+            seen_on = datetime.fromisoformat(
+                first[_clean_url(r["url"])]).date()
+            r["days_known"] = max(0, (today - seen_on).days)
+        except Exception:
+            r["days_known"] = 0
 
 
 def main():
@@ -788,6 +1008,15 @@ def main():
     # 10). Do NOT align this with --notify-min-score 15 in the poller lanes;
     # that number assumes a full description behind the score.
     ap.add_argument("--notify-min-score", type=int, default=12)
+    # "the jobs might be 24 hours old, that is acceptable, but a week old" -
+    # so this counts days since WE first saw the URL, which is the only age
+    # the mail channel can measure honestly. A job new to us is always pushed,
+    # however old LinkedIn's copy may be, because suppressing on a guess would
+    # lose real postings; one we have been carrying for a week stops buzzing.
+    # It never removes a row from the digest.
+    ap.add_argument("--stale-days", type=int, default=7,
+                    help="stop pushing a mailed URL we have been seeing for "
+                         "this many days (0 disables; digest is unaffected)")
     ap.add_argument("--boards", action="store_true",
                     help="also report ATS boards found in the mail")
     ap.add_argument("--add-boards", action="store_true",
@@ -945,6 +1174,50 @@ def main():
     for r in sorted(rows, key=lambda r: -r["score"]):
         byurl.setdefault(r["url"].split("?")[0], r)
     rows = list(byurl.values())
+    role_ages(conn, rows, now)
+
+    # Resolved here rather than where its report is printed, which is after
+    # the dedupe. Two of the things below depend on knowing the employer's
+    # real board BEFORE a row is deduped and pushed: a substituted ATS URL has
+    # to be compared against `live` like any other, and a row cannot be
+    # annotated after it has been rendered.
+    emp_md, resolved = "", {}
+    if a.employers:
+        emp_md, resolved = report_employers(employers, jr.TARGETS,
+                                            add=a.add_employer_boards,
+                                            conn=conn, limit=a.employer_limit,
+                                            deep=a.employer_deep)
+
+    # THE EXPIRY FIX, and it is not what it first looks like.
+    #
+    # A linkedin.com/jobs/view/{id} link cannot be checked - verify_tracked
+    # skips those hosts on purpose, so 98 tracked rows sit with no fetchable
+    # state and a closed req stays in the tracker looking open. The employer
+    # pass does however know some employers' real boards, and where the mailed
+    # title was matched ON that board, the matching posting's own URL is the
+    # same req on a host the expiry check CAN read. Substituting it does not
+    # guess at expiry; it makes expiry observable from the next
+    # verify_tracked run onward, by the machinery that already exists.
+    #
+    # NOT done: suppressing the push on the "unverified" verdict - a live
+    # board that does not list the mailed title. That reads like proof the req
+    # closed and is not: of the 9 unverified employers cached on 2026-10-28,
+    # recruitee/accenture (2 postings) and recruitee/synechron (1) are
+    # Recruitee DEMO accounts answering 200 with sample data, and
+    # greenhouse/nasdaq (2) is already documented as a satellite board for a
+    # different entity. Acting on that verdict would have silenced real
+    # Accenture, Synechron and Nasdaq roles on the strength of a demo
+    # account's contents. resolve_employer's own docstring says the verdict
+    # means "closed OR a lookalike", and it cannot tell which, so it is
+    # reported beside the row and never used to withhold one.
+    for r in rows:
+        info = resolved.get((r.get("company") or "").lower())
+        if not info:
+            continue
+        r["board_verdict"] = info["verdict"]
+        ats = ats_apply_url(info, r["title"])
+        if ats:
+            r["ats_url"] = ats
 
     # Drop anything the ATS poller already found. A URL comparison only
     # catches the same posting from the same source: the poller holds the
@@ -953,61 +1226,106 @@ def main():
     # equal. So also compare normalised title+company against `seen`, which is
     # every posting the radar has ever shown. Title-only collisions are flagged
     # rather than dropped - "DevOps Engineer" is not a unique key.
-    def _norm(s):
-        return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+    _norm = _norm_key
 
     live = {u.split("?")[0] for (u,) in conn.execute("SELECT url FROM live")}
-    shown = {(_norm(ti), _norm(co)) for ti, co in
-             conn.execute("SELECT title, company FROM seen")}
-    shown_titles = {t for t, _c in shown}
+    # norm(title) -> the employers `seen` has posted that exact title for.
+    # Compared employer-aware rather than by exact string, because the mail and
+    # the ATS board rarely spell the company the same way.
+    shown = collections.defaultdict(list)
+    for ti, co in conn.execute("SELECT title, company FROM seen"):
+        shown[_norm(ti)].append(_co_tokens(co))
+    # Mail postings do not live in `live` or `seen` at all - those are the ATS
+    # poller's tables and hold no linkedin.com URLs - so neither one can tell
+    # you that a mailed job is one you already have. The tracker can, and
+    # append_to_tracker already dedupes against it, which is why the row was
+    # never duplicated while the PUSH fired anyway.
+    known = _tracker_urls(conn)
     fresh = []
     for r in rows:
-        key = (_norm(r["title"]), _norm(r.get("company")))
-        if r["url"].split("?")[0] in live or key in shown:
+        nt, mine = _norm(r["title"]), _co_tokens(r.get("company"))
+        same_title = shown.get(nt, [])
+        # Both spellings of the same req: the linkedin.com link the mail gave
+        # and, where the employer pass resolved one, the employer's own ATS
+        # URL. Checking both matters in both directions - the poller may
+        # already hold the ATS URL in `live`, and a row tracked under one of
+        # them must not come back as new under the other.
+        urls = [_clean_url(u) for u in (r["url"], r.get("ats_url")) if u]
+        if any(u in live for u in urls) or any(
+                _same_employer(mine, c) for c in same_title):
             continue
-        r["maybe_dup"] = key[0] in shown_titles
+        # Flagged rather than dropped: "DevOps Engineer" is not a unique key,
+        # and of the seven rows this flagged on 2026-10-27 exactly ONE was a
+        # real duplicate. The employer test above is what actually drops them.
+        r["maybe_dup"] = bool(same_title)
+        r["in_tracker"] = any(u in known for u in urls)
         fresh.append(r)
     fresh_urls = {r["url"] for r in fresh}
+    # Held out of the push and the tracker write, but still LISTED, so the
+    # digest stays a complete record of everything the mail carried. Nothing
+    # here removes a job from the report - the mail channel exists to catch
+    # what the poller cannot reach, and a dropped row is a missed job.
+    def _stale(r):
+        return a.stale_days and r.get("days_known", 0) >= a.stale_days
+
+    sendable = [r for r in fresh
+                if not r["in_tracker"] and not r.get("applied")
+                and not _stale(r)]
 
     rows.sort(key=lambda r: -r["score"])
     L = ["# Inbox — job alert emails",
          f"_{len(rows)} roles from {msgs} new messages · "
-         f"{len(fresh)} not already found by the ATS poller_", ""]
+         f"{len(fresh)} not already found by the ATS poller · "
+         f"{len(sendable)} new to you_", ""]
+    sendable_urls = {r["url"] for r in sendable}
     for r in rows:
         if r["url"] not in fresh_urls:
             flag = "  _(already found by the radar)_"
+        elif r.get("in_tracker"):
+            flag = "  _(already in your tracker — not pushed again)_"
+        elif r.get("applied"):
+            flag = "  _(you already applied to this one)_"
+        elif _stale(r):
+            flag = (f"  _(first mailed to you {r['days_known']} days ago — "
+                    f"listed, not pushed)_")
         elif r.get("maybe_dup"):
             flag = "  _(same title as a job you have already seen — check)_"
         else:
             flag = ""
+        if r.get("reco") and r["url"] in sendable_urls:
+            flag += "  _(LinkedIn suggestion, not one of your alerts)_"
+        if r.get("board_verdict") == "unverified":
+            flag += ("  _(employer's board is live but does not list this "
+                     "title — may have closed, or may be a lookalike board)_")
         who = f" · **{r['company']}**" if r.get("company") else ""
         L += [f"### [{r['score']}] {r['title']}{flag}",
               f"- via **{r['source']}**{who} · `{r['bucket']}` · `{r['level']}`"
               f" · {r['location']}",
-              f"- {r['url']}",
+              f"- {r.get('ats_url') or r['url']}"
+              + ("  _(employer's own board — checkable for expiry; "
+                 f"mailed as {r['url']})_" if r.get("ats_url") else ""),
               f"- matched: {', '.join(r['kw']) or '—'}", ""]
     if not rows:
         L.append("_no new job-alert mail matched. Subscribe to alerts on the "
                  "employers in manual_check.md - that is what this channel is for._")
     if a.boards:
         L.append(report_boards(links, jr.TARGETS, add=a.add_boards))
-    if a.employers:
-        L.append(report_employers(employers, jr.TARGETS,
-                                  add=a.add_employer_boards, conn=conn,
-                                  limit=a.employer_limit, deep=a.employer_deep))
+    if emp_md:
+        L.append(emp_md)
     out = "\n".join(L)
     print(out)
     if a.md:
         open(a.md, "w").write(out + "\n")
 
-    if a.notify and fresh:
-        # Only `fresh` - the rows already deduped against the ATS poller - so a
-        # req the radar pushed this morning does not buzz again tonight from
-        # LinkedIn's copy of it. notify() reads j["age"], and an alert snippet
+    if a.notify and sendable:
+        # Only `sendable` - deduped against the ATS poller, against the
+        # tracker, against jobs already applied to, and against URLs we have
+        # been carrying for --stale-days - so a req the radar pushed this
+        # morning does not buzz again tonight from LinkedIn's copy of it. notify() reads j["age"], and an alert snippet
         # carries no posting date, so it is explicitly None rather than absent.
-        push = [{**r, "age": None,
+        push = [{**r, "age": None, "url": r.get("ats_url") or r["url"],
                  "company": r.get("company") or r["source"]}
-                for r in fresh if r["score"] >= a.notify_min_score]
+                for r in sendable if r["score"] >= a.notify_min_score]
         if push:
             topic = jr.ntfy_topic()
             if not topic:
@@ -1021,7 +1339,7 @@ def main():
             print(f"\n>> nothing at or above --notify-min-score "
                   f"{a.notify_min_score} to push")
 
-    if a.track and fresh:
+    if a.track and sendable:
         # The EMPLOYER, falling back to the source only when the digest
         # did not name one - the same rule --notify uses above. This
         # said r["source"] unconditionally until 2026-10-22, so every
@@ -1029,10 +1347,15 @@ def main():
         # web app showed 116 jobs with no employer. The phone alert had
         # the right name all along, which is why a role could be read on
         # the phone and not found by company in the app.
+        # The employer's own ATS URL when the employer pass proved one for
+        # this title, and the mailed link otherwise. This is the whole expiry
+        # fix: verify_tracked SKIPS linkedin.com, so a row tracked under the
+        # mailed link can never be found closed, while the same req tracked
+        # under its ATS URL is checked every day at 08:25 like any other.
         payload = [{**r, "company": r.get("company") or r["source"],
-                    "posted": "", "age": None,
-                    "updated": "", "url": r["url"], "title": r["title"]}
-                   for r in fresh if r["score"] >= a.track_min_score]
+                    "posted": "", "age": None, "updated": "",
+                    "url": r.get("ats_url") or r["url"], "title": r["title"]}
+                   for r in sendable if r["score"] >= a.track_min_score]
         if payload:
             try:
                 with jr.FileLock(timeout=60):

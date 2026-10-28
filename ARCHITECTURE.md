@@ -444,6 +444,153 @@ obvious lever and nearly the worst one.**
 
 ---
 
+## what the mail channel pushes, and the four things it refuses to push twice
+
+The mail lane exists to reach what the poller cannot, so **nothing is ever
+removed from its digest** — a dropped row is a missed job, and that is the one
+failure this channel must not have. Filtering happens only at the **push and
+the tracker write**, and only on evidence. The digest prints the reason beside
+every row it is holding back.
+
+Four suppressions, each from a real alert that buzzed the phone on 2026-10-27:
+
+**1. It is already in your tracker.** Mail postings do not appear in `live` or
+`seen` at all — those are the ATS poller's tables and hold **no linkedin.com
+URLs whatsoever** — so neither one can tell you a mailed job is one you already
+have. `append_to_tracker` always deduped against the tracker itself, which is
+why a repeat never produced a duplicate *row*; `--notify` did not, so it buzzed
+anyway. A GCP SRE role at J&M Group was pushed as new while the tracker held it
+as `applied` from the day before. The same check also covers the `dismissed`
+table: 165 jobs had been dismissed in the web app and every one of them was
+eligible to be re-pushed from mail.
+
+**2. You already applied to it.** LinkedIn mails a confirmation when you
+apply, and renders the job you applied to exactly like an alert row. Only the
+dated form `Applied on October 28, 2026` is matched — a bare "Applied" also
+occurs in prose ("Applied Sciences"), and dropping a real posting is the worse
+error of the two.
+
+**3. The same employer has already posted that exact title.** The mail and the
+ATS board rarely spell a company the same way: `seen` held *Associate, DevOps
+Engineer* at **BMO** while the mail said **BMO Capital Markets**, so exact
+string equality made the night's one real duplicate a near-miss and it went to
+the phone. Companies are compared as **token subsets** after the legal suffix
+comes off, never as substrings — `"interac"` sits inside
+`"guesttekinteractiveentertainment"`, and raw containment would have dropped a
+real GuestTek posting. Measured across all **11,325** company pairs in `seen`:
+zero false merges. An earlier draft also stripped `canada` as a generic word
+and merged **Canada Life with Sun Life**, which is why the generic list holds
+only corporate-structure words.
+
+This matcher is deliberately **not** the one `report_employers` uses. There,
+crediting "BMO Capital Markets" to "BMO" would hide a board worth adding, so it
+refuses to; here the cost runs the other way, and under-matching buzzes the
+phone with a job you already have. Same two names, opposite correct answers.
+
+**4. We have been carrying it for a week.** 24 hours old is fine; a week is
+not. The honest part first: **LinkedIn alert mail carries no posting age at
+all.** Measured across 15 job segments in 6 messages — not one contained "2
+days ago", a date, or anything like it; the only badges are *Actively
+recruiting*, *Easy Apply* and alumni counts. The pages cannot be fetched
+either. Estimating age from the job id was tried and rejected: the per-day
+*maximum* id creeps ~170k while the per-day *minimum* swings by tens of
+millions, and the max is not even monotonic across days, so any day count from
+it would be invented. So `mail_role` records when **we** first saw each URL.
+A job new to us is always pushed however old LinkedIn's copy may be, because
+suppressing on a guess loses real postings; one we have been carrying for
+`--stale-days` (7) stops buzzing. True age on day one remains unknown, and the
+only trustworthy evidence of a *closed* req is the board cross-check below.
+
+**Labelled, not suppressed:** LinkedIn pads a message with blocks it chose
+itself — *similar jobs you may be interested in*, *People also viewed*. Those
+are not alerts you subscribed to, and they carried the oldest ids in the batch,
+but they are still real jobs: the three under J&M Group's heading were
+Keyfactor, Borrowell and CARET DevOps roles in Toronto. They are tagged in the
+digest and still pushed. `_reco_ids` refuses to tag anything unless a job
+anchor appears *before* the heading, because `Jobs similar to <title> at
+<company>` is a digest's own top-of-message header and keying on it would
+relabel — and, in the draft that removed rows instead of tagging them, delete —
+every row in the message.
+
+**Measured effect on that night's batch:** 20 roles in, 20 roles still listed,
+push 10 → 7. The three removed were the BMO duplicate, the J&M role already
+applied to, and a Broadridge role already dismissed in the web app. No
+legitimate new job was lost.
+
+### expired: make it observable, not guessed
+
+A `linkedin.com/jobs/view/{id}` link **cannot be checked** — `verify_tracked`
+skips those hosts deliberately, so **98 tracked rows sit with no fetchable
+state** and a closed req stays in the tracker looking open. That is the real
+shape of the *expired* complaint, and there is no way to ask LinkedIn.
+
+The fix is not to infer closure. `report_employers` now returns its findings
+as data alongside its markdown, and where it **verified** an employer's board
+by finding the mailed title on it, the matching posting's own URL is the same
+req on a host the expiry check can read. That URL becomes the row's apply
+link. Measured on Capco: mailed as
+`linkedin.com/jobs/view/…`, resolved to
+`job-boards.greenhouse.io/capco/jobs/7765458`, and
+`verify_tracked.skipped()` returns **True** for the first and **False** for the
+second. Nothing about expiry is predicted — the row simply becomes checkable,
+and the 08:25 run finds it closed on the day it closes.
+
+Two consequences fall out for free. The ATS URL is compared against `live`
+like any other, so a req the poller already holds is now recognised as
+already-found instead of pushed as new; and the apply link points at the
+employer rather than at an aggregator.
+
+The URL is used **only** for the exact title the board match was made on. An
+employer can appear in one week's mail under several titles and the cached URL
+belongs to whichever one matched; attaching it to another row would point an
+application at the wrong req.
+
+**What was NOT done, and why.** The obvious move is to suppress the push on
+the `unverified` verdict — a live board that does not list the mailed title.
+It reads like proof the req closed. It is not. Of the nine `unverified`
+employers cached on 2026-10-28:
+
+| employer | board | postings | what it actually is |
+|---|---|---|---|
+| Accenture | `recruitee/accenture` | 2 | a Recruitee **demo account** (see `_recruitee_note`) |
+| Synechron | `recruitee/synechron` | 1 | the same demo-account class |
+| Nasdaq | `greenhouse/nasdaq` | 2 | already documented as a satellite board for a different entity |
+| ControlUp | `lever/controlup` | 11 | plausibly the real board, req plausibly closed |
+| DV Trading, Enterprise Solutions, FLINT, Relay, Vaco | — | 8–75 | unknown |
+
+Acting on that verdict would have silenced real Accenture, Synechron and
+Nasdaq roles on the strength of a demo account's contents.
+`resolve_employer`'s own docstring says the verdict means "closed **or** a
+lookalike" and that it cannot tell which — it is the check that correctly
+rejected `greenhouse/nasdaq` in the first place. So it is printed beside the
+row as a caveat and **never used to withhold one**. At least a third of it
+points the wrong way, and the wrong way loses jobs.
+
+**Still open:** the 98 rows already tracked under a mailed link keep their
+unverifiable URL; only rows resolved from here on get a checkable one.
+Rewriting the existing ones would mean editing `applications.md`, which
+carries third-party contact details, so it is not done unprompted.
+Ageing is the only signal those rows get, and `AGGREGATOR_STALE_DAYS` was
+**dropped from 45 days to 10** on 2026-10-28: *"the jobs might be 24 hours
+old, that is acceptable, but a week old"* is the standard they are read
+against, and 45 days is nowhere near it. 10 rather than 7 because the `Found`
+date is when **we** first saw the posting, not when it was published — it
+already undercounts the req's real age, so a few days of slack keeps a job
+that is merely a week old out of the label.
+
+Measured before changing it: of the 76 LinkedIn rows in the tracker the
+**oldest was 5 days**, so nothing was relabelled on the day and it starts
+applying around 2026-11-07 as the rows tracked from 2026-10-23 onward age past
+it. The old value had never fired once — the web app reported `stale 0`. The
+threshold and its boundary are unit-tested rather than left to fire first on
+live data, including that a row found *exactly* 10 days ago is not yet stale
+and that a row with no `Found` date is never labelled.
+
+Lowering it is safe because `stale` is a label and never a deletion
+(`purge_expired.py` keys on `expired`), and a test asserts that the ageing
+path cannot write `gone` — if it ever did, lowering this would start
+destroying application records instead of surfacing them.
+
 ## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
 
 `inbox.py --boards` has always read ATS account tokens out of the links in an
@@ -1072,8 +1219,9 @@ found yesterday.
 They are now aged on the one date that is definitely true for a mail row:
 `- **Found:** YYYY-MM-DD`, which inbox.py writes. (`Posted` is
 "? (unknown age)" for these, because a digest snippet carries no publication
-date.) Past `AGGREGATOR_STALE_DAYS` (45) the row is marked **`stale`**, not
-`gone`, and the distinction is the whole point:
+date.) Past `AGGREGATOR_STALE_DAYS` (**10**, dropped from 45 on 2026-10-28)
+the row is marked **`stale`**, not `gone`, and the distinction is the whole
+point:
 
 - `serve.py` collects only `state='gone'` into its expired set, and
   `purge_expired.py` deletes on that field. A `stale` row therefore surfaces to

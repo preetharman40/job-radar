@@ -122,12 +122,51 @@ def tracked_urls(path):
 
 # How long an aggregator row is given before it is called stale. The posting
 # cannot be fetched to find out (see SKIP_HOSTS), so the only evidence is when
-# it entered the tracker. 45 days is deliberately generous: the radar already
-# refuses anything over --max-age 30 at discovery, so a row found 45 days ago
-# describes a requisition that was open at least 45 days and usually much
-# longer. Short enough to clear the backlog, long enough that nothing current
-# gets labelled.
-AGGREGATOR_STALE_DAYS = 45
+# it entered the tracker.
+#
+# Was 45 days, dropped to 10 on 2026-10-28 at the user's request: "the jobs
+# might be 24 hours old, that is acceptable, but a week old" is the standard
+# these rows are being read against, and 45 days is nowhere near it. 10 rather
+# than 7 because the Found date is when WE first saw the posting, not when it
+# was published - it is already an undercount of the req's real age, so a few
+# days of slack keeps a job that is merely a week old out of the label.
+#
+# Measured before the change: of the 76 LinkedIn rows in the tracker, the
+# OLDEST is 5 days old, so this has no immediate effect and nothing is
+# relabelled today. It starts applying around 2026-11-07, as the rows the mail
+# lane tracked from 2026-10-23 onward age past it. The old 45-day value had
+# never fired at all - the web app reported `stale 0`.
+#
+# `stale` is a label, never a deletion: serve.py keeps it separate from
+# `expired` and purge_expired.py deletes on `expired`, so lowering this
+# surfaces rows for the reader to judge and cannot throw an application record
+# away.
+AGGREGATOR_STALE_DAYS = 10
+
+
+def aggregator_cutoff(now, days=None):
+    """Found dates STRICTLY BEFORE this are old enough to call stale.
+
+    ISO dates compare correctly as strings, which is why the whole comparison
+    is done on `YYYY-MM-DD` text rather than parsed dates. Strictly before, so
+    a row found exactly `days` ago is not yet stale - it becomes stale the
+    following day.
+    """
+    d = AGGREGATOR_STALE_DAYS if days is None else days
+    return (now - timedelta(days=d)).strftime("%Y-%m-%d")
+
+
+def stale_rows(found, skip, now, days=None):
+    """tracked_live tuples for unfetchable rows old enough to call stale.
+
+    `found` is {url: "YYYY-MM-DD"} from the tracker, `skip` the urls on hosts
+    we do not fetch. A url with no Found date is left alone: the date is the
+    only evidence there is, and no evidence is not evidence of staleness.
+    """
+    cutoff = aggregator_cutoff(now, days)
+    stamp = now.isoformat(timespec="seconds")
+    return [(u, "stale", 0, stamp, f"not fetchable; found {found[u]}")
+            for u in skip if found.get(u) and found[u] < cutoff]
 
 
 def tracked_found(path):
@@ -268,13 +307,9 @@ def main():
         # purge - which matters, because one of these may be a job that was
         # applied to and a lost application record cannot be rebuilt.
         found = tracked_found(a.tracker)
-        # Its own timestamp: `now` further down is assigned after this block,
-        # and closing over it here referenced it before assignment.
-        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        cutoff = (datetime.now(timezone.utc)
-                  - timedelta(days=AGGREGATOR_STALE_DAYS)).strftime("%Y-%m-%d")
-        aged = [(u, "stale", 0, stamp, f"not fetchable; found {found[u]}")
-                for u in skip if found.get(u) and found[u] < cutoff]
+        # Its own clock reading rather than `now`, which is assigned further
+        # down: referencing it here was an UnboundLocalError.
+        aged = stale_rows(found, skip, datetime.now(timezone.utc))
         if aged:
             def _age():
                 conn.executemany(

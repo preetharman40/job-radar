@@ -27,7 +27,9 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unittest
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -295,6 +297,287 @@ class TestInboxParsing(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(self.ib.EMP_SKIP.match(name))
         self.assertFalse(self.ib.EMP_SKIP.match("Shopify"))
+
+
+class TestInboxDedupe(unittest.TestCase):
+    """The alert-mail dedupe. No network, no IMAP.
+
+    Every one of these is a real row from the 2026-10-27 run that either
+    buzzed the phone when it should not have, or would have been lost if the
+    noise filtering had been done by removing rows instead of labelling them.
+    """
+
+    ib = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ib = _mod("ib2", "inbox.py")
+
+    # ---- company matching -------------------------------------------------
+    def _same(self, a, b):
+        return self.ib._same_employer(self.ib._co_tokens(a),
+                                      self.ib._co_tokens(b))
+
+    def test_the_mail_and_the_board_spell_an_employer_differently(self):
+        """`seen` held "Associate, DevOps Engineer" at BMO; the mail said BMO
+        Capital Markets. Exact normalising made that a near-miss, so the one
+        real duplicate of the night went to the phone."""
+        self.assertTrue(self._same("BMO Capital Markets", "BMO"))
+        self.assertTrue(self._same("The Nationwide Group", "Nationwide"))
+        self.assertTrue(self._same("Tecsys Inc.", "Tecsys"))
+
+    def test_a_shared_word_is_not_a_shared_employer(self):
+        """Canada Life is not Sun Life. An earlier draft stripped "canada" as
+        a generic word and merged the two insurers."""
+        self.assertFalse(self._same("Canada Life", "Sun Life"))
+        self.assertFalse(self._same("Telus Health", "telus-digital"))
+        self.assertFalse(self._same("Keyfactor", "Scotiabank"))
+
+    def test_substring_matching_is_not_used(self):
+        """"interac" sits inside "guesttekinteractiveentertainment", so raw
+        containment would have dropped a real GuestTek posting as a duplicate
+        of an Interac one."""
+        self.assertFalse(
+            self._same("GuestTek Interactive Entertainment Ltd", "Interac"))
+
+    def test_an_unnameable_company_falls_back_to_equality(self):
+        for a, b, want in (("", "", True), ("", "BMO", False),
+                           ("Ltd", "Inc", False)):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(self._same(a, b), want)
+
+    # ---- url normalising --------------------------------------------------
+    def test_url_compares_the_way_the_tracker_stores_it(self):
+        for raw, want in (
+                ("https://www.linkedin.com/jobs/view/4477455763",
+                 "https://www.linkedin.com/jobs/view/4477455763"),
+                ("https://www.linkedin.com/jobs/view/4477455763?refId=x",
+                 "https://www.linkedin.com/jobs/view/4477455763"),
+                ("https://www.linkedin.com/jobs/view/4477455763).",
+                 "https://www.linkedin.com/jobs/view/4477455763")):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.ib._clean_url(raw), want)
+
+    # ---- recommendation blocks -------------------------------------------
+    def _msg(self, *ids, heading="similar jobs you may be interested in"):
+        parts = []
+        for n, jid in enumerate(ids):
+            if heading and n == 1:
+                parts.append(f"<h3>{heading}</h3>")
+            parts.append(f'<a href="https://www.linkedin.com/jobs/view/{jid}">'
+                         f'job {jid}</a>')
+        return "".join(parts)
+
+    def test_jobs_under_a_suggestion_heading_are_identified(self):
+        got = self.ib._reco_ids(self._msg("111", "222", "333"))
+        self.assertEqual(got, {"222", "333"})
+
+    def test_a_heading_before_any_job_relabels_nothing(self):
+        """A digest whose own header matches must not have every row
+        relabelled - and, when this filtering removed rows rather than
+        labelling them, must not be emptied."""
+        html = ('<h3>similar jobs you may be interested in</h3>'
+                '<a href="https://www.linkedin.com/jobs/view/111">a</a>')
+        self.assertEqual(self.ib._reco_ids(html), set())
+
+    def test_no_heading_means_nothing_is_a_suggestion(self):
+        self.assertEqual(self.ib._reco_ids(self._msg("111", "222",
+                                                     heading=None)), set())
+        self.assertEqual(self.ib._reco_ids(""), set())
+        self.assertEqual(self.ib._reco_ids(None), set())
+
+    def test_a_job_above_and_below_the_heading_is_not_a_suggestion(self):
+        """LinkedIn repeats a job inside its own suggestion block. If it
+        arrived as a real alert row too, that is what it is."""
+        html = (self._msg("111", "222") +
+                '<a href="https://www.linkedin.com/jobs/view/111">again</a>')
+        self.assertNotIn("111", self.ib._reco_ids(html))
+
+    # ---- already applied --------------------------------------------------
+    def test_the_applied_marker_needs_its_date(self):
+        """LinkedIn's confirmation mail says "Applied on October 28, 2026" on
+        the job you just applied to. A bare "Applied" is not enough - it shows
+        up in prose - and dropping a real posting is the worse error."""
+        self.assertTrue(self.ib.LI_APPLIED.search("Applied on October 28, 2026"))
+        self.assertFalse(self.ib.LI_APPLIED.search("Applied Sciences"))
+        self.assertFalse(self.ib.LI_APPLIED.search("applied research methods"))
+        self.assertFalse(self.ib.LI_APPLIED.search("Applied"))
+
+
+class TestInboxExpiry(unittest.TestCase):
+    """Turning an unverifiable mailed link into a checkable one. No network.
+
+    verify_tracked SKIPS linkedin.com by design, so a row tracked under a
+    mailed link can never be found closed. Where the employer pass proved the
+    employer's own board carries the mailed title, that posting's URL is the
+    same req on a host the expiry check can read.
+    """
+
+    ib = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ib = _mod("ib6", "inbox.py")
+        cls.vt = _mod("vt6", "verify_tracked.py")
+
+    VERIFIED = {"verdict": "verified", "platform": "greenhouse",
+                "token": "capco", "mail_title": "DevOps Engineer",
+                "apply_url": "https://job-boards.greenhouse.io/capco/jobs/7765458"}
+
+    def test_the_mailed_host_is_unverifiable_and_the_ats_host_is_not(self):
+        """The whole reason for the swap, asserted against the real skip list."""
+        self.assertTrue(self.vt.skipped(
+            "https://www.linkedin.com/jobs/view/4477455763"))
+        self.assertFalse(self.vt.skipped(self.VERIFIED["apply_url"]))
+
+    def test_a_verified_board_supplies_the_apply_url(self):
+        self.assertEqual(self.ib.ats_apply_url(self.VERIFIED, "DevOps Engineer"),
+                         self.VERIFIED["apply_url"])
+
+    def test_only_for_the_title_the_match_was_made_on(self):
+        """An employer turns up in one week's mail under several titles, and
+        the cached URL belongs to whichever one matched. Pointing an
+        application at the wrong req is worse than keeping the mailed link."""
+        self.assertIsNone(
+            self.ib.ats_apply_url(self.VERIFIED, "Site Reliability Engineer"))
+
+    def test_title_spelling_differences_still_match(self):
+        for t in ("devops engineer", "DevOps  Engineer", "Dev-Ops Engineer"):
+            with self.subTest(t=t):
+                self.assertEqual(self.ib.ats_apply_url(self.VERIFIED, t),
+                                 self.VERIFIED["apply_url"])
+
+    def test_an_unverified_board_supplies_nothing(self):
+        """"Live board, mailed title absent" means closed OR a lookalike and
+        cannot tell which: of the 9 unverified employers cached on 2026-10-28,
+        recruitee/accenture and recruitee/synechron are Recruitee DEMO
+        accounts and greenhouse/nasdaq is a different entity. It must never
+        produce a URL, and it must never withhold a row."""
+        for verdict in ("unverified", "dead", "no-target-roles", "already"):
+            with self.subTest(verdict=verdict):
+                info = {**self.VERIFIED, "verdict": verdict}
+                self.assertIsNone(self.ib.ats_apply_url(info, "DevOps Engineer"))
+
+    def test_missing_pieces_never_raise(self):
+        for info in (None, {}, {"verdict": "verified"},
+                     {"verdict": "verified", "mail_title": "DevOps Engineer"},
+                     {"verdict": "verified", "apply_url": "https://x/1"}):
+            with self.subTest(info=info):
+                self.assertIsNone(self.ib.ats_apply_url(info, "DevOps Engineer"))
+
+    def test_the_employer_cache_adds_its_column_once(self):
+        """The cache predates apply_url, so the column is ALTERed in. Re-running
+        must not raise - employer_cache is called on every run."""
+        import sqlite3 as sq
+        with tempfile.TemporaryDirectory() as d:
+            c = sq.connect(os.path.join(d, "t.sqlite3"))
+            # the pre-apply_url schema, exactly as it was on disk
+            c.execute("CREATE TABLE employer_board("
+                      "name TEXT PRIMARY KEY, at TEXT, verdict TEXT, "
+                      "platform TEXT, token TEXT, postings INTEGER, "
+                      "evidence TEXT)")
+            c.execute("INSERT INTO employer_board VALUES"
+                      "('Capco','now','verified','greenhouse','capco',707,'a -> b')")
+            c.commit()
+            for _ in range(3):
+                self.ib.employer_cache(c)
+            cols = [r[1] for r in c.execute("PRAGMA table_info(employer_board)")]
+            self.assertIn("apply_url", cols)
+            # the existing row survived, carrying NULL
+            self.assertEqual(
+                list(c.execute("SELECT name, apply_url FROM employer_board")),
+                [("Capco", None)])
+
+    def test_report_employers_returns_the_report_and_the_data(self):
+        """Its return shape is a contract now - main() unpacks two values."""
+        with tempfile.TemporaryDirectory() as d:
+            tg = os.path.join(d, "targets.json")
+            with open(tg, "w") as fh:
+                json.dump({"greenhouse": [], "devops_vendors": []}, fh)
+            got = self.ib.report_employers({}, tg, conn=None)
+        self.assertIsInstance(got, tuple)
+        self.assertEqual(len(got), 2)
+        self.assertIsInstance(got[0], str)
+        self.assertIsInstance(got[1], dict)
+
+
+class TestAggregatorAgeing(unittest.TestCase):
+    """Calling an unfetchable row stale on the only evidence there is.
+
+    A linkedin.com posting cannot be fetched (verify_tracked.SKIP_HOSTS), so
+    the date it entered the tracker is all there is to go on. These assert the
+    threshold and its boundary, because nothing in the tracker is currently
+    old enough to exercise it in production - the oldest LinkedIn row on
+    2026-10-28 was 5 days old, so the path would otherwise go untested until
+    it fired on live data.
+    """
+
+    vt = None
+    NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vt = _mod("vt7", "verify_tracked.py")
+
+    def test_the_threshold_is_ten_days(self):
+        """Dropped from 45 on request: "24 hours old is acceptable, but a week
+        old" is the standard, and 45 days never fired once."""
+        self.assertEqual(self.vt.AGGREGATOR_STALE_DAYS, 10)
+
+    def test_the_cutoff_is_that_many_days_back(self):
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW, 10), "2026-10-18")
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW, 45), "2026-09-13")
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW), "2026-10-18")
+
+    def test_a_row_is_stale_only_once_it_is_past_the_threshold(self):
+        """Strictly before the cutoff, so exactly ten days old is not yet
+        stale. Checked either side of the boundary, not just in the middle."""
+        cases = {"2026-10-16": True,    # 12 days - stale
+                 "2026-10-17": True,    # 11 days - stale
+                 "2026-10-18": False,   # exactly 10 - not yet
+                 "2026-10-19": False,   # 9 days
+                 "2026-10-27": False}   # yesterday
+        for day, want in cases.items():
+            with self.subTest(found=day):
+                url = "https://www.linkedin.com/jobs/view/1"
+                got = self.vt.stale_rows({url: day}, [url], self.NOW)
+                self.assertEqual(bool(got), want)
+
+    def test_the_tuple_matches_the_tracked_live_shape(self):
+        """Five columns, inserted straight into tracked_live."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        row, = self.vt.stale_rows({url: "2026-10-01"}, [url], self.NOW)
+        self.assertEqual(len(row), 5)
+        self.assertEqual(row[0], url)
+        self.assertEqual(row[1], "stale")
+        self.assertEqual(row[2], 0)
+        self.assertTrue(row[3].startswith("2026-10-28T"))
+        self.assertIn("found 2026-10-01", row[4])
+
+    def test_a_row_with_no_found_date_is_left_alone(self):
+        """The date is the only evidence; no evidence is not evidence of
+        staleness. A row with no `Found:` line must not be labelled."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        self.assertEqual(self.vt.stale_rows({}, [url], self.NOW), [])
+        self.assertEqual(self.vt.stale_rows({url: ""}, [url], self.NOW), [])
+
+    def test_only_unfetchable_rows_are_considered(self):
+        """An old row on a real ATS host is checked by fetching it, not aged -
+        passing it here would label a job we can actually verify."""
+        ats = "https://job-boards.greenhouse.io/capco/jobs/7765458"
+        self.assertEqual(
+            self.vt.stale_rows({ats: "2026-01-01"}, [], self.NOW), [])
+        self.assertTrue(self.vt.skipped("https://www.linkedin.com/jobs/view/1"))
+        self.assertFalse(self.vt.skipped(ats))
+
+    def test_stale_is_never_the_state_the_purge_deletes_on(self):
+        """purge_expired.py deletes on `expired`/gone. If ageing ever started
+        writing that state, lowering the threshold would start destroying
+        application records instead of labelling them."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        row, = self.vt.stale_rows({url: "2026-01-01"}, [url], self.NOW)
+        self.assertEqual(row[1], "stale")
+        self.assertNotEqual(row[1], "gone")
 
 
 class TestRatecheck(unittest.TestCase):
