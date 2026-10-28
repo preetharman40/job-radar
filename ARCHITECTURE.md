@@ -444,6 +444,85 @@ obvious lever and nearly the worst one.**
 
 ---
 
+## what the mail channel pushes, and the four things it refuses to push twice
+
+The mail lane exists to reach what the poller cannot, so **nothing is ever
+removed from its digest** — a dropped row is a missed job, and that is the one
+failure this channel must not have. Filtering happens only at the **push and
+the tracker write**, and only on evidence. The digest prints the reason beside
+every row it is holding back.
+
+Four suppressions, each from a real alert that buzzed the phone on 2026-10-27:
+
+**1. It is already in your tracker.** Mail postings do not appear in `live` or
+`seen` at all — those are the ATS poller's tables and hold **no linkedin.com
+URLs whatsoever** — so neither one can tell you a mailed job is one you already
+have. `append_to_tracker` always deduped against the tracker itself, which is
+why a repeat never produced a duplicate *row*; `--notify` did not, so it buzzed
+anyway. A GCP SRE role at J&M Group was pushed as new while the tracker held it
+as `applied` from the day before. The same check also covers the `dismissed`
+table: 165 jobs had been dismissed in the web app and every one of them was
+eligible to be re-pushed from mail.
+
+**2. You already applied to it.** LinkedIn mails a confirmation when you
+apply, and renders the job you applied to exactly like an alert row. Only the
+dated form `Applied on October 28, 2026` is matched — a bare "Applied" also
+occurs in prose ("Applied Sciences"), and dropping a real posting is the worse
+error of the two.
+
+**3. The same employer has already posted that exact title.** The mail and the
+ATS board rarely spell a company the same way: `seen` held *Associate, DevOps
+Engineer* at **BMO** while the mail said **BMO Capital Markets**, so exact
+string equality made the night's one real duplicate a near-miss and it went to
+the phone. Companies are compared as **token subsets** after the legal suffix
+comes off, never as substrings — `"interac"` sits inside
+`"guesttekinteractiveentertainment"`, and raw containment would have dropped a
+real GuestTek posting. Measured across all **11,325** company pairs in `seen`:
+zero false merges. An earlier draft also stripped `canada` as a generic word
+and merged **Canada Life with Sun Life**, which is why the generic list holds
+only corporate-structure words.
+
+This matcher is deliberately **not** the one `report_employers` uses. There,
+crediting "BMO Capital Markets" to "BMO" would hide a board worth adding, so it
+refuses to; here the cost runs the other way, and under-matching buzzes the
+phone with a job you already have. Same two names, opposite correct answers.
+
+**4. We have been carrying it for a week.** 24 hours old is fine; a week is
+not. The honest part first: **LinkedIn alert mail carries no posting age at
+all.** Measured across 15 job segments in 6 messages — not one contained "2
+days ago", a date, or anything like it; the only badges are *Actively
+recruiting*, *Easy Apply* and alumni counts. The pages cannot be fetched
+either. Estimating age from the job id was tried and rejected: the per-day
+*maximum* id creeps ~170k while the per-day *minimum* swings by tens of
+millions, and the max is not even monotonic across days, so any day count from
+it would be invented. So `mail_role` records when **we** first saw each URL.
+A job new to us is always pushed however old LinkedIn's copy may be, because
+suppressing on a guess loses real postings; one we have been carrying for
+`--stale-days` (7) stops buzzing. True age on day one remains unknown, and the
+only trustworthy evidence of a *closed* req is the board cross-check below.
+
+**Labelled, not suppressed:** LinkedIn pads a message with blocks it chose
+itself — *similar jobs you may be interested in*, *People also viewed*. Those
+are not alerts you subscribed to, and they carried the oldest ids in the batch,
+but they are still real jobs: the three under J&M Group's heading were
+Keyfactor, Borrowell and CARET DevOps roles in Toronto. They are tagged in the
+digest and still pushed. `_reco_ids` refuses to tag anything unless a job
+anchor appears *before* the heading, because `Jobs similar to <title> at
+<company>` is a digest's own top-of-message header and keying on it would
+relabel — and, in the draft that removed rows instead of tagging them, delete —
+every row in the message.
+
+**Measured effect on that night's batch:** 20 roles in, 20 roles still listed,
+push 10 → 7. The three removed were the BMO duplicate, the J&M role already
+applied to, and a Broadridge role already dismissed in the web app. No
+legitimate new job was lost.
+
+**Still open:** the employer pass already computes *"live board, but the mailed
+title is not on it"* — direct evidence a req has closed — and the run that
+pushed ControlUp's *DevOps Engineer* printed exactly that about it in the same
+output. Feeding that verdict back into the push is the only real fix for
+*expired*, and it needs `report_employers` to return data as well as markdown.
+
 ## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
 
 `inbox.py --boards` has always read ATS account tokens out of the links in an

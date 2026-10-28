@@ -297,6 +297,111 @@ class TestInboxParsing(unittest.TestCase):
         self.assertFalse(self.ib.EMP_SKIP.match("Shopify"))
 
 
+class TestInboxDedupe(unittest.TestCase):
+    """The alert-mail dedupe. No network, no IMAP.
+
+    Every one of these is a real row from the 2026-10-27 run that either
+    buzzed the phone when it should not have, or would have been lost if the
+    noise filtering had been done by removing rows instead of labelling them.
+    """
+
+    ib = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ib = _mod("ib2", "inbox.py")
+
+    # ---- company matching -------------------------------------------------
+    def _same(self, a, b):
+        return self.ib._same_employer(self.ib._co_tokens(a),
+                                      self.ib._co_tokens(b))
+
+    def test_the_mail_and_the_board_spell_an_employer_differently(self):
+        """`seen` held "Associate, DevOps Engineer" at BMO; the mail said BMO
+        Capital Markets. Exact normalising made that a near-miss, so the one
+        real duplicate of the night went to the phone."""
+        self.assertTrue(self._same("BMO Capital Markets", "BMO"))
+        self.assertTrue(self._same("The Nationwide Group", "Nationwide"))
+        self.assertTrue(self._same("Tecsys Inc.", "Tecsys"))
+
+    def test_a_shared_word_is_not_a_shared_employer(self):
+        """Canada Life is not Sun Life. An earlier draft stripped "canada" as
+        a generic word and merged the two insurers."""
+        self.assertFalse(self._same("Canada Life", "Sun Life"))
+        self.assertFalse(self._same("Telus Health", "telus-digital"))
+        self.assertFalse(self._same("Keyfactor", "Scotiabank"))
+
+    def test_substring_matching_is_not_used(self):
+        """"interac" sits inside "guesttekinteractiveentertainment", so raw
+        containment would have dropped a real GuestTek posting as a duplicate
+        of an Interac one."""
+        self.assertFalse(
+            self._same("GuestTek Interactive Entertainment Ltd", "Interac"))
+
+    def test_an_unnameable_company_falls_back_to_equality(self):
+        for a, b, want in (("", "", True), ("", "BMO", False),
+                           ("Ltd", "Inc", False)):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(self._same(a, b), want)
+
+    # ---- url normalising --------------------------------------------------
+    def test_url_compares_the_way_the_tracker_stores_it(self):
+        for raw, want in (
+                ("https://www.linkedin.com/jobs/view/4477455763",
+                 "https://www.linkedin.com/jobs/view/4477455763"),
+                ("https://www.linkedin.com/jobs/view/4477455763?refId=x",
+                 "https://www.linkedin.com/jobs/view/4477455763"),
+                ("https://www.linkedin.com/jobs/view/4477455763).",
+                 "https://www.linkedin.com/jobs/view/4477455763")):
+            with self.subTest(raw=raw):
+                self.assertEqual(self.ib._clean_url(raw), want)
+
+    # ---- recommendation blocks -------------------------------------------
+    def _msg(self, *ids, heading="similar jobs you may be interested in"):
+        parts = []
+        for n, jid in enumerate(ids):
+            if heading and n == 1:
+                parts.append(f"<h3>{heading}</h3>")
+            parts.append(f'<a href="https://www.linkedin.com/jobs/view/{jid}">'
+                         f'job {jid}</a>')
+        return "".join(parts)
+
+    def test_jobs_under_a_suggestion_heading_are_identified(self):
+        got = self.ib._reco_ids(self._msg("111", "222", "333"))
+        self.assertEqual(got, {"222", "333"})
+
+    def test_a_heading_before_any_job_relabels_nothing(self):
+        """A digest whose own header matches must not have every row
+        relabelled - and, when this filtering removed rows rather than
+        labelling them, must not be emptied."""
+        html = ('<h3>similar jobs you may be interested in</h3>'
+                '<a href="https://www.linkedin.com/jobs/view/111">a</a>')
+        self.assertEqual(self.ib._reco_ids(html), set())
+
+    def test_no_heading_means_nothing_is_a_suggestion(self):
+        self.assertEqual(self.ib._reco_ids(self._msg("111", "222",
+                                                     heading=None)), set())
+        self.assertEqual(self.ib._reco_ids(""), set())
+        self.assertEqual(self.ib._reco_ids(None), set())
+
+    def test_a_job_above_and_below_the_heading_is_not_a_suggestion(self):
+        """LinkedIn repeats a job inside its own suggestion block. If it
+        arrived as a real alert row too, that is what it is."""
+        html = (self._msg("111", "222") +
+                '<a href="https://www.linkedin.com/jobs/view/111">again</a>')
+        self.assertNotIn("111", self.ib._reco_ids(html))
+
+    # ---- already applied --------------------------------------------------
+    def test_the_applied_marker_needs_its_date(self):
+        """LinkedIn's confirmation mail says "Applied on October 28, 2026" on
+        the job you just applied to. A bare "Applied" is not enough - it shows
+        up in prose - and dropping a real posting is the worse error."""
+        self.assertTrue(self.ib.LI_APPLIED.search("Applied on October 28, 2026"))
+        self.assertFalse(self.ib.LI_APPLIED.search("Applied Sciences"))
+        self.assertFalse(self.ib.LI_APPLIED.search("applied research methods"))
+        self.assertFalse(self.ib.LI_APPLIED.search("Applied"))
+
+
 class TestRatecheck(unittest.TestCase):
     rc = None
 
