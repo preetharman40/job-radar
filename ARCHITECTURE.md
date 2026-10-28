@@ -591,6 +591,85 @@ Lowering it is safe because `stale` is a label and never a deletion
 path cannot write `gone` — if it ever did, lowering this would start
 destroying application records instead of surfacing them.
 
+## the tracker refuses a duplicate by SOURCE, because reqs are indistinguishable
+
+`append_to_tracker` has always deduped on the URL: the posting's link, plus
+every URL in the `dismissed` table. That catches the same posting arriving
+twice under the same link, and it is why rows never duplicated even while
+pushes did. It cannot catch one job arriving down two different channels.
+
+The case that forced this: the Deloitte Azure req came in from a LinkedIn
+alert as row **387**, located "Canada", scoring **14**, and again from the
+SuccessFactors feed as row **518**, located "Toronto, ON, CA", scoring **36**.
+Two rows, two URLs, one job.
+
+The obvious fix — suppress a new job whose company and title already appear —
+is wrong, and the tracker itself says so. Three rows:
+
+| row | company | title | location | req |
+|---|---|---|---|---|
+| 278 | TMX Group | DevOps Analyst | Montreal - 1190 av. des Canadiens | R-6461 |
+| 279 | TMX Group | DevOps Analyst | Toronto - 100 Adelaide St W | R-6462 |
+| 280 | TMX Group | DevOps Analyst | Montreal - 1190 av. des Canadiens | R-6460 |
+
+278 and 280 share a company, a title, a location string **and a day**. They
+are still two separate requisitions. Scotiabank's two "Cloud Engineer" rows
+(#15 and #208) are likewise two reqs, two weeks and two postal codes apart.
+Keying on company+title would have hidden three real openings.
+
+Location cannot rescue it either. The tracker's `bucket` field is `CA` for 67
+of 77 rows — it is a geography filter, not an office — and the cross-source
+case has *deliberately* mismatched locations, because LinkedIn says "Canada"
+where the ATS says "Toronto, ON, CA".
+
+**The signal that separates the two cases is the source.** One board listing a
+title twice is advertising two reqs; two different channels carrying it once
+each are syndicating one. So a duplicate requires:
+
+- the same folded company, and
+- the same folded title, and
+- a **different** source, and
+- compatible locations — equal, or one too vague to contradict the other, or
+  one a refinement of the other ("Toronto, ON, CA" vs "…, M5H 0A9"). Two
+  different postal codes are *not* compatible, which is what keeps
+  Scotiabank's pair apart.
+
+Folding is case-insensitive on purpose: `applications.md` carries both
+`Greenhouse` and `greenhouse`, and if those read as two sources then two reqs
+off one board look like a duplicate and one is dropped. There is a test.
+
+A row releases its claim when it is `rejected`, when its URL is in
+`dismissed`, or when `verify_tracked` has marked it `gone` or `stale` — the
+same title reappearing after that is a new opening, not a duplicate of a dead
+one. `applied` keeps its claim: you already dealt with that job.
+
+### the asymmetry runs the other way here
+
+For the alert dedupe, over-claiming is correct — under-claiming buzzes the
+phone. For the tracker it inverts. A missed duplicate costs one row dismissed
+with a click. A wrong match costs a job that is **never seen and never
+reported**. So this guard keeps the row whenever it is unsure, and every
+suppression is printed with the row number it matched:
+
+```
+   not tracked: Cloud Engineer, Azure at Deloitte Canada - already row #387 under a different source
+```
+
+That line is the whole safety argument. A bug in the matcher shows up as a
+visibly wrong suppression message rather than as a job that quietly never
+arrives.
+
+**Measured before shipping:** replaying the guard over all 77 rows of the real
+tracker, in order, asking of each row whether the rows before it would have
+suppressed it — **0 suppressions**. It does not fire on any collision that
+exists today, and the two it could have fired on are the ones it must not.
+
+What it deliberately does not catch: the same job on two different boards with
+two different titles, and the same req re-posted under a new ID after the old
+one went `gone`. Both need the job description to detect, and both are the
+cheap error.
+
+
 ## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
 
 `inbox.py --boards` has always read ATS account tokens out of the links in an

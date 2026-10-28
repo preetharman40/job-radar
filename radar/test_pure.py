@@ -935,6 +935,202 @@ class TestRuleData(unittest.TestCase):
                 list(jr.SKILL_GROUPS))
 
 
+class TestTrackerDuplicates(unittest.TestCase):
+    """The tracker duplicate guard.
+
+    Every fixture here is a real row out of applications.md, because the whole
+    difficulty of this check is that genuinely separate requisitions look
+    exactly like duplicates: TMX's R-6460 and R-6461 share a company, a title,
+    a location string and a day. The rule leans on SOURCE to tell them apart,
+    so most of these tests are about what must NOT be suppressed.
+    """
+
+    @staticmethod
+    def _row(num, company, title, loc, source, status="toapply", url=None):
+        url = url or "https://example.com/%s" % num
+        table = ("| %s | %s | %s | %s | 2026-10-21 | — | 36 | | `%s` | Read |"
+                 % (num, company, title, loc[:45], status))
+        block = (
+            "## %s. %s - %s\n\n"
+            "- **Apply:** %s\n"
+            "- **Location:** %s - bucket `CA`\n"
+            "- **Level:** mid · **Score:** 36 · **ATS:** %s\n"
+            "- **Found:** 2026-10-21\n\n---\n" % (num, company, title, url, loc, source))
+        return table, block
+
+    def _body(self, rows):
+        tables = "\n".join(r[0] for r in rows)
+        blocks = "\n".join(r[1] for r in rows)
+        return ("| # | Company | Role | Location | Posted | Updated | Score | "
+                "| Status | Next |\n|---|---|---|---|---|---|---|---|---|---|\n"
+                + tables + "\n\n" + blocks)
+
+    # ---------------------------------------------------------- the target --
+    def test_the_deloitte_pair_is_what_this_exists_for(self):
+        """Row 387 came from a LinkedIn alert, 518 from the SF feed. One job."""
+        body = self._body([self._row(
+            387, "Deloitte Canada", "Cloud Engineer, Azure, Deloitte Global "
+            "Technology", "Canada", "linkedin.com")])
+        rows = jr.parse_tracker_rows(body)
+        hit = jr.find_tracker_dupe(
+            {"company": "Deloitte Canada",
+             "title": "Cloud Engineer, Azure, Deloitte Global Technology",
+             "location": "Toronto, ON, CA", "source": "successfactors"}, rows)
+        self.assertEqual(hit, 387)
+
+    # ------------------------------------- what must NOT be suppressed -----
+    def test_three_tmx_reqs_from_one_board_are_three_jobs(self):
+        """R-6460/6461/6462: same board, so two reqs, not one duplicate."""
+        body = self._body([
+            self._row(278, "TMX Group", "DevOps Analyst",
+                      "Montreal - 1190 av. des Canadiens-de-Montreal", "workday")])
+        rows = jr.parse_tracker_rows(body)
+        for loc in ("Montreal - 1190 av. des Canadiens-de-Montreal",
+                    "Toronto - 100 Adelaide St W"):
+            self.assertIsNone(jr.find_tracker_dupe(
+                {"company": "TMX Group", "title": "DevOps Analyst",
+                 "location": loc, "source": "workday"}, rows),
+                "same-source repeat at %s was suppressed" % loc)
+
+    def test_scotiabank_two_postal_codes_stay_apart(self):
+        """M5H 1H1 and M2H0A1 are two offices and two reqs."""
+        self.assertFalse(jr.loc_compatible("Toronto, ON, CA, M5H 1H1",
+                                           "Toronto, ON, CA, M2H0A1"))
+
+    def test_different_cities_are_not_duplicates_even_across_sources(self):
+        body = self._body([self._row(1, "Shopify", "Site Reliability Engineer",
+                                     "Toronto, ON, CA", "greenhouse")])
+        rows = jr.parse_tracker_rows(body)
+        self.assertIsNone(jr.find_tracker_dupe(
+            {"company": "Shopify", "title": "Site Reliability Engineer",
+             "location": "Vancouver, BC, CA", "source": "linkedin.com"}, rows))
+
+    def test_a_candidate_missing_company_or_title_never_matches(self):
+        """Matching on nothing would suppress everything."""
+        body = self._body([self._row(1, "", "", "Toronto, ON, CA", "greenhouse")])
+        rows = jr.parse_tracker_rows(body)
+        for cand in ({"company": "", "title": "DevOps Engineer"},
+                     {"company": "Acme", "title": ""},
+                     {"company": "", "title": ""}):
+            cand.update(location="Toronto, ON, CA", source="linkedin.com")
+            self.assertIsNone(jr.find_tracker_dupe(cand, rows))
+
+    def test_sources_differing_only_in_case_are_the_same_source(self):
+        """applications.md carries both "Greenhouse" and "greenhouse". If those
+        read as two sources, two reqs off one board look like a duplicate and
+        one of them is silently dropped."""
+        body = self._body([self._row(1, "Acme", "DevOps Engineer",
+                                     "Toronto, ON, CA", "Greenhouse")])
+        rows = jr.parse_tracker_rows(body)
+        self.assertIsNone(jr.find_tracker_dupe(
+            {"company": "Acme", "title": "DevOps Engineer",
+             "location": "Toronto, ON, CA", "source": "greenhouse"}, rows))
+
+    # ------------------------------------------- releasing a dead claim ----
+    def test_a_rejected_row_releases_its_claim(self):
+        row = {"status": "rejected", "url": "https://example.com/1"}
+        self.assertFalse(jr.tracker_row_active(row))
+        self.assertTrue(jr.tracker_row_active({**row, "status": "toapply"}))
+
+    def test_applied_still_holds_its_claim(self):
+        """You already dealt with it; the same job again is still noise."""
+        self.assertTrue(jr.tracker_row_active(
+            {"status": "applied", "url": "https://example.com/1"}))
+
+    def test_a_dismissed_or_gone_row_releases_its_claim(self):
+        row = {"status": "toapply", "url": "https://example.com/1"}
+        self.assertFalse(jr.tracker_row_active(row, dismissed={row["url"]}))
+        self.assertFalse(jr.tracker_row_active(row, closed={row["url"]}))
+        self.assertTrue(jr.tracker_row_active(row, dismissed=set(), closed=set()))
+
+    # ------------------------------------------------------ location folds --
+    def test_vague_location_cannot_contradict_a_specific_one(self):
+        for vague in ("Canada", "Remote", "", "Multiple Locations"):
+            self.assertTrue(jr.loc_compatible(vague, "Toronto, ON, CA"), vague)
+
+    def test_a_postal_code_refines_rather_than_contradicts(self):
+        self.assertTrue(jr.loc_compatible("Toronto, ON, CA",
+                                          "Toronto, ON, CA, M5H 0A9"))
+
+    def test_dupe_norm_folds_punctuation_case_and_asides(self):
+        self.assertEqual(jr.dupe_norm("Sr. DevOps Engineer (Remote)"),
+                         "sr devops engineer")
+        self.assertEqual(jr.dupe_norm("TMX  Group"), jr.dupe_norm("tmx group"))
+
+    # ------------------------------------------------------------ parsing --
+    def test_parse_tracker_rows_reads_both_halves(self):
+        body = self._body([self._row(
+            7, "Acme Corp", "DevOps Engineer",
+            "Toronto, ON, CA, M5H 0A9 - a location longer than the table keeps",
+            "greenhouse", status="applied", url="https://x.test/7")])
+        (r,) = jr.parse_tracker_rows(body)
+        self.assertEqual(r["num"], 7)
+        self.assertEqual(r["company"], "Acme Corp")
+        self.assertEqual(r["title"], "DevOps Engineer")
+        self.assertEqual(r["status"], "applied")       # backticks stripped
+        self.assertEqual(r["source"], "greenhouse")
+        self.assertEqual(r["url"], "https://x.test/7")
+        # The block's location survives in full; the table's is truncated.
+        self.assertIn("longer than the table keeps", r["location"])
+
+    # ------------------------------------------------------- end to end ----
+    def _job(self, **kw):
+        j = {"score": 30, "url": "https://example.com/j", "company": "Acme",
+             "title": "DevOps Engineer", "location": "Toronto, ON, CA",
+             "bucket": "CA", "level": "mid", "source": "greenhouse",
+             "kw": ["linux"], "family": "devops", "age": 0,
+             "posted": "2026-10-28", "updated": ""}
+        j.update(kw)
+        return j
+
+    def test_append_suppresses_a_cross_source_duplicate_and_reports_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.md")
+            n, _, dup = jr.append_to_tracker([self._job()], p, 10)
+            self.assertEqual((n, dup), (1, []))
+            n, _, dup = jr.append_to_tracker(
+                [self._job(url="https://other.test/j", source="linkedin.com",
+                           location="Canada")], p, 10)
+            self.assertEqual(n, 0)
+            self.assertEqual(len(dup), 1)
+            self.assertEqual(dup[0][1], 1)      # matched row #1
+            with open(p) as f:
+                self.assertEqual(f.read().count("## 1."), 1)
+
+    def test_append_keeps_a_same_source_repeat(self):
+        """The TMX case, end to end: it must still get its own row."""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.md")
+            jr.append_to_tracker([self._job()], p, 10)
+            n, _, dup = jr.append_to_tracker(
+                [self._job(url="https://example.com/j2")], p, 10)
+            self.assertEqual((n, dup), (1, []))
+
+    def test_one_batch_carrying_both_copies_keeps_the_better_score(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.md")
+            n, _, dup = jr.append_to_tracker([
+                self._job(score=14, url="https://li.test/j",
+                          source="linkedin.com", location="Canada"),
+                self._job(score=36, url="https://ats.test/j"),
+            ], p, 10)
+            self.assertEqual(n, 1)
+            self.assertEqual(len(dup), 1)
+            with open(p) as f:
+                body = f.read()
+            self.assertIn("https://ats.test/j", body)
+            self.assertNotIn("https://li.test/j", body)
+
+    def test_an_unrelated_job_is_never_suppressed(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "t.md")
+            jr.append_to_tracker([self._job()], p, 10)
+            n, _, dup = jr.append_to_tracker(
+                [self._job(url="https://other.test/k", source="linkedin.com",
+                           title="Platform Engineer")], p, 10)
+            self.assertEqual((n, dup), (1, []))
+
+
 class TestGoldenMaster(unittest.TestCase):
     """259 real postings, with the verdict the code gives today.
 

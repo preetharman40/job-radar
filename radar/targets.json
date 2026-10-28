@@ -398,11 +398,13 @@
     "mclean",
     "nesto",
     "paramount",
+    "pythian",
     "rippling",
     "rsa-security",
     "summit"
   ],
   "workable": [
+    "borrowell",
     "mlabs"
   ],
   "workday": [
@@ -637,6 +639,18 @@
       "cluster": "wd3",
       "site": "Global_Experienced_Careers",
       "max_pages": 2
+    },
+    {
+      "name": "Autodesk",
+      "tenant": "autodesk",
+      "cluster": "wd1",
+      "site": "Ext"
+    },
+    {
+      "name": "Broadridge",
+      "tenant": "broadridge",
+      "cluster": "wd5",
+      "site": "Careers"
     }
   ],
   "phenom": [

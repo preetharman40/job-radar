@@ -70,6 +70,9 @@ __all__ = [
     "offshore_marker", "office_mismatch",
     # pipeline
     "hydrate", "append_to_tracker", "main",
+    # tracker duplicate guard
+    "dupe_norm", "loc_compatible", "parse_tracker_rows",
+    "tracker_row_active", "find_tracker_dupe",
     # infrastructure
     "FileLock", "TRACKER_LOCK", "db", "db_write", "atomic_write",
     "notify", "ntfy_topic",
@@ -748,6 +751,121 @@ def posted_date(j):
     return "?"
 
 
+# --------------------------------------------------- tracker duplicates ---
+# The URL guard inside append_to_tracker catches the same posting arriving
+# twice under the same link. It cannot catch one job arriving down two
+# different channels: the Deloitte Azure req came in from a LinkedIn alert as
+# row 387, located "Canada", scoring 14, and again from the SuccessFactors
+# feed as row 518, located "Toronto, ON, CA", scoring 36. Two rows, one job.
+#
+# What this must NOT do is collapse genuinely separate requisitions, which
+# look identical from outside. TMX opened R-6460, R-6461 and R-6462 in one
+# day, all titled "DevOps Analyst", two of them at the same Montreal address.
+# Scotiabank's two "Cloud Engineer" rows sit two weeks and two postal codes
+# apart. Those are five real openings, not two duplicates.
+#
+# The signal that separates the cases is the SOURCE. One board listing a title
+# twice is advertising two reqs; two different channels carrying it once each
+# are syndicating one. So a duplicate requires a DIFFERENT source, and a
+# same-source repeat is always let through. Measured against every collision
+# in the tracker, that rule suppresses the Deloitte pair and nothing else.
+#
+# The asymmetry runs opposite to the alert dedupe. A missed duplicate costs
+# one row dismissed with a click; a wrong match silently costs a job you never
+# see. So this keeps the row whenever it is unsure, and every suppression is
+# printed with the row it matched rather than being swallowed.
+
+TRACK_VAGUE_LOC = frozenset((
+    "", "canada", "ca", "remote", "remote canada", "canada remote",
+    "anywhere", "various", "multiple locations",
+))
+
+TRACK_ROW_RE = re.compile(
+    r"(?m)^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|"
+    r"[^|]*\|([^|]*)\|")
+TRACK_BLOCK_RE = re.compile(r"(?ms)^## (\d+)\. .*?(?=^## \d+\.|\Z)")
+TRACK_CLOSED = ("rejected", "declined", "closed", "withdrawn")
+
+
+def dupe_norm(s):
+    """Fold a company, title or location for duplicate comparison."""
+    s = re.sub(r"\(.*?\)", " ", (s or "").lower())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+
+
+def loc_compatible(a, b):
+    """Could these two location strings describe the same posting?
+
+    True when they fold equal, when one is too vague to contradict the other
+    ("Canada" against "Toronto, ON, CA"), or when one refines the other
+    ("Toronto, ON, CA" against "Toronto, ON, CA, M5H 0A9"). Two different
+    postal codes are NOT compatible, which is what keeps Scotiabank's two
+    Cloud Engineer reqs apart.
+    """
+    na, nb = dupe_norm(a), dupe_norm(b)
+    if na == nb or na in TRACK_VAGUE_LOC or nb in TRACK_VAGUE_LOC:
+        return True
+    ta, tb = set(na.split()), set(nb.split())
+    return ta <= tb or tb <= ta
+
+
+def parse_tracker_rows(body):
+    """Existing tracker rows as dicts.
+
+    The table carries company, title and status; the detail block carries the
+    full location, the source and the URL. Both halves are needed: the table's
+    location column is truncated at 45 characters, and a truncated location
+    cannot be compared.
+    """
+    meta = {}
+    for m in TRACK_BLOCK_RE.finditer(body):
+        blk = m.group(0)
+        u = re.search(r"\*\*Apply:\*\*\s*(\S+)", blk)
+        lo = re.search(r"\*\*Location:\*\*\s*(.*?)\s*-\s*bucket", blk)
+        s = re.search(r"\*\*ATS:\*\*\s*(\S+)", blk)
+        meta[m.group(1)] = (u.group(1) if u else "",
+                            lo.group(1) if lo else "",
+                            s.group(1) if s else "")
+    rows = []
+    for num, co, ti, status in TRACK_ROW_RE.findall(body):
+        url, loc, src = meta.get(num, ("", "", ""))
+        rows.append({"num": int(num), "company": co.strip(), "title": ti.strip(),
+                     "status": status.strip().strip("` "), "location": loc,
+                     "source": src, "url": url})
+    return rows
+
+
+def tracker_row_active(row, dismissed=(), closed=()):
+    """Is this row still something you would act on?
+
+    A rejected row, a dismissed row, or one whose posting verify_tracked has
+    found gone, releases its claim: the same title reappearing later is a new
+    opening, not a duplicate of a dead one.
+    """
+    if (row.get("status") or "").lower() in TRACK_CLOSED:
+        return False
+    u = row.get("url") or ""
+    return not (u and (u in dismissed or u in closed))
+
+
+def find_tracker_dupe(cand, rows):
+    """The number of the active row `cand` duplicates, or None."""
+    c_co, c_ti = dupe_norm(cand.get("company")), dupe_norm(cand.get("title"))
+    if not c_co or not c_ti:
+        return None                       # too little to match on; keep it
+    c_src = dupe_norm(cand.get("source"))
+    for r in rows:
+        if dupe_norm(r.get("source")) == c_src:
+            continue                      # same board twice = two reqs
+        if dupe_norm(r.get("company")) != c_co:
+            continue
+        if dupe_norm(r.get("title")) != c_ti:
+            continue
+        if loc_compatible(r.get("location"), cand.get("location")):
+            return r["num"]
+    return None
+
+
 def append_to_tracker(jobs, path, min_score):
     """Append new high-scorers. Never rewrites existing rows or your notes."""
     if not os.path.exists(path):
@@ -756,21 +874,45 @@ def append_to_tracker(jobs, path, min_score):
         body = open(path).read()
 
     seen_urls = set(re.findall(r"https?://[^\s)\]]+", body))
+    dismissed_urls, closed_urls = set(), set()
     try:
         conn = db()
-        seen_urls |= {r[0] for r in conn.execute("SELECT url FROM dismissed")}
+        dismissed_urls = {r[0] for r in conn.execute("SELECT url FROM dismissed")}
+        closed_urls = {r[0] for r in conn.execute(
+            "SELECT url FROM tracked_live WHERE state IN ('gone', 'stale')")}
         conn.close()
     except Exception:
         pass
+    seen_urls |= dismissed_urls
     nums = [int(n) for n in re.findall(r"(?m)^\|\s*(\d+)\s*\|", body)]
     nxt = max(nums) + 1 if nums else 1
 
     todo = [j for j in jobs
             if j["score"] >= min_score and j["url"].rstrip(".,)") not in seen_urls]
     if not todo:
-        return 0, nxt
+        return 0, nxt, []
 
+    # Highest score first, so when one job arrives down two channels in the
+    # same batch the better-scored row is the one that survives.
     todo.sort(key=lambda j: -j["score"])
+
+    active = [r for r in parse_tracker_rows(body)
+              if tracker_row_active(r, dismissed_urls, closed_urls)]
+    keep, dropped = [], []
+    for j in todo:
+        cand = {"company": pretty_company(j["company"]), "title": j["title"],
+                "location": j["location"], "source": j.get("source", "")}
+        hit = find_tracker_dupe(cand, active)
+        if hit is not None:
+            dropped.append((j, hit))
+            continue
+        # Added to `active` so the batch also dedupes against itself.
+        active.append({**cand, "num": nxt + len(keep), "url": j["url"],
+                       "status": "toapply"})
+        keep.append(j)
+    todo = keep
+    if not todo:
+        return 0, nxt, dropped
     rows, blocks = [], []
     today = datetime.now(timezone.utc).date().isoformat()
 
@@ -827,7 +969,7 @@ def append_to_tracker(jobs, path, min_score):
             if anchor != -1 else body.rstrip() + "\n" + detail)
 
     atomic_write(path, body)
-    return len(todo), nxt
+    return len(todo), nxt, dropped
 
 
 # ------------------------------------------------------------------- notify --
@@ -1271,7 +1413,12 @@ def main():
         # is generous rather than slow.
         try:
             with FileLock(timeout=60):
-                n, _ = append_to_tracker(show, a.track_file, a.track_min_score)
+                n, _, dup = append_to_tracker(show, a.track_file,
+                                              a.track_min_score)
+            for j, row in dup:
+                print(f"   not tracked: {j['title']} at "
+                      f"{pretty_company(j['company'])} - already row #{row} "
+                      f"under a different source")
         except TimeoutError as e:
             track_failed = True
             n = 0
