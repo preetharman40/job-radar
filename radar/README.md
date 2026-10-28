@@ -12,12 +12,12 @@ python3 serve.py                # web view on :8737
 | Script | Purpose |
 |---|---|
 | `job_radar.py` | The engine — filtering, scoring, state, tracker, notification, reporting |
-| `adapters/` | **One module per ATS platform**, 21 of them. `fetch_*` (pass 1), `hydrate` (pass 2), `expand` (per-query fan-out). Adding a platform is one file plus two lines in `adapters/__init__.py` |
+| `adapters/` | **One module per ATS platform**, 22 of them. `fetch_*` (pass 1), `hydrate` (pass 2), `expand` (per-query fan-out). Adding a platform is one file, two lines in `adapters/__init__.py`, and one entry in `make_fast.py`'s `TOKEN_SRC`/`DICT_SRC` — the last is easy to forget and silently keeps the platform out of the 5-minute lane, so a test enforces it |
 | `fetchcore.py` | HTTP transport (`req`, `get_text`), HTML→text, and `job()` — the record shape the whole pipeline agrees on. Imports nothing from the radar |
 | `rules/titles.json` | **The title rules** — `(regex, tier, family)` plus the measurement that justifies each one. Tuning data, not code |
 | `rules/skills.json` | **The skill weights** — one skill, one score, many spellings, with the corpus frequencies the weights came from |
 | `fast.sh` | Cron lane 1: the productive boards from `fast.json`, every 5 min |
-| `daily.sh` | Cron lane 2: all 560 boards, every 30 min |
+| `daily.sh` | Cron lane 2: all 562 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
@@ -68,7 +68,7 @@ private or absent from the owning module's `__all__`.
 
 | Data | |
 |---|---|
-| `targets.json` | 560 boards + 85 DevOps-vendor tags. A platform entry may carry per-target options — e.g. SuccessFactors `"feed": true` polls the whole board from one RSS request instead of scraping the search page |
+| `targets.json` | 562 boards + 85 DevOps-vendor tags. A platform entry may carry per-target options — e.g. SuccessFactors `"feed": true` polls the whole board from one RSS request instead of scraping the search page |
 | `fast.json` | The productive subset — generated, not hand-edited |
 | `seen.sqlite3` | Local memory. Delete and re-`--seed` to reset. |
 | `.ntfy_topic` | Push topic — **this string is a password** |

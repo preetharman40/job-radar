@@ -33,6 +33,80 @@ def wd_age(p):
     return int(m.group(1)) * {"day": 1, "week": 7, "month": 30}[m.group(2).lower()] if m else None
 
 
+# Some tenants send NO locationsText at all. Thomson Reuters sends it empty on
+# every one of its 78 postings, which classified them all as location "" ->
+# bucket OTHER -> keep=False, so a board we have polled for weeks contributed
+# nothing and said nothing. Accenture does the same across 156 Canadian reqs.
+#
+# Two other fields carry the geography, and NEITHER is sufficient alone:
+#
+#   bulletFields   Thomson Reuters: ["Toronto", "Ontario", "JREQ204759"] - the
+#                  complete city list, including every city of a multi-site
+#                  req. Accenture: ["R00360485", "Location Negotiable"] - the
+#                  useful half is missing and the req id is in slot 0, so a
+#                  fixed index cannot be used either.
+#   externalPath   Accenture: /job/Ottawa-150-Elgin-St-Corp/... - the real
+#                  office. Thomson Reuters: a multi-site req open in Toronto
+#                  reads /job/United-States-of-America-Eagan-Minnesota/...,
+#                  which classifies US-ONLY and would DROP a Toronto job.
+#
+# So both are joined and the classifier is left to decide. Measured over the
+# live boards with the Canada facet applied: Accenture 19/19 and Thomson
+# Reuters 14/14 come out CA, including a "Cloud DevOps Specialist" and a "Lead
+# Cloud Platform Engineer, Azure" that were previously discarded.
+#
+# Req ids are dropped by SHAPE, not by position: upper-case alphanumerics with
+# at least one digit and no lower-case letters. That matches JREQ204759,
+# R00360485 and ATCI-5447017-S1998490 while leaving "Toronto - 100 Adelaide St
+# W" alone, which has lower-case letters.
+WD_REQID = re.compile(r"^[A-Z0-9][A-Z0-9_.\-]*\d[A-Z0-9_.\-]*$")
+
+
+def _wd_path_location(path):
+    """The location segment of /job/<Location>/<Title>_<ReqId>.
+
+    Dashes become spaces: the classifier reads
+    "United-States-of-America-Eagan-Minnesota" as OTHER but
+    "United States of America Eagan Minnesota" as US-ONLY, and getting a US
+    posting correctly labelled US is the whole point of including the path.
+    """
+    parts = [p for p in (path or "").split("/") if p]
+    if len(parts) >= 2 and parts[0] == "job":
+        return re.sub(r"[-_]+", " ", parts[1]).strip()
+    return ""
+
+
+def _dedupe_words(s):
+    """Drop repeated words, keeping order, so the joined location reads like a
+    place: Thomson Reuters' bullets and path together give "Toronto, Ontario,
+    Canada Toronto Ontario", which this reduces to "Toronto, Ontario, Canada".
+    """
+    seen, out = set(), []
+    for w in s.replace(",", " , ").split():
+        k = w.lower().strip(",;")
+        if not k or k == ",":
+            out.append(w)
+            continue
+        if k in seen:
+            continue
+        seen.add(w.lower().strip(",;"))
+        out.append(w)
+    return re.sub(r"\s+,", ",", " ".join(out)).strip(" ,")
+
+
+def wd_location(p):
+    """A posting's location, for tenants that omit locationsText."""
+    txt = (p.get("locationsText") or "").strip()
+    if txt:
+        return txt
+    bits = [b.strip() for b in (p.get("bulletFields") or [])
+            if b and b.strip() and not WD_REQID.match(b.strip())]
+    tail = _wd_path_location(p.get("externalPath"))
+    if tail:
+        bits.append(tail)
+    return _dedupe_words(", ".join(bits))
+
+
 def _wd_country_facet(api):
     """Ask the tenant which facet parameter carries Country, and cache it."""
     if api in _WD_FACET_CACHE:
@@ -222,7 +296,7 @@ def fetch_workday(t):
                 break
             for j in posts:
                 path = j.get("externalPath", "")
-                loc = j.get("locationsText", "")
+                loc = wd_location(j)
                 out.append(job("workday", name, j.get("title", ""), loc,
                                f"{base}/en-US/{site}{path}",
                                j.get("postedOn", ""), wd_age(j.get("postedOn")),

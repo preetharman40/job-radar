@@ -720,7 +720,7 @@ class TestAdaptersContract(unittest.TestCase):
                    for f in glob.glob(os.path.join(HERE, "adapters", "*.py"))
                    if not os.path.basename(f).startswith("_")}
         self.assertEqual(set(adapters.ADAPTERS), on_disk)
-        self.assertEqual(len(adapters.ADAPTERS), 21)
+        self.assertEqual(len(adapters.ADAPTERS), 22)
 
     def test_hydrators_are_a_subset_and_callable(self):
         self.assertLessEqual(set(adapters.HYDRATORS), set(adapters.ADAPTERS))
@@ -850,6 +850,179 @@ class TestSuccessFactorsFeed(unittest.TestCase):
         for keep in ("Toronto", "ON", "CA", "Quebec City", "St. John's"):
             with self.subTest(keep=keep):
                 self.assertFalse(self.sf.SF_POSTAL.match(keep))
+
+
+class TestWorkdayLocationFallback(unittest.TestCase):
+    """Tenants that send no locationsText.
+
+    Thomson Reuters sent it empty on all 78 of its postings and Accenture on
+    all 156 Canadian ones, so every row classified as OTHER and both boards
+    contributed nothing while reporting no error. Each fixture below is a real
+    posting off the live API.
+    """
+
+    wd = staticmethod(lambda: adapters.platform("workday"))
+
+    def test_locationsText_still_wins_when_present(self):
+        self.assertEqual(self.wd().wd_location(
+            {"locationsText": "Toronto, ON, CAN",
+             "bulletFields": ["R1", "Elsewhere"],
+             "externalPath": "/job/Nowhere/X_R1"}), "Toronto, ON, CAN")
+
+    def test_thomson_reuters_single_site(self):
+        """bulletFields = [city, region, reqId]; the req id must not survive."""
+        got = self.wd().wd_location(
+            {"locationsText": "", "bulletFields": ["Toronto", "Ontario", "JREQ204759"],
+             "externalPath": "/job/Canada-Toronto-Ontario/Privacy-Operations-Engineer_JREQ204759-1"})
+        self.assertEqual(got, "Toronto, Ontario, Canada")
+        self.assertEqual(jr.classify_location(got), ("CA", True))
+
+    def test_thomson_reuters_multi_site_keeps_canada(self):
+        """The real regression. This req is open in Toronto, but its path says
+        United-States-of-America, which alone classifies US-ONLY and would
+        drop it. The bulletFields carry the full city list."""
+        p = {"locationsText": "",
+             "bulletFields": ["Ann Arbor; Frisco; Toronto; Eagan",
+                              "Michigan; Texas; Ontario; Minnesota", "JREQ204694"],
+             "externalPath": "/job/United-States-of-America-Eagan-Minnesota/Software-Engineer_JREQ204694"}
+        got = self.wd().wd_location(p)
+        self.assertIn("Toronto", got)
+        self.assertEqual(jr.classify_location(got), ("CA", True))
+        # path alone would have lost it
+        self.assertEqual(jr.classify_location(
+            self.wd()._wd_path_location(p["externalPath"])), ("US-ONLY", False))
+
+    def test_accenture_recovers_the_city_from_the_path(self):
+        """Accenture's bulletFields say "Location Negotiable" - true but
+        useless. The path carries the office."""
+        got = self.wd().wd_location(
+            {"locationsText": "", "bulletFields": ["R00360485", "Location Negotiable"],
+             "externalPath": "/job/Ottawa-150-Elgin-St-Corp/Cloud-DevOps-Specialist_R00360485"})
+        self.assertIn("Ottawa", got)
+        self.assertEqual(jr.classify_location(got), ("CA", True))
+
+    def test_req_ids_are_dropped_by_shape_not_position(self):
+        """Accenture puts the req id in slot 0, Thomson Reuters in slot 2, so a
+        fixed index cannot work."""
+        for rid in ("JREQ204759", "R00360485", "ATCI-5447017-S1998490", "R-6461"):
+            with self.subTest(rid=rid):
+                self.assertTrue(self.wd().WD_REQID.match(rid))
+
+    def test_a_street_address_is_not_a_req_id(self):
+        """"Toronto - 100 Adelaide St W" has digits. It has lower case too,
+        which is what separates it from a req id."""
+        for loc in ("Toronto - 100 Adelaide St W", "Mississauga, 1 City Centre, Dcn",
+                    "Montreal 5 Place Ville Marie Corp"):
+            with self.subTest(loc=loc):
+                self.assertFalse(self.wd().WD_REQID.match(loc))
+        got = self.wd().wd_location(
+            {"locationsText": "", "bulletFields": ["Toronto - 100 Adelaide St W"],
+             "externalPath": ""})
+        self.assertEqual(got, "Toronto - 100 Adelaide St W")
+
+    def test_path_dashes_become_spaces(self):
+        """The classifier reads the dashed form as OTHER and the spaced form as
+        US-ONLY. Labelling a US posting US is the point of using the path."""
+        self.assertEqual(jr.classify_location(
+            "United-States-of-America-Eagan-Minnesota"), ("OTHER", False))
+        self.assertEqual(self.wd()._wd_path_location(
+            "/job/United-States-of-America-Eagan-Minnesota/X_1"),
+            "United States of America Eagan Minnesota")
+
+    def test_path_location_ignores_anything_not_a_job_path(self):
+        for path in ("", None, "/", "/jobs/123", "/job"):
+            with self.subTest(path=path):
+                self.assertEqual(self.wd()._wd_path_location(path), "")
+
+    def test_repeated_words_are_collapsed(self):
+        """Bullets and path overlap; without this the location reads
+        "Toronto, Ontario, Canada Toronto Ontario"."""
+        self.assertEqual(self.wd()._dedupe_words(
+            "Toronto, Ontario, Canada Toronto Ontario"), "Toronto, Ontario, Canada")
+
+    def test_a_posting_with_no_geography_at_all_yields_empty(self):
+        self.assertEqual(self.wd().wd_location({}), "")
+        self.assertEqual(self.wd().wd_location(
+            {"locationsText": "", "bulletFields": ["R00360485"],
+             "externalPath": ""}), "")
+
+
+class TestMakeFastCoverage(unittest.TestCase):
+    """make_fast.py must know every platform in targets.json.
+
+    A platform missing from TOKEN_SRC/DICT_SRC is silently absent from the
+    5-minute lane - no error, just a board that only ever gets the 30-minute
+    pass. `avature` and `teamtailor` each did this, and ARCHITECTURE.md records
+    that the fix was to run the both-ways diff BY HAND when adding a platform.
+    Doing it by hand is what failed twice, so it is a test now.
+    """
+
+    def _mf(self):
+        return _mod("make_fast", "make_fast.py")
+
+    def test_every_board_key_in_targets_is_known_to_make_fast(self):
+        mf = self._mf()
+        known = set(mf.TOKEN_SRC) | set(mf.DICT_SRC)
+        keys = {k for k, v in json.load(open(jr.TARGETS)).items()
+                if isinstance(v, list) and not k.startswith("_")
+                and k != "devops_vendors"}
+        self.assertEqual(keys - known, set(),
+                         "platforms in targets.json that make_fast ignores")
+
+    def test_make_fast_names_no_platform_that_does_not_exist(self):
+        mf = self._mf()
+        known = set(mf.TOKEN_SRC) | set(mf.DICT_SRC)
+        self.assertEqual(known - set(adapters.ADAPTERS), set(),
+                         "make_fast names platforms with no adapter")
+
+    def test_the_two_lists_do_not_overlap(self):
+        """A key in both would be filtered twice, by two different shapes."""
+        mf = self._mf()
+        self.assertEqual(set(mf.TOKEN_SRC) & set(mf.DICT_SRC), set())
+
+
+class TestBreezy(unittest.TestCase):
+    """The Breezy adapter. Fixtures are the live auctria board, trimmed."""
+
+    bz = staticmethod(lambda: adapters.platform("breezy"))
+
+    def test_a_full_location_reads_city_region_country(self):
+        self.assertEqual(self.bz()._bz_loc(
+            {"city": "Vancouver", "state": {"id": "BC", "name": "British Columbia"},
+             "country": {"name": "Canada", "id": "CA"}}),
+            "Vancouver, British Columbia, Canada")
+
+    def test_country_only_is_allowed(self):
+        """Auctria's remote DevOps req gives nothing finer than Canada."""
+        got = self.bz()._bz_loc({"country": {"name": "Canada", "id": "CA"},
+                                 "is_remote": True})
+        self.assertEqual(got, "Remote - Canada")
+        self.assertEqual(jr.classify_location(got), ("CA", True))
+
+    def test_remote_is_not_prefixed_twice(self):
+        self.assertEqual(self.bz()._bz_loc(
+            {"city": "Remote", "is_remote": True}), "Remote")
+
+    def test_a_non_dict_location_is_not_a_crash(self):
+        for bad in (None, "Toronto", 7, []):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.bz()._bz_loc(bad), "")
+
+    def test_the_ld_json_regex_finds_a_jobposting_block(self):
+        html = ('<html><script type="application/ld+json">'
+                '{"@type":"JobPosting","description":"<p>We use Terraform</p>",'
+                '"datePosted":"2026-10-13"}</script></html>')
+        m = list(self.bz().BZ_LD.finditer(html))
+        self.assertEqual(len(m), 1)
+        d = json.loads(m[0].group(1))
+        self.assertEqual(d["@type"], "JobPosting")
+        self.assertEqual(fc.strip_html(d["description"]).strip(), "We use Terraform")
+
+    def test_breezy_is_wired_with_a_hydrator(self):
+        """The list call has no description, so without a hydrator every
+        Breezy posting would be scored on its title alone."""
+        self.assertIn("breezy", adapters.ADAPTERS)
+        self.assertIn("breezy", adapters.HYDRATORS)
 
 
 class TestRuleData(unittest.TestCase):
