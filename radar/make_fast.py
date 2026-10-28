@@ -48,6 +48,22 @@ DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
 NEVER_FAST = ("jobbank", "insightglobal")
 
 
+def _fast_ok(t):
+    """Is this individual board cheap enough for the 5-minute lane?
+
+    NEVER_FAST above excludes whole PLATFORMS; this excludes a single board by
+    its SHAPE. A successfactors target carrying "feed": true is one request
+    that downloads the ENTIRE board - Deloitte's is 9.16 MB, or 1.53 MB
+    gzipped - which is the right trade at 26 sweeps a day on the 30-minute
+    lane and the wrong one at 156 on the 5-minute lane. It has to be by shape
+    rather than by name for two reasons: the platform itself must stay in the
+    fast lane, because the other 14 SuccessFactors tenants are ordinary
+    kilobyte search pages, and the next feed board added then inherits this
+    protection without anyone having to remember it.
+    """
+    return not t.get("feed")
+
+
 def main():
     # argparse rather than sys.argv[1], so `--help` prints help instead of
     # being treated as a digest filename and dying with FileNotFoundError.
@@ -79,7 +95,8 @@ def main():
             fast[k] = []
             continue
         fast[k] = [t for t in full.get(k, [])
-                   if (t.get("name") or "").lower() in producers]
+                   if (t.get("name") or "").lower() in producers
+                   and _fast_ok(t)]
         kept += len(fast[k])
     # Refuse to shrink the fast lane drastically. make_fast.py derives the
     # whole fast lane from one digest, so a digest that is truncated, from an

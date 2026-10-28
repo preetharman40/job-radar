@@ -17,6 +17,7 @@ to reach back into the classifier or the database.
 job is to return a list of these.
 """
 
+import gzip
 import json
 import re
 import time
@@ -72,10 +73,28 @@ def req(url, data=None, timeout=25, retries=2):
     raise last
 
 
-def get_text(url, timeout=25):
-    r = urllib.request.Request(url, headers=UA)
+def get_text(url, timeout=25, accept_gzip=False):
+    """Fetch a URL and decode it as text.
+
+    `accept_gzip` is opt-in rather than always-on. It is worth about 6x on a
+    whole-board feed - SuccessFactors' RMK job feed measures 9.16 MB plain and
+    1.53 MB compressed, 13.3s down to 2.8s - but asking for it on all 400+
+    tasks in a sweep would change the request every adapter makes, against
+    boards that have proved fussy about headers before, to save nothing on
+    pages measured in kilobytes. Turn it on where the payload is big.
+
+    A server may ignore the header, so decompress on the response's say-so
+    rather than on ours.
+    """
+    headers = dict(UA)
+    if accept_gzip:
+        headers["Accept-Encoding"] = "gzip"
+    r = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(r, timeout=timeout) as f:
-        return f.read().decode("utf-8", "replace")
+        raw = f.read()
+        if f.headers.get("Content-Encoding", "").lower() == "gzip":
+            raw = gzip.decompress(raw)
+    return raw.decode("utf-8", "replace")
 
 
 # Public, unlike the rest of these: SuccessFactors needs tag removal without

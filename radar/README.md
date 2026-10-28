@@ -17,7 +17,7 @@ python3 serve.py                # web view on :8737
 | `rules/titles.json` | **The title rules** — `(regex, tier, family)` plus the measurement that justifies each one. Tuning data, not code |
 | `rules/skills.json` | **The skill weights** — one skill, one score, many spellings, with the corpus frequencies the weights came from |
 | `fast.sh` | Cron lane 1: the productive boards from `fast.json`, every 5 min |
-| `daily.sh` | Cron lane 2: all 544 boards, every 30 min |
+| `daily.sh` | Cron lane 2: all 545 boards, every 30 min |
 | `serve.py` | Web app for the tracker (`serve_page.html` is its frontend) |
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
@@ -68,7 +68,7 @@ private or absent from the owning module's `__all__`.
 
 | Data | |
 |---|---|
-| `targets.json` | 529 boards + 85 DevOps-vendor tags |
+| `targets.json` | 545 boards + 85 DevOps-vendor tags. A platform entry may carry per-target options — e.g. SuccessFactors `"feed": true` polls the whole board from one RSS request instead of scraping the search page |
 | `fast.json` | The productive subset — generated, not hand-edited |
 | `seen.sqlite3` | Local memory. Delete and re-`--seed` to reset. |
 | `.ntfy_topic` | Push topic — **this string is a password** |

@@ -35,6 +35,7 @@ import tempfile
 import copy
 import ast
 import glob
+import hashlib
 import json
 import os
 import re
@@ -509,15 +510,44 @@ def _counts():
 
 @check(4, "verify_tracked --dry-run writes nothing")
 def _verify_dry():
-    before = _counts()
+    # Watch tracked_live, the ONLY table verify_tracked ever writes - and
+    # watch its row CONTENTS, not just the count, because a state or misses
+    # change rewrites a row in place.
+    #
+    # This used to compare _counts(), i.e. seen/live/sweeps - three tables
+    # verify_tracked does not touch at all, and three that a cron sweep
+    # rewrites every half hour. --dry-run takes minutes over the network, so
+    # the fast lane lands inside that window often, and the check then failed
+    # with "state changed during --dry-run" while verify_tracked had done
+    # nothing wrong. Caught on 2026-10-27: the 01:10 fast lane committed at
+    # 01:12:33Z mid-check, seen went 485 -> 494 and live 119,054 -> 119,709,
+    # and two back-to-back runs with no sweep in the window left tracked_live
+    # byte-identical. A safety net that cries wolf gets ignored.
+    before = _tracked_live()
     rc, out = sh(sys.executable, os.path.join(HERE, "verify_tracked.py"),
                  "--dry-run", timeout=600)
     if rc != 0:
         return False, f"rc={rc} {out.strip()[-160:]}"
-    if _counts() != before:
-        return False, "state changed during --dry-run"
+    after = _tracked_live()
+    if after != before:
+        return False, (f"tracked_live changed during --dry-run: "
+                       f"{before[0]} rows -> {after[0]} rows")
     m = re.search(r"(\d+) open", out)
-    return True, f"{m.group(1) if m else '?'} open, nothing written"
+    return True, f"{m.group(1) if m else '?'} open, {before[0]} rows untouched"
+
+
+def _tracked_live():
+    """(row count, digest of every row) - stable across processes.
+
+    hashlib, not hash(): Python randomises string hashing per process, so a
+    hash()-based digest compares two different seeds and always looks changed.
+    That mistake is how this check was first mis-diagnosed.
+    """
+    c = sqlite3.connect(f"file:{os.path.join(HERE, 'seen.sqlite3')}?mode=ro",
+                        uri=True)
+    rows = list(c.execute("SELECT url, state, misses, checked, detail "
+                          "FROM tracked_live ORDER BY url"))
+    return len(rows), hashlib.sha256(repr(rows).encode()).hexdigest()
 
 
 @check(4, "board_health --report reads cleanly")
