@@ -44,7 +44,7 @@ python3 serve.py                # web view on :8737
 | `hunt.py` | Workday / SuccessFactors tenants |
 | `agencies.txt` | Curated staffing-firm list, input for `harvest.py` |
 | `canada_employers.py` | Which companies can legally employ you in Canada |
-| `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot. `--boards` reads ATS tokens out of the links; `--employers` resolves the employer **by name** for LinkedIn mail, which carries no token at all, and vets each board against the title that was mailed. Runs daily 19:52 with `--notify --track --add-employer-boards`. Nothing is ever dropped from its digest; the push alone is deduped — against the tracker and `dismissed`, against jobs you already applied to, against the same employer having posted that title, and against URLs we have carried longer than `--stale-days` (7) |
+| `inbox.py` | Job-alert emails over IMAP — reaches what the poller cannot. `--boards` reads ATS tokens out of the links; `--employers` resolves the employer **by name** for LinkedIn mail, which carries no token at all, and vets each board against the title that was mailed. Runs daily 19:52 with `--notify --track --add-employer-boards`. Nothing is ever dropped from its digest; the push alone is deduped — against the tracker and `dismissed`, against jobs you already applied to, against the same employer having posted that title, and against URLs we have carried longer than `--stale-days` (7). Where `--employers` verifies an employer's board, the row's apply link becomes the employer's own ATS URL instead of the unverifiable linkedin.com one, so `verify_tracked` can detect expiry |
 | `hn.py` | Hacker News "Who is hiring?" |
 | `signals.py` | Funding rounds, before the requisition exists |
 

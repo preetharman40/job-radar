@@ -517,11 +517,62 @@ push 10 → 7. The three removed were the BMO duplicate, the J&M role already
 applied to, and a Broadridge role already dismissed in the web app. No
 legitimate new job was lost.
 
-**Still open:** the employer pass already computes *"live board, but the mailed
-title is not on it"* — direct evidence a req has closed — and the run that
-pushed ControlUp's *DevOps Engineer* printed exactly that about it in the same
-output. Feeding that verdict back into the push is the only real fix for
-*expired*, and it needs `report_employers` to return data as well as markdown.
+### expired: make it observable, not guessed
+
+A `linkedin.com/jobs/view/{id}` link **cannot be checked** — `verify_tracked`
+skips those hosts deliberately, so **98 tracked rows sit with no fetchable
+state** and a closed req stays in the tracker looking open. That is the real
+shape of the *expired* complaint, and there is no way to ask LinkedIn.
+
+The fix is not to infer closure. `report_employers` now returns its findings
+as data alongside its markdown, and where it **verified** an employer's board
+by finding the mailed title on it, the matching posting's own URL is the same
+req on a host the expiry check can read. That URL becomes the row's apply
+link. Measured on Capco: mailed as
+`linkedin.com/jobs/view/…`, resolved to
+`job-boards.greenhouse.io/capco/jobs/7765458`, and
+`verify_tracked.skipped()` returns **True** for the first and **False** for the
+second. Nothing about expiry is predicted — the row simply becomes checkable,
+and the 08:25 run finds it closed on the day it closes.
+
+Two consequences fall out for free. The ATS URL is compared against `live`
+like any other, so a req the poller already holds is now recognised as
+already-found instead of pushed as new; and the apply link points at the
+employer rather than at an aggregator.
+
+The URL is used **only** for the exact title the board match was made on. An
+employer can appear in one week's mail under several titles and the cached URL
+belongs to whichever one matched; attaching it to another row would point an
+application at the wrong req.
+
+**What was NOT done, and why.** The obvious move is to suppress the push on
+the `unverified` verdict — a live board that does not list the mailed title.
+It reads like proof the req closed. It is not. Of the nine `unverified`
+employers cached on 2026-10-28:
+
+| employer | board | postings | what it actually is |
+|---|---|---|---|
+| Accenture | `recruitee/accenture` | 2 | a Recruitee **demo account** (see `_recruitee_note`) |
+| Synechron | `recruitee/synechron` | 1 | the same demo-account class |
+| Nasdaq | `greenhouse/nasdaq` | 2 | already documented as a satellite board for a different entity |
+| ControlUp | `lever/controlup` | 11 | plausibly the real board, req plausibly closed |
+| DV Trading, Enterprise Solutions, FLINT, Relay, Vaco | — | 8–75 | unknown |
+
+Acting on that verdict would have silenced real Accenture, Synechron and
+Nasdaq roles on the strength of a demo account's contents.
+`resolve_employer`'s own docstring says the verdict means "closed **or** a
+lookalike" and that it cannot tell which — it is the check that correctly
+rejected `greenhouse/nasdaq` in the first place. So it is printed beside the
+row as a caveat and **never used to withhold one**. At least a third of it
+points the wrong way, and the wrong way loses jobs.
+
+**Still open:** the 98 rows already tracked under a mailed link keep their
+unverifiable URL; only rows resolved from here on get a checkable one.
+Rewriting the existing ones would mean editing `applications.md`, which
+carries third-party contact details, so it is not done unprompted.
+`AGGREGATOR_STALE_DAYS = 45` remains the only ageing those rows get — loose
+against a "a week is too old" standard, though it only relabels and never
+deletes (`purge_expired.py` keys on `expired`, not `stale`).
 
 ## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
 

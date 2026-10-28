@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -400,6 +401,103 @@ class TestInboxDedupe(unittest.TestCase):
         self.assertFalse(self.ib.LI_APPLIED.search("Applied Sciences"))
         self.assertFalse(self.ib.LI_APPLIED.search("applied research methods"))
         self.assertFalse(self.ib.LI_APPLIED.search("Applied"))
+
+
+class TestInboxExpiry(unittest.TestCase):
+    """Turning an unverifiable mailed link into a checkable one. No network.
+
+    verify_tracked SKIPS linkedin.com by design, so a row tracked under a
+    mailed link can never be found closed. Where the employer pass proved the
+    employer's own board carries the mailed title, that posting's URL is the
+    same req on a host the expiry check can read.
+    """
+
+    ib = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ib = _mod("ib6", "inbox.py")
+        cls.vt = _mod("vt6", "verify_tracked.py")
+
+    VERIFIED = {"verdict": "verified", "platform": "greenhouse",
+                "token": "capco", "mail_title": "DevOps Engineer",
+                "apply_url": "https://job-boards.greenhouse.io/capco/jobs/7765458"}
+
+    def test_the_mailed_host_is_unverifiable_and_the_ats_host_is_not(self):
+        """The whole reason for the swap, asserted against the real skip list."""
+        self.assertTrue(self.vt.skipped(
+            "https://www.linkedin.com/jobs/view/4477455763"))
+        self.assertFalse(self.vt.skipped(self.VERIFIED["apply_url"]))
+
+    def test_a_verified_board_supplies_the_apply_url(self):
+        self.assertEqual(self.ib.ats_apply_url(self.VERIFIED, "DevOps Engineer"),
+                         self.VERIFIED["apply_url"])
+
+    def test_only_for_the_title_the_match_was_made_on(self):
+        """An employer turns up in one week's mail under several titles, and
+        the cached URL belongs to whichever one matched. Pointing an
+        application at the wrong req is worse than keeping the mailed link."""
+        self.assertIsNone(
+            self.ib.ats_apply_url(self.VERIFIED, "Site Reliability Engineer"))
+
+    def test_title_spelling_differences_still_match(self):
+        for t in ("devops engineer", "DevOps  Engineer", "Dev-Ops Engineer"):
+            with self.subTest(t=t):
+                self.assertEqual(self.ib.ats_apply_url(self.VERIFIED, t),
+                                 self.VERIFIED["apply_url"])
+
+    def test_an_unverified_board_supplies_nothing(self):
+        """"Live board, mailed title absent" means closed OR a lookalike and
+        cannot tell which: of the 9 unverified employers cached on 2026-10-28,
+        recruitee/accenture and recruitee/synechron are Recruitee DEMO
+        accounts and greenhouse/nasdaq is a different entity. It must never
+        produce a URL, and it must never withhold a row."""
+        for verdict in ("unverified", "dead", "no-target-roles", "already"):
+            with self.subTest(verdict=verdict):
+                info = {**self.VERIFIED, "verdict": verdict}
+                self.assertIsNone(self.ib.ats_apply_url(info, "DevOps Engineer"))
+
+    def test_missing_pieces_never_raise(self):
+        for info in (None, {}, {"verdict": "verified"},
+                     {"verdict": "verified", "mail_title": "DevOps Engineer"},
+                     {"verdict": "verified", "apply_url": "https://x/1"}):
+            with self.subTest(info=info):
+                self.assertIsNone(self.ib.ats_apply_url(info, "DevOps Engineer"))
+
+    def test_the_employer_cache_adds_its_column_once(self):
+        """The cache predates apply_url, so the column is ALTERed in. Re-running
+        must not raise - employer_cache is called on every run."""
+        import sqlite3 as sq
+        with tempfile.TemporaryDirectory() as d:
+            c = sq.connect(os.path.join(d, "t.sqlite3"))
+            # the pre-apply_url schema, exactly as it was on disk
+            c.execute("CREATE TABLE employer_board("
+                      "name TEXT PRIMARY KEY, at TEXT, verdict TEXT, "
+                      "platform TEXT, token TEXT, postings INTEGER, "
+                      "evidence TEXT)")
+            c.execute("INSERT INTO employer_board VALUES"
+                      "('Capco','now','verified','greenhouse','capco',707,'a -> b')")
+            c.commit()
+            for _ in range(3):
+                self.ib.employer_cache(c)
+            cols = [r[1] for r in c.execute("PRAGMA table_info(employer_board)")]
+            self.assertIn("apply_url", cols)
+            # the existing row survived, carrying NULL
+            self.assertEqual(
+                list(c.execute("SELECT name, apply_url FROM employer_board")),
+                [("Capco", None)])
+
+    def test_report_employers_returns_the_report_and_the_data(self):
+        """Its return shape is a contract now - main() unpacks two values."""
+        with tempfile.TemporaryDirectory() as d:
+            tg = os.path.join(d, "targets.json")
+            with open(tg, "w") as fh:
+                json.dump({"greenhouse": [], "devops_vendors": []}, fh)
+            got = self.ib.report_employers({}, tg, conn=None)
+        self.assertIsInstance(got, tuple)
+        self.assertEqual(len(got), 2)
+        self.assertIsInstance(got[0], str)
+        self.assertIsInstance(got[1], dict)
 
 
 class TestRatecheck(unittest.TestCase):

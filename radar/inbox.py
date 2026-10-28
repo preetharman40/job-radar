@@ -644,12 +644,24 @@ def employer_cache(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS employer_board("
                  "name TEXT PRIMARY KEY, at TEXT, verdict TEXT, "
                  "platform TEXT, token TEXT, postings INTEGER, evidence TEXT)")
+    # Added after the cache already existed, so ALTER rather than a new
+    # schema: re-probing 165 employers to backfill one column would be
+    # thousands of requests to re-learn what is already known. An older row
+    # simply carries NULL here and is re-probed when it goes stale.
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(employer_board)")}
+    if "apply_url" not in cols:
+        conn.execute("ALTER TABLE employer_board ADD COLUMN apply_url TEXT")
+        conn.commit()
     return conn
 
 
 def report_employers(employers, targets_path, add=False, conn=None,
                      stale_days=60, limit=None, deep=False):
-    """Resolve employers named in the mail into boards. Returns the report.
+    """Resolve employers named in the mail into boards.
+
+    Returns (report, resolved) - the markdown, and what was learned about each
+    employer keyed on its lowercased name, so the caller can act on a verdict
+    instead of only printing it.
 
     Every result is CACHED, because without that this is unaffordable on a
     daily schedule: a fortnight of mail names ~200 distinct employers, and
@@ -701,23 +713,39 @@ def report_employers(employers, targets_path, add=False, conn=None,
     cached = {}
     if conn is not None:
         employer_cache(conn)
-        for n, at, v, p, t, c, ev in conn.execute(
-                "SELECT name, at, verdict, platform, token, postings, evidence "
-                "FROM employer_board"):
-            cached[n.lower()] = (at, v, p, t, c, ev)
+        for n, at, v, p, t, c, ev, au in conn.execute(
+                "SELECT name, at, verdict, platform, token, postings, "
+                "evidence, apply_url FROM employer_board"):
+            cached[n.lower()] = (at, v, p, t, c, ev, au)
 
-    todo, results = [], []
+    # Built alongside `results`, whose tuple shape is deliberately left alone:
+    # six call sites unpack it positionally and this needs to carry two extra
+    # fields back to the caller. Keyed on the lowercased employer name, which
+    # is how the cache is keyed too.
+    todo, results, resolved = [], [], {}
+
+    def _resolve(name, verdict, platform, token, apply_url, mail_title):
+        resolved[name.lower()] = {"verdict": verdict, "platform": platform,
+                                  "token": token, "apply_url": apply_url,
+                                  "mail_title": mail_title}
+
     for name in sorted(employers):
         # Already polled under one of its own name tokens - nothing to find.
         if (_names(name) & polled
                 or any(t in have.get(p, ()) for t in dc.variants(name, 1)
                        for p in dc.PROBES)):
             results.append(("already", name, None, None, 0, None))
+            _resolve(name, "already", None, None, None, None)
             continue
         hit = cached.get(name.lower())
         if hit and (hit[1] not in ("dead", "unverified", "no-target-roles")
                     or hit[0] > cutoff):
             results.append((hit[1], name, hit[2], hit[3], hit[4] or 0, hit[5]))
+            # evidence is stored as "<mailed title> -> <board title>"; the
+            # mailed half is what says WHICH of this employer's titles the
+            # cached apply_url belongs to.
+            _resolve(name, hit[1], hit[2], hit[3], hit[6],
+                     (hit[5] or "").split(" -> ")[0] or None)
             continue
         todo.append(name)
     if limit:
@@ -734,6 +762,17 @@ def report_employers(employers, targets_path, add=False, conn=None,
                                                  tier2=deep)
         evs = f"{ev[0]} -> {ev[1]}" if ev else None
         results.append((v, name, p, t, len(posts), evs))
+        # The posting the mailed title matched, on a board whose identity that
+        # same match confirms - so this is the employer's OWN apply URL for
+        # the job the alert was about. Worth carrying because a linkedin.com
+        # link is unverifiable by design (see verify_tracked.SKIP_HOSTS) while
+        # an ATS URL is exactly what the expiry check already knows how to
+        # read.
+        apply_url = None
+        if v == "verified" and ev and ev[1]:
+            apply_url = next((j.get("url") for j in posts
+                              if j.get("title") == ev[1] and j.get("url")), None)
+        _resolve(name, v, p, t, apply_url, ev[0] if ev else None)
         if conn is not None:
             # Commit per employer, not once at the end. seen.sqlite3 is shared
             # with both poller lanes and SQLite in WAL mode allows exactly one
@@ -744,8 +783,9 @@ def report_employers(employers, targets_path, add=False, conn=None,
             # "database is locked" once its 30s busy_timeout expires. A commit
             # per row costs nothing at this volume and bounds the lock to one
             # insert.
-            conn.execute("INSERT OR REPLACE INTO employer_board VALUES(?,?,?,?,?,?,?)",
-                         (name, now, v, p, t, len(posts), evs))
+            conn.execute("INSERT OR REPLACE INTO employer_board "
+                         "VALUES(?,?,?,?,?,?,?,?)",
+                         (name, now, v, p, t, len(posts), evs, apply_url))
             conn.commit()
 
     by = lambda v: [r for r in results if r[0] == v]
@@ -795,7 +835,7 @@ def report_employers(employers, targets_path, add=False, conn=None,
     elif addable:
         L.append(f"_Re-run with `--add-employer-boards` to append the "
                  f"{len(addable)} verified board(s)._")
-    return "\n".join(L)
+    return "\n".join(L), resolved
 
 
 def guess_location(msg_text, title):
@@ -810,6 +850,27 @@ def guess_location(msg_text, title):
     if re.search(r"\bremote\b", f"{title} {window}", re.I):
         return "Remote"
     return ""
+
+
+def _norm_key(s):
+    """Letters and digits only, lowercased - for comparing two spellings."""
+    return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+
+def ats_apply_url(info, title):
+    """The employer's OWN apply URL for this row, if one was proved.
+
+    Only for a `verified` employer, and only for the exact title the board
+    match was made on: an employer can appear in one week's mail under several
+    titles, and the cached URL belongs to whichever one matched. Attaching it
+    to a different row would point an application at the wrong req.
+    """
+    if not info or info.get("verdict") != "verified":
+        return None
+    mailed, url = info.get("mail_title"), info.get("apply_url")
+    if not mailed or not url or _norm_key(mailed) != _norm_key(title):
+        return None
+    return url
 
 
 def _clean_url(u):
@@ -1115,6 +1176,49 @@ def main():
     rows = list(byurl.values())
     role_ages(conn, rows, now)
 
+    # Resolved here rather than where its report is printed, which is after
+    # the dedupe. Two of the things below depend on knowing the employer's
+    # real board BEFORE a row is deduped and pushed: a substituted ATS URL has
+    # to be compared against `live` like any other, and a row cannot be
+    # annotated after it has been rendered.
+    emp_md, resolved = "", {}
+    if a.employers:
+        emp_md, resolved = report_employers(employers, jr.TARGETS,
+                                            add=a.add_employer_boards,
+                                            conn=conn, limit=a.employer_limit,
+                                            deep=a.employer_deep)
+
+    # THE EXPIRY FIX, and it is not what it first looks like.
+    #
+    # A linkedin.com/jobs/view/{id} link cannot be checked - verify_tracked
+    # skips those hosts on purpose, so 98 tracked rows sit with no fetchable
+    # state and a closed req stays in the tracker looking open. The employer
+    # pass does however know some employers' real boards, and where the mailed
+    # title was matched ON that board, the matching posting's own URL is the
+    # same req on a host the expiry check CAN read. Substituting it does not
+    # guess at expiry; it makes expiry observable from the next
+    # verify_tracked run onward, by the machinery that already exists.
+    #
+    # NOT done: suppressing the push on the "unverified" verdict - a live
+    # board that does not list the mailed title. That reads like proof the req
+    # closed and is not: of the 9 unverified employers cached on 2026-10-28,
+    # recruitee/accenture (2 postings) and recruitee/synechron (1) are
+    # Recruitee DEMO accounts answering 200 with sample data, and
+    # greenhouse/nasdaq (2) is already documented as a satellite board for a
+    # different entity. Acting on that verdict would have silenced real
+    # Accenture, Synechron and Nasdaq roles on the strength of a demo
+    # account's contents. resolve_employer's own docstring says the verdict
+    # means "closed OR a lookalike", and it cannot tell which, so it is
+    # reported beside the row and never used to withhold one.
+    for r in rows:
+        info = resolved.get((r.get("company") or "").lower())
+        if not info:
+            continue
+        r["board_verdict"] = info["verdict"]
+        ats = ats_apply_url(info, r["title"])
+        if ats:
+            r["ats_url"] = ats
+
     # Drop anything the ATS poller already found. A URL comparison only
     # catches the same posting from the same source: the poller holds the
     # Amazon AFT req as an amazon.jobs URL, LinkedIn mails it as
@@ -1122,8 +1226,7 @@ def main():
     # equal. So also compare normalised title+company against `seen`, which is
     # every posting the radar has ever shown. Title-only collisions are flagged
     # rather than dropped - "DevOps Engineer" is not a unique key.
-    def _norm(s):
-        return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+    _norm = _norm_key
 
     live = {u.split("?")[0] for (u,) in conn.execute("SELECT url FROM live")}
     # norm(title) -> the employers `seen` has posted that exact title for.
@@ -1142,14 +1245,20 @@ def main():
     for r in rows:
         nt, mine = _norm(r["title"]), _co_tokens(r.get("company"))
         same_title = shown.get(nt, [])
-        if r["url"].split("?")[0] in live or any(
+        # Both spellings of the same req: the linkedin.com link the mail gave
+        # and, where the employer pass resolved one, the employer's own ATS
+        # URL. Checking both matters in both directions - the poller may
+        # already hold the ATS URL in `live`, and a row tracked under one of
+        # them must not come back as new under the other.
+        urls = [_clean_url(u) for u in (r["url"], r.get("ats_url")) if u]
+        if any(u in live for u in urls) or any(
                 _same_employer(mine, c) for c in same_title):
             continue
         # Flagged rather than dropped: "DevOps Engineer" is not a unique key,
         # and of the seven rows this flagged on 2026-10-27 exactly ONE was a
         # real duplicate. The employer test above is what actually drops them.
         r["maybe_dup"] = bool(same_title)
-        r["in_tracker"] = _clean_url(r["url"]) in known
+        r["in_tracker"] = any(u in known for u in urls)
         fresh.append(r)
     fresh_urls = {r["url"] for r in fresh}
     # Held out of the push and the tracker write, but still LISTED, so the
@@ -1185,21 +1294,24 @@ def main():
             flag = ""
         if r.get("reco") and r["url"] in sendable_urls:
             flag += "  _(LinkedIn suggestion, not one of your alerts)_"
+        if r.get("board_verdict") == "unverified":
+            flag += ("  _(employer's board is live but does not list this "
+                     "title — may have closed, or may be a lookalike board)_")
         who = f" · **{r['company']}**" if r.get("company") else ""
         L += [f"### [{r['score']}] {r['title']}{flag}",
               f"- via **{r['source']}**{who} · `{r['bucket']}` · `{r['level']}`"
               f" · {r['location']}",
-              f"- {r['url']}",
+              f"- {r.get('ats_url') or r['url']}"
+              + ("  _(employer's own board — checkable for expiry; "
+                 f"mailed as {r['url']})_" if r.get("ats_url") else ""),
               f"- matched: {', '.join(r['kw']) or '—'}", ""]
     if not rows:
         L.append("_no new job-alert mail matched. Subscribe to alerts on the "
                  "employers in manual_check.md - that is what this channel is for._")
     if a.boards:
         L.append(report_boards(links, jr.TARGETS, add=a.add_boards))
-    if a.employers:
-        L.append(report_employers(employers, jr.TARGETS,
-                                  add=a.add_employer_boards, conn=conn,
-                                  limit=a.employer_limit, deep=a.employer_deep))
+    if emp_md:
+        L.append(emp_md)
     out = "\n".join(L)
     print(out)
     if a.md:
@@ -1211,7 +1323,7 @@ def main():
         # been carrying for --stale-days - so a req the radar pushed this
         # morning does not buzz again tonight from LinkedIn's copy of it. notify() reads j["age"], and an alert snippet
         # carries no posting date, so it is explicitly None rather than absent.
-        push = [{**r, "age": None,
+        push = [{**r, "age": None, "url": r.get("ats_url") or r["url"],
                  "company": r.get("company") or r["source"]}
                 for r in sendable if r["score"] >= a.notify_min_score]
         if push:
@@ -1235,9 +1347,14 @@ def main():
         # web app showed 116 jobs with no employer. The phone alert had
         # the right name all along, which is why a role could be read on
         # the phone and not found by company in the app.
+        # The employer's own ATS URL when the employer pass proved one for
+        # this title, and the mailed link otherwise. This is the whole expiry
+        # fix: verify_tracked SKIPS linkedin.com, so a row tracked under the
+        # mailed link can never be found closed, while the same req tracked
+        # under its ATS URL is checked every day at 08:25 like any other.
         payload = [{**r, "company": r.get("company") or r["source"],
-                    "posted": "", "age": None,
-                    "updated": "", "url": r["url"], "title": r["title"]}
+                    "posted": "", "age": None, "updated": "",
+                    "url": r.get("ats_url") or r["url"], "title": r["title"]}
                    for r in sendable if r["score"] >= a.track_min_score]
         if payload:
             try:
