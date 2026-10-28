@@ -570,9 +570,26 @@ points the wrong way, and the wrong way loses jobs.
 unverifiable URL; only rows resolved from here on get a checkable one.
 Rewriting the existing ones would mean editing `applications.md`, which
 carries third-party contact details, so it is not done unprompted.
-`AGGREGATOR_STALE_DAYS = 45` remains the only ageing those rows get — loose
-against a "a week is too old" standard, though it only relabels and never
-deletes (`purge_expired.py` keys on `expired`, not `stale`).
+Ageing is the only signal those rows get, and `AGGREGATOR_STALE_DAYS` was
+**dropped from 45 days to 10** on 2026-10-28: *"the jobs might be 24 hours
+old, that is acceptable, but a week old"* is the standard they are read
+against, and 45 days is nowhere near it. 10 rather than 7 because the `Found`
+date is when **we** first saw the posting, not when it was published — it
+already undercounts the req's real age, so a few days of slack keeps a job
+that is merely a week old out of the label.
+
+Measured before changing it: of the 76 LinkedIn rows in the tracker the
+**oldest was 5 days**, so nothing was relabelled on the day and it starts
+applying around 2026-11-07 as the rows tracked from 2026-10-23 onward age past
+it. The old value had never fired once — the web app reported `stale 0`. The
+threshold and its boundary are unit-tested rather than left to fire first on
+live data, including that a row found *exactly* 10 days ago is not yet stale
+and that a row with no `Found` date is never labelled.
+
+Lowering it is safe because `stale` is a label and never a deletion
+(`purge_expired.py` keys on `expired`), and a test asserts that the ageing
+path cannot write `gone` — if it ever did, lowering this would start
+destroying application records instead of surfacing them.
 
 ## the mail pipeline resolves employers by NAME, because a LinkedIn alert has no board in it
 
@@ -1202,8 +1219,9 @@ found yesterday.
 They are now aged on the one date that is definitely true for a mail row:
 `- **Found:** YYYY-MM-DD`, which inbox.py writes. (`Posted` is
 "? (unknown age)" for these, because a digest snippet carries no publication
-date.) Past `AGGREGATOR_STALE_DAYS` (45) the row is marked **`stale`**, not
-`gone`, and the distinction is the whole point:
+date.) Past `AGGREGATOR_STALE_DAYS` (**10**, dropped from 45 on 2026-10-28)
+the row is marked **`stale`**, not `gone`, and the distinction is the whole
+point:
 
 - `serve.py` collects only `state='gone'` into its expired set, and
   `purge_expired.py` deletes on that field. A `stale` row therefore surfaces to

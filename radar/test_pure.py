@@ -29,6 +29,7 @@ import re
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -498,6 +499,85 @@ class TestInboxExpiry(unittest.TestCase):
         self.assertEqual(len(got), 2)
         self.assertIsInstance(got[0], str)
         self.assertIsInstance(got[1], dict)
+
+
+class TestAggregatorAgeing(unittest.TestCase):
+    """Calling an unfetchable row stale on the only evidence there is.
+
+    A linkedin.com posting cannot be fetched (verify_tracked.SKIP_HOSTS), so
+    the date it entered the tracker is all there is to go on. These assert the
+    threshold and its boundary, because nothing in the tracker is currently
+    old enough to exercise it in production - the oldest LinkedIn row on
+    2026-10-28 was 5 days old, so the path would otherwise go untested until
+    it fired on live data.
+    """
+
+    vt = None
+    NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vt = _mod("vt7", "verify_tracked.py")
+
+    def test_the_threshold_is_ten_days(self):
+        """Dropped from 45 on request: "24 hours old is acceptable, but a week
+        old" is the standard, and 45 days never fired once."""
+        self.assertEqual(self.vt.AGGREGATOR_STALE_DAYS, 10)
+
+    def test_the_cutoff_is_that_many_days_back(self):
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW, 10), "2026-10-18")
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW, 45), "2026-09-13")
+        self.assertEqual(self.vt.aggregator_cutoff(self.NOW), "2026-10-18")
+
+    def test_a_row_is_stale_only_once_it_is_past_the_threshold(self):
+        """Strictly before the cutoff, so exactly ten days old is not yet
+        stale. Checked either side of the boundary, not just in the middle."""
+        cases = {"2026-10-16": True,    # 12 days - stale
+                 "2026-10-17": True,    # 11 days - stale
+                 "2026-10-18": False,   # exactly 10 - not yet
+                 "2026-10-19": False,   # 9 days
+                 "2026-10-27": False}   # yesterday
+        for day, want in cases.items():
+            with self.subTest(found=day):
+                url = "https://www.linkedin.com/jobs/view/1"
+                got = self.vt.stale_rows({url: day}, [url], self.NOW)
+                self.assertEqual(bool(got), want)
+
+    def test_the_tuple_matches_the_tracked_live_shape(self):
+        """Five columns, inserted straight into tracked_live."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        row, = self.vt.stale_rows({url: "2026-10-01"}, [url], self.NOW)
+        self.assertEqual(len(row), 5)
+        self.assertEqual(row[0], url)
+        self.assertEqual(row[1], "stale")
+        self.assertEqual(row[2], 0)
+        self.assertTrue(row[3].startswith("2026-10-28T"))
+        self.assertIn("found 2026-10-01", row[4])
+
+    def test_a_row_with_no_found_date_is_left_alone(self):
+        """The date is the only evidence; no evidence is not evidence of
+        staleness. A row with no `Found:` line must not be labelled."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        self.assertEqual(self.vt.stale_rows({}, [url], self.NOW), [])
+        self.assertEqual(self.vt.stale_rows({url: ""}, [url], self.NOW), [])
+
+    def test_only_unfetchable_rows_are_considered(self):
+        """An old row on a real ATS host is checked by fetching it, not aged -
+        passing it here would label a job we can actually verify."""
+        ats = "https://job-boards.greenhouse.io/capco/jobs/7765458"
+        self.assertEqual(
+            self.vt.stale_rows({ats: "2026-01-01"}, [], self.NOW), [])
+        self.assertTrue(self.vt.skipped("https://www.linkedin.com/jobs/view/1"))
+        self.assertFalse(self.vt.skipped(ats))
+
+    def test_stale_is_never_the_state_the_purge_deletes_on(self):
+        """purge_expired.py deletes on `expired`/gone. If ageing ever started
+        writing that state, lowering the threshold would start destroying
+        application records instead of labelling them."""
+        url = "https://www.linkedin.com/jobs/view/1"
+        row, = self.vt.stale_rows({url: "2026-01-01"}, [url], self.NOW)
+        self.assertEqual(row[1], "stale")
+        self.assertNotEqual(row[1], "gone")
 
 
 class TestRatecheck(unittest.TestCase):

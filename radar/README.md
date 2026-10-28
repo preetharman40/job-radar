@@ -22,7 +22,7 @@ python3 serve.py                # web view on :8737
 | `make_fast.py` | Regenerate `fast.json` from a full sweep's digest |
 | `backup.sh` | Daily snapshot of the three unregeneratable files |
 | `board_health.py` | Boards that quietly stopped returning jobs |
-| `verify_tracked.py` | Are the tracked postings still open |
+| `verify_tracked.py` | Are the tracked postings still open. linkedin.com and other aggregator hosts are never fetched, so those rows are judged on age alone and labelled `stale` after `AGGREGATOR_STALE_DAYS` (10) — a label, never a deletion |
 | `ratecheck.py` | Did the Workday burst cap hold |
 | `purge_expired.py` | Delete dead postings — keeps anything already applied to |
 | `prune_live.py` | Bound the `live` table — 60-day retention, weekly via cron |
