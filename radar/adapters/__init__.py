@@ -26,8 +26,8 @@ way, and selftest asserts it.
 
 import os
 
-from . import amazon, ashby, avature, greenhouse, html, insightglobal, jobbank
-from . import jobvite, lever, oracle, phenom, recruitee, rippling
+from . import amazon, ashby, avature, breezy, greenhouse, html, insightglobal
+from . import jobbank, jobvite, lever, oracle, phenom, recruitee, rippling
 from . import smartrecruiters, successfactors, taleo, teamtailor, ultipro
 from . import workable, workday, wpjobs
 
@@ -39,6 +39,7 @@ _MODULES = {
     "smartrecruiters": smartrecruiters, "taleo": taleo, "wpjobs": wpjobs,
     "amazon": amazon, "avature": avature, "teamtailor": teamtailor,
     "ultipro": ultipro, "jobbank": jobbank, "insightglobal": insightglobal,
+    "breezy": breezy,
 }
 
 ADAPTERS = {k: getattr(m, "fetch_" + k) for k, m in _MODULES.items()}

@@ -14,7 +14,7 @@ import collections, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN_SRC = ("greenhouse", "lever", "ashby", "recruitee", "rippling",
-              "workable", "smartrecruiters")
+              "workable", "smartrecruiters", "breezy")
 DICT_SRC = ("workday", "phenom", "successfactors", "oracle", "jobvite", "html",
              "taleo", "wpjobs", "amazon", "avature", "teamtailor", "ultipro", "jobbank",
              "insightglobal")

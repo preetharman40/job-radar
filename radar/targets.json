@@ -1,7 +1,7 @@
 {
   "_comment": "Every token probed live 2026-09-16 and returned >0 postings. Re-verify: python3 discover.py --verify",
   "_vendor_note": "devops_vendors = companies that SELL devops/cloud/infra tooling. Support/solutions/implementation engineer roles at these score as tier-1 targets, not as generic support jobs.",
-  "_workday_rejected_note": "Rejected 2026-10-28 after probing: accenture/wd103/AccentureCareers. discover.py --url https://www.accenture.com/ca-en/careers/ resolves it cleanly and it looks like a one-line add, so it will keep coming back. Two reasons not to. Its postings carry NO locationsText - the city is only in bulletFields[1] and in externalPath - so all 156 rows the adapter returns classify as location \"?\" and the geography filter cannot run on them; supporting it needs a per-tenant extractor, not a config line. And searchText has little effect: {\"searchText\": \"devops\"} answers total 2000, the whole board, so the 13 WD_QUERIES terms would page a global req pile to find Canadian work. Same shape as the Amazon case. Also rejected the same day: roche/wd3/roche-ext (300 postings, 3 Canadian, none technical) and lever/controlup (10 postings, 0 Canadian).",
+  "_workday_rejected_note": "Workday tenants that send NO locationsText: Thomson Reuters (all 78 postings) and Accenture (all 156 Canadian ones). Every posting classified as location \"\" -> bucket OTHER -> keep=False, so both boards were polled for weeks and contributed nothing while reporting no error. Fixed 2026-10-28 in adapters/workday.py wd_location(), which joins the non-req-id bulletFields with the externalPath segment; neither source alone is sufficient and the comment there says why. CORRECTION to an earlier note: Accenture was rejected on the grounds that searchText 'devops' answers total 2000. That figure came from a hand probe that applied no facets. fetch_workday auto-detects the country facet (Accenture nests it as locationCountry under locationMainGroup) and WD_CANADA is already the right id, so the real Canadian board is 156 postings and 19 for 'devops'. It is added. Still rejected: roche/wd3/roche-ext (300 postings, 3 Canadian, none technical) and lever/controlup (10 postings, 0 Canadian).",
   "_workday_note": "Workday tenant names are NOT derivable from the company name (Loblaw's tenant is 'myview'). Add one by pasting its careers URL into discover.py --url, which prints the tenant/cluster/site block. PAGING, fixed 2026-10-21: fetch_workday used to stop at offset 40 ('2 pages per query'), silently dropping every query with more than 40 Canadian hits - Manulife lost rows on 4 of 13 queries and RBC on 6 of 13, and recovering them took a full sweep from 149 matches to 154. It now pages to `total` (captured on page 1, since later pages report 0) and stops on a short page, on total, or at WD_MAX_PAGES=15. `limit` cannot be raised as a shortcut: Workday answers HTTP 400 above 20. Per-target override: add \"max_pages\": N to a target that genuinely needs deeper paging. Do NOT raise the global for CIBC - it truncates every sweep ON PURPOSE. CIBC's searchText works (devops -> 5 hits, a nonsense term -> 0) but 'linux' matches 489 of its 490 Canadian reqs because the word is in CIBC's posting boilerplate, so page one of that query is Mobile Mortgage Advisors; paging all 25 pages would cost ~130 requests a sweep to read retail banking roles that title_match rejects at tier 0. Truncations are listed in the run footer, and that CIBC line is expected output, not a fault. PWC, added 2026-10-21 with \"max_pages\": 2 ON PURPOSE. PwC exposes only a GLOBAL site (Global_Experienced_Careers, 3859 reqs) - seven Canada-scoped site names were tried and all 404, and the board offers only a `locations` facet taking location GUIDs, NOT a Country facet, so _wd_country_facet correctly returns None and WD_CANADA cannot be applied. Left at the global ceiling it would be the most expensive board here by far: 13 queries x up to 15 pages = ~195 requests a sweep, with four queries hitting the ceiling, to reach ~20 Canadian reqs out of 638 sampled. max_pages=2 bounds it to ~26 requests. That is sound rather than lossy because Workday ranks by relevance and recency and the role this was added for - Cloud Infrastructure Engineer, Senior Associate - was the FIRST result for 'devops' and posted that day, so a shallow read still catches fresh relevant postings. An explicit max_pages also suppresses the WD_TRUNCATED warning, deliberately: a deliberate shallow read is not accidental truncation, and four warnings every half hour would train you to ignore the register that caught CIBC.",
   "_phenom_note": "Phenom sites ship jobs inline in phApp.ddo. Some are only a skin over Workday - check a job's applyUrl; if it points at myworkdayjobs.com, poll the Workday tenant instead (structured locations + full descriptions). RBC and BMO are both Workday.",
   "_sf_note": "SuccessFactors RMK has two themes: a table layout (<tr class=\"data-row\">) and a tile layout (<li class=\"job-tile\">, location only in the URL slug). Anchor attribute order differs between them. A THIRD path exists and is often better: RMK also publishes a Google-Jobs RSS feed of the whole board with descriptions inline, enabled per target with \"feed\": true - see _deloitte_note, which is also the tenant whose search page renders nothing at all. Multi-word q= gets OR'd into noise - single tokens only; adding sortColumn makes it ignore q= entirely. Use default_location for tiles whose slug has no province code.",
@@ -405,6 +405,10 @@
     "rsa-security",
     "summit"
   ],
+  "_breezy_note": "Breezy publishes the whole board as JSON at https://{token}.breezy.hr/json - no auth, no paging. The token is the subdomain. The list call has a structured location and a real published_date but no description, so adapters/breezy.py hydrates from the schema.org JobPosting embedded in each posting page.",
+  "breezy": [
+    "auctria"
+  ],
   "workable": [
     "borrowell",
     "irth-solutions",
@@ -685,6 +689,12 @@
       "tenant": "synnex",
       "cluster": "wd5",
       "site": "hyvecareers"
+    },
+    {
+      "name": "Accenture",
+      "tenant": "accenture",
+      "cluster": "wd103",
+      "site": "AccentureCareers"
     }
   ],
   "phenom": [

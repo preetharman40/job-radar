@@ -2819,6 +2819,103 @@ its entire job is to alert when a board returns nothing. Without the gate it
 would have rate-limited itself and pushed a false "stopped returning jobs"
 alert for a dozen healthy Ashby boards.
 
+## two Workday tenants sent no location, and both boards went quiet
+
+`classify_location("")` returns `("OTHER", False)` — `keep=False`. So a posting
+with an empty location is discarded. Two tenants send `locationsText` empty on
+**every** posting:
+
+| tenant | postings | what they contributed |
+|---|---|---|
+| Thomson Reuters | 78, all empty | nothing, for weeks |
+| Accenture | 156 Canadian, all empty | nothing |
+
+Neither reported an error. The sweep fetched them, classified every row
+`OTHER`, dropped them all, and said nothing — the failure mode that costs a day
+to notice, except here it cost rather longer because there was no symptom at
+all. Thomson Reuters was the find: an existing board, a large Toronto employer,
+and among the discarded rows a **"Lead Cloud Platform Engineer, Azure"**.
+
+Two other fields carry the geography and **neither is sufficient alone**:
+
+- **`bulletFields`** — Thomson Reuters: `["Toronto", "Ontario", "JREQ204759"]`,
+  the complete city list including every city of a multi-site req. Accenture:
+  `["R00360485", "Location Negotiable"]` — the useful half is simply absent,
+  and the req id is in slot 0 where Thomson Reuters has a city, so no fixed
+  index works either.
+- **`externalPath`** — Accenture: `/job/Ottawa-150-Elgin-St-Corp/…`, the real
+  office. Thomson Reuters: a req open in Toronto reads
+  `/job/United-States-of-America-Eagan-Minnesota/…`, which classifies
+  **US-ONLY** and would drop a Toronto job.
+
+So `wd_location()` joins both and lets the classifier decide. Dashes become
+spaces first, because the classifier reads
+`"United-States-of-America-Eagan-Minnesota"` as `OTHER` but the spaced form as
+`US-ONLY`, and correctly labelling a US posting US is the whole reason the path
+is consulted. Repeated words are then collapsed, so Thomson Reuters' bullets
+plus path reduce from `"Toronto, Ontario, Canada Toronto Ontario"` to
+`"Toronto, Ontario, Canada"`.
+
+Req ids are dropped by **shape, not position**: upper-case alphanumerics with
+at least one digit and no lower-case. That matches `JREQ204759`, `R00360485`
+and `ATCI-5447017-S1998490`, and leaves `"Toronto - 100 Adelaide St W"` alone,
+which has lower-case letters.
+
+**Measured after the fix, against the live boards with the Canada facet
+applied:** Thomson Reuters **79/79 CA** (was 0 usable), Accenture **153/156
+CA** — the 3 remainder being "Location Negotiable" reqs with no usable path.
+
+### I rejected Accenture for the wrong reason first
+
+Accenture was rejected the same day on the grounds that `searchText: "devops"`
+answers `total: 2000`, making it an Amazon-shaped sweep of a global req pile.
+That number came from a **hand probe that applied no facets**. `fetch_workday`
+does `t.get("country_facet") or _wd_country_facet(api)`, Accenture nests its
+country facet as `locationCountry` under `locationMainGroup`, `_wd_country_facet`
+already walks nested values, and `WD_CANADA` is already the correct id. The
+board the adapter actually sees is **156 Canadian postings, 19 for "devops"**.
+
+The tell was in the data and I read past it: the adapter returned exactly 156
+postings and the Canada facet count was exactly 156. Two equal numbers from
+independent sources is not a coincidence to note and move on from.
+
+## `breezy` — the whole board in one request, and a description that is not
+
+Breezy publishes every posting as JSON at a fixed path, no auth and no paging:
+
+```
+GET https://{token}.breezy.hr/json
+```
+
+The token is the subdomain. `robots.txt` disallows only `/css`, `/fonts`,
+`/stylesheets` and `/javascripts`, so the board and the postings are both fair
+game — unlike **iCIMS**, whose careers host answers `Disallow: /` and is
+therefore not polled at all, which cost three otherwise-addable boards
+(Porter Airlines and Bayview ×2).
+
+The list call is unusually complete — structured location (country, state,
+city, plus `is_remote`) and a real `published_date` — with one gap: **no
+description**, which the scorer needs. Each posting page embeds a schema.org
+`JobPosting` in `ld+json` carrying the full description and `datePosted`, so
+`hydrate` reads that one structured field instead of hunting for a content div.
+On Auctria's DevOps req that takes the blob from 48 characters to 2,998, and
+the posting scores **28** — tier 4, family `devops`, bucket `CA`.
+
+Location may be country-only: Auctria's remote req gives nothing finer than
+`Canada`, which the adapter renders `"Remote - Canada"` rather than dropping.
+
+### adding a platform is three places, and the third is now a test
+
+`ARCHITECTURE.md` already recorded that `avature` and `teamtailor` were each
+silently absent from the 5-minute lane because `make_fast.py`'s
+`TOKEN_SRC`/`DICT_SRC` was not updated, and that the fix was to run the
+both-ways diff **by hand**. Doing it by hand is exactly what failed twice, so
+`TestMakeFastCoverage` now asserts it: every board key in `targets.json` is
+known to `make_fast`, every platform `make_fast` names has an adapter, and the
+two lists do not overlap. Verified to bite — with `breezy` omitted it reports
+`{'breezy'}`.
+
+
 ## the location filter was silently dropping worldwide-remote work
 
 `classify_location` sorts every posting into a bucket and the sweep keeps only
