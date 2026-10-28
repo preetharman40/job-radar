@@ -1359,9 +1359,13 @@ def main():
         if payload:
             try:
                 with jr.FileLock(timeout=60):
-                    n, _ = jr.append_to_tracker(payload, jr.TRACKER,
-                                                a.track_min_score)
+                    n, _, dup = jr.append_to_tracker(payload, jr.TRACKER,
+                                                     a.track_min_score)
                 print(f"\n>> tracked {n} new posting(s)")
+                for j, row in dup:
+                    print(f"   not tracked: {j['title']} at "
+                          f"{j.get('company') or j.get('source')} - "
+                          f"already row #{row} under a different source")
             except TimeoutError as e:
                 # Same reasoning as the poller: this runs after --notify has
                 # already pushed, so dying here leaves an alert with no row.
