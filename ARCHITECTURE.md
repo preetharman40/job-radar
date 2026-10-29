@@ -3708,3 +3708,84 @@ Four details are load-bearing:
 Section 7 also flags an uncommitted `targets.json` directly, so the thing that
 used to be discovered by accident is now stated. It never sets the failure
 flag: a board being added is the lane working, not a fault.
+
+## "infrastructure" belongs to two professions, and the gate only knew one
+
+On 2026-10-29 a **Water/Wastewater Infrastructure Specialist** at the
+Government of Alberta pushed a notification. The arithmetic was exactly right
+and the outcome was exactly wrong:
+
+```
+rule   \b(cloud|infrastructure|infra)\s+(engineer|developer|specialist|...)   tier 4
+       tier 4 x 3                    = 12
+       level_of -> mid               = +2
+       JD contained "escalation"     = +2
+                                      ---
+                                       16     notify threshold is 15
+```
+
+One point over, on a municipal civil-engineering job. The rule is not wrong:
+`infrastructure` is core DevOps vocabulary *and* core civil-engineering
+vocabulary, and no amount of tightening the pattern separates them, because
+the two professions genuinely use the same word for the same concept at
+different layers of the physical world.
+
+What distinguishes them is not the shape of the title but its **subject** —
+water, roads, HVAC, buildings. So `rules/titles.json` grew a `veto` section:
+one `subject` pattern naming what the job is about, and one `rescue` pattern
+for titles carrying a real IT token, so `Cloud Infrastructure Specialist` and
+`IT Infrastructure Specialist` at the same employer still match.
+
+**This breaks a property the rules had, which is why it is one pattern and not
+a second rule system.** `title_match` returns the max tier among matching
+rules, so until now a rule added to `titles.json` could only ever *raise* a
+posting's tier — that is what made the list safe to extend without re-testing
+everything. A veto can take a tier to zero, so it can hide a job. Three things
+follow from that, and all three are deliberate:
+
+- **It was measured before it shipped,** against 531 distinct real titles from
+  `seen` and both `nearmiss` tables, of which 395 were admitted by the gate.
+  After: 390. Exactly the five predicted, and the golden master still passes
+  at 259 rows unchanged — which is the proof that no baseline posting lost its
+  tier.
+- **The rescue list omits the words that nearly broke it.** An earlier draft
+  included bare `systems`, and all four of the building/electrical titles
+  below survived it: a facilities title uses that word as often as an IT one.
+  `technology`, `network` and `infrastructure` itself are out for the same
+  reason — the last would rescue the posting that prompted the whole thing.
+- **`pipeline` is not a veto word, and that is the most expensive mistake
+  available here.** Civil engineering says "pipeline" constantly and so does
+  CI/CD. Vetoing it would silently drop every deployment and data-pipeline
+  title in the search. `platform` and `automation` are likewise absent from
+  the subject list. There is a test asserting all of this, because the comment
+  alone would not survive the next person widening the pattern.
+
+The five, all previously admitted:
+
+| tier | title | employer |
+|---|---|---|
+| 4 | Water/Wastewater Infrastructure Specialist | Government of Alberta |
+| 3 | Building Automation System Analyst | University of Toronto |
+| 3 | Building Automation Systems Engineer | University of Toronto |
+| 3 | ELECTRICAL SYSTEMS ENGINEER | City of Toronto |
+| 3 | Satellite Electrical Systems Engineer | Scalian |
+
+The last four were not complained about; they surfaced from the measurement,
+and the "Building Automation" pair is HVAC controls rather than anything in
+this search.
+
+Two smaller consequences. `near_miss()` excludes vetoed subjects too, or the
+diagnostic log would fill with precisely the titles the veto removes —
+`infrastructure` is in `NEAR_TECH` and `specialist` is a head noun, so every
+one would qualify. And the loader refuses an empty `subject` or `rescue`
+rather than defaulting: an empty subject compiles to `re.compile("")`, matches
+every title, and the sweep would go blind while exiting 0 — the same silent
+failure a truncated `titles.json` produces. An empty rescue disables the veto
+while looking like it works. selftest's bad-data check went from 7 cases to 11
+to cover both, plus a broken regex and a missing section.
+
+One thing the measurement turned up in passing, unrelated to the veto:
+**`Kubernetes Administrator` is tier 0** and was before any of this, because
+no rule pairs `kubernetes` with `administrator`. A test expectation of mine
+briefly blamed the veto for it. It is a rules gap, not a regression, and it is
+the kind of thing the near-miss log exists to surface.

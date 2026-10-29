@@ -64,7 +64,8 @@ __all__ = [
     # paths and config
     "DB", "TARGETS", "TRACKER", "NTFY_FILE", "RULES_DIR", "HERE", "VENDORS",
     # title / level / location / score - the pure core
-    "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
+    "TITLE_RULES", "TITLE_VETO", "TITLE_RESCUE",
+    "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
     "near_miss", "near_miss_location",
     "arrangement", "canadian_option", "score", "band_of",
@@ -169,7 +170,45 @@ def _skill_groups():
     return tuple(out)
 
 
+def _title_veto():
+    """-> (subject_rx, rescue_rx). Subjects that are not an IT job at all.
+
+    The one loader whose FAILURE MODE IS UNBOUNDED IN BOTH DIRECTIONS, so both
+    are refused rather than defaulted. An empty `subject` compiles to
+    re.compile(""), which matches every string, so every title would veto and
+    the sweep would match nothing while exiting 0 - the same silent blindness a
+    truncated titles.json produces. An empty `rescue` matches everything too,
+    which disables the veto instead: harmless, but it would look like it was
+    working. A length floor catches both, and a truncated hand edit besides.
+    """
+    path = os.path.join(RULES_DIR, "titles.json")
+    try:
+        with open(path) as f:
+            v = json.load(f)["veto"]
+        pats = {k: v[k] for k in ("subject", "rescue")}
+    except Exception as e:
+        raise RuntimeError(f"cannot read the title veto from {path}: "
+                           f"{type(e).__name__}: {e}")
+    for name, pat in pats.items():
+        if not isinstance(pat, str) or len(pat) < 40:
+            raise RuntimeError(
+                f"{path}: veto.{name} is {type(pat).__name__} of length "
+                f"{len(pat) if isinstance(pat, str) else '-'} - refusing, "
+                f"because an empty pattern matches every title")
+        try:
+            re.compile(pat)
+        except re.error as e:
+            raise RuntimeError(f"{path}: veto.{name} does not compile: {e}")
+    return (re.compile(pats["subject"], re.I),
+            re.compile(pats["rescue"], re.I))
+
+
 TITLE_RULES = _title_rules()
+
+# What a posting is ABOUT, when that makes it not an IT job however well its
+# title fits a rule. The only thing in the rule set that can lower a tier; see
+# `veto.note` in rules/titles.json for the measurement that set it.
+TITLE_VETO, TITLE_RESCUE = _title_veto()
 
 # Straight off the resume. Ranks, never filters. The groups, their weights and
 # the measurement that set them are in rules/skills.json - including why
@@ -358,6 +397,13 @@ def near_miss(title):
     """
     t = title or ""
     if NEAR_NET.search(t) and not NEAR_NET_OK.search(t):
+        return False
+    # Vetoed subjects are tier 0 BY DECISION, so they are not misses. Without
+    # this the log would fill with exactly the civil-engineering titles the
+    # veto was added to remove: "infrastructure" is in NEAR_TECH and
+    # "specialist" is a head noun, so every one of them would qualify. Same
+    # treatment as networking, and for the same reason.
+    if TITLE_VETO.search(t) and not TITLE_RESCUE.search(t):
         return False
     return bool(NEAR_TECH.search(t) and NEAR_HEAD.search(t)
                 and not NEAR_BIZ.search(t) and not NEAR_SWE.search(t))
@@ -608,6 +654,13 @@ def classify_location(loc):
 def title_match(title, company):
     """-> (tier, family) or (0, None). Vendor titles only count at vendors."""
     t = (title or "").lower()
+    # Before the rules, not after: a civil-engineering job is not a low-tier IT
+    # job, it is a different profession, and no rule in the list can tell the
+    # difference because "infrastructure" belongs to both vocabularies. This is
+    # the one place a tier can be LOWERED - everywhere else the rules are
+    # additive - so it is one subject pattern with one rescue, and nothing more.
+    if TITLE_VETO.search(t) and not TITLE_RESCUE.search(t):
+        return 0, None
     is_vendor = company.lower() in VENDORS
     best = (0, None)
     for rx, tier, fam in TITLE_RULES:

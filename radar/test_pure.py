@@ -2463,5 +2463,107 @@ class TestBoardJournal(unittest.TestCase):
 
 
 
+# -------------------------------------------------------------- title veto --
+
+class TestTitleVeto(unittest.TestCase):
+    """The one rule that can LOWER a tier, so the one that can hide a job.
+
+    Added 2026-10-29 after "Water/Wastewater Infrastructure Specialist" at the
+    Government of Alberta alerted at score 16: tier 4 from
+    '(cloud|infrastructure|infra) (engineer|...|specialist)', +2 mid, +2 for
+    "escalation" in the JD, clearing the notify threshold of 15 by one point.
+    The rule was not wrong - "infrastructure" is core DevOps vocabulary and
+    core civil-engineering vocabulary at the same time."""
+
+    REAL_VETOED = [
+        ("Water/Wastewater Infrastructure Specialist", "Government of Alberta"),
+        ("Building Automation System Analyst", "University of Toronto"),
+        ("Building Automation Systems Engineer", "University of Toronto"),
+        ("ELECTRICAL SYSTEMS ENGINEER", "City of Toronto"),
+        ("Satellite Electrical Systems Engineer", "Scalian"),
+    ]
+
+    # Every one of these matched tier 3 or 4 before the veto existed.
+    def test_the_five_measured_titles_are_vetoed(self):
+        for title, co in self.REAL_VETOED:
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, co), (0, None))
+
+    def test_an_it_subject_at_the_same_employer_still_matches(self):
+        """The veto names what the job is ABOUT. A real IT role at the
+        Government of Alberta must survive it, or this hides jobs."""
+        for title in ("Cloud Infrastructure Specialist",
+                      "IT Infrastructure Specialist",
+                      "Infrastructure Specialist, Azure",
+                      "Linux Infrastructure Analyst"):
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, "Government of Alberta"),
+                                 (4, "devops"))
+
+    def test_the_core_titles_are_untouched(self):
+        # "Kubernetes Administrator" is NOT in this list on purpose: it is
+        # tier 0 today and was tier 0 before the veto existed, because no rule
+        # pairs "kubernetes" with "administrator". Asserting it here would
+        # have blamed the veto for a rules gap that predates it.
+        for title in ("DevOps Engineer", "Site Reliability Engineer",
+                      "Infrastructure Engineer", "Cloud Engineer",
+                      "Platform Engineer", "Kubernetes Engineer"):
+            with self.subTest(title=title):
+                self.assertTrue(jr.title_match(title, "x")[0],
+                                f"{title} lost its tier to the veto")
+
+    def test_pipeline_is_not_a_veto_word(self):
+        """The single most expensive mistake available in this pattern. Civil
+        engineering says "pipeline" constantly and so does CI/CD, and getting
+        it wrong would silently drop every deployment and data pipeline title
+        in the search."""
+        for title in ("CI/CD Pipeline Engineer", "Data Pipeline Engineer",
+                      "Build Pipeline Specialist"):
+            with self.subTest(title=title):
+                self.assertFalse(jr.TITLE_VETO.search(title))
+
+    def test_the_veto_words_hold_their_boundaries(self):
+        """`land`, `rail`, `dam` and `marine` are short enough to appear inside
+        unrelated words; \\b has to be doing real work here."""
+        for title in ("Cloud Landing Zone Engineer", "Guardrails Engineer",
+                      "Engineer, Amsterdam", "Submariner Platform Engineer"):
+            with self.subTest(title=title):
+                self.assertFalse(jr.TITLE_VETO.search(title),
+                                 f"{title} was vetoed by a substring")
+
+    def test_bare_systems_does_not_rescue(self):
+        """An earlier draft put "systems" in the rescue list and all four
+        building/electrical titles survived it - a facilities title uses that
+        word exactly as often as an IT one."""
+        for word in ("systems", "technology", "network", "infrastructure",
+                     "automation", "operations"):
+            with self.subTest(word=word):
+                title = f"Water {word} Engineer"
+                self.assertTrue(jr.TITLE_VETO.search(title))
+                self.assertIsNone(
+                    jr.TITLE_RESCUE.search(title),
+                    f"{word!r} rescues a vetoed subject - that is how the "
+                    f"four building/electrical titles survived the first draft")
+                self.assertEqual(jr.title_match(title, "x"), (0, None))
+
+    def test_a_vetoed_subject_is_not_logged_as_a_near_miss(self):
+        """It is tier 0 by decision, not by accident, so it is not a miss.
+        "infrastructure" is in NEAR_TECH and "specialist" is a head noun, so
+        without this every vetoed title would land in the nearmiss table."""
+        for title, _co in self.REAL_VETOED:
+            with self.subTest(title=title):
+                self.assertFalse(jr.near_miss(title))
+
+    def test_near_miss_still_flags_a_real_one(self):
+        """Control: the exclusion above must not have disabled the log."""
+        self.assertTrue(jr.near_miss("Infrastructure Support Analyst"))
+
+
+# The veto LOADER's refusal cases live in selftest.py, not here. They need
+# jr._title_veto(), and selftest is the one file the module-boundary check
+# allows to read a private - it is the thing under test there. selftest covers
+# an emptied subject, an emptied rescue, a broken regex and a missing section,
+# plus an assertion that the real file still behaves.
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

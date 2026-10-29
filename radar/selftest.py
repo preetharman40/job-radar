@@ -168,6 +168,18 @@ def _rule_guards():
          lambda d: d["groups"][0].update(weight=9)),
         ("skill has no forms", "skills.json",
          lambda d: d["groups"][0].update(forms=[])),
+        # The veto is the one rule that can LOWER a tier, and both halves fail
+        # unbounded: an empty subject matches every title, so the sweep goes
+        # blind while exiting 0; an empty rescue matches everything, which
+        # disables the veto while looking like it works.
+        ("title veto subject emptied", "titles.json",
+         lambda d: d["veto"].update(subject="")),
+        ("title veto rescue emptied", "titles.json",
+         lambda d: d["veto"].update(rescue="")),
+        ("title veto regex broken", "titles.json",
+         lambda d: d["veto"].update(subject="a(b" + "x" * 50)),
+        ("title veto section missing", "titles.json",
+         lambda d: d.pop("veto")),
     ]
     keep, missed = jr.RULES_DIR, []
     try:
@@ -183,6 +195,7 @@ def _rule_guards():
                 try:
                     jr._title_rules()
                     jr._skill_groups()
+                    jr._title_veto()
                     missed.append(label)
                 except RuntimeError:
                     pass
@@ -193,6 +206,10 @@ def _rule_guards():
         jr.RULES_DIR = keep
         if len(jr._title_rules()) < 20 or len(jr._skill_groups()) < 50:
             missed.append("the real rule files no longer load")
+        subject, rescue = jr._title_veto()
+        if not (subject.search("Wastewater Infrastructure Specialist")
+                and rescue.search("Cloud Infrastructure Specialist")):
+            missed.append("the real title veto no longer behaves")
     finally:
         jr.RULES_DIR = keep
     return not missed, (f"{len(CASES)} bad-data cases all refused"
