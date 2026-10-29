@@ -76,7 +76,8 @@ __all__ = [
     "dupe_norm", "loc_compatible", "parse_tracker_rows",
     "tracker_row_active", "find_tracker_dupe",
     # infrastructure
-    "FileLock", "TRACKER_LOCK", "db", "db_write", "atomic_write",
+    "FileLock", "TRACKER_LOCK", "db", "db_write", "claimed_urls",
+    "atomic_write",
     "notify", "ntfy_topic",
 ]
 
@@ -1279,6 +1280,32 @@ def db():
     return c
 
 
+def claimed_urls():
+    """Every URL already in `seen`, for the pass-2 skip in main().
+
+    Read-only, on its own short-lived connection, so the position and
+    lifetime of main()'s write connection are unchanged - it is still opened
+    after pass 2, where it has always been.
+
+    Failure returns the EMPTY set, which is the safe direction: an empty set
+    skips nothing, so the sweep does exactly what it did before this existed.
+    A failed read costs requests, never correctness. A missing file or table
+    is the normal state of a fresh install, not an error.
+    """
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=30)
+    except sqlite3.Error:
+        return set()
+    try:
+        return {u for (u,) in c.execute("SELECT url FROM seen")}
+    except sqlite3.Error as e:
+        print(f">> could not read `seen` ({e}); hydrating the whole shortlist",
+              file=sys.stderr)
+        return set()
+    finally:
+        c.close()
+
+
 # --------------------------------------------------------------------- main --
 
 FAMILY_LABEL = {"devops": "DevOps/SRE", "adjacent": "Infra-adjacent",
@@ -1443,6 +1470,34 @@ def main():
     # day, which made "is the 429 from pass 1 or pass 2" unanswerable and any
     # description-caching decision a guess.
     n_shortlist = len(shortlist)
+
+    # Pass 2 for a posting already in `seen` is work this sweep throws away.
+    #
+    # `show` is `hits if a.all else fresh`, and `fresh` is only what the
+    # atomic claim actually INSERTED. A posting already in `seen` cannot be
+    # fresh, so in the normal path its description was fetched and its score
+    # computed for nothing - it reached the footer's `matched` count and
+    # stopped there. Measured on 2026-10-29: the fast lane hydrated ~207
+    # postings in each of 91 runs, about 18,900 descriptions, to find 7 new
+    # ones. 78% of the fast lane's shortlist and 79% of the daily lane's were
+    # already claimed.
+    #
+    # This is NOT a cache. Nothing is stored and nothing is reused, so nothing
+    # can go stale: the sweep is declining to ask a question whose answer it
+    # would have discarded. The claim inserts the same rows, `fresh` is
+    # identical and `show` is byte-for-byte the same.
+    #
+    # --all is excluded because it reports every match rather than the new
+    # ones, so it needs every score - that is the weekly fast.json rebuild,
+    # and the one lane this cannot help.
+    recurring = 0
+    if not a.all:
+        claimed = claimed_urls()
+        if claimed:
+            before_seen = len(shortlist)
+            shortlist = [j for j in shortlist if j["url"] not in claimed]
+            recurring = before_seen - len(shortlist)
+
     n_hydrated = sum(1 for j in shortlist if will_hydrate(j))
     with cf.ThreadPoolExecutor(a.workers) as ex:
         shortlist = list(ex.map(hydrate, shortlist))
@@ -1584,6 +1639,12 @@ def main():
          f"_{len(show)} shown · {len(hits)} matched · {len(jobs)} scanned · "
          f"{len(tasks)} boards · {n_shortlist} shortlisted · "
          f"{n_hydrated} hydrated · levels={a.level} · families={a.family}"
+         # `matched` counts NEW matches once the seen-skip is on, so the
+         # signal that used to live in it - "are the boards still producing"
+         # - moves here. Both are reported rather than one replacing the
+         # other, because a sudden fall in `recurring` means boards went
+         # quiet while a fall in `matched` only means a slow day.
+         + (f" · {recurring} recurring" if recurring else "")
          # Worth showing: these are rows that looked like candidates until their
          # real cities were resolved, so a sudden jump means a board started
          # collapsing its locations rather than that the search got narrower.

@@ -2061,5 +2061,141 @@ class TestVendorSalesEngineer(unittest.TestCase):
 
 
 
+class TestSeenSkip(unittest.TestCase):
+    """Skipping pass 2 for postings already in `seen`.
+
+    `show` is `hits if a.all else fresh`, and `fresh` is only what the atomic
+    claim actually inserted, so a posting already in `seen` had its
+    description fetched and its score computed for nothing. Measured on
+    2026-10-29: 91 fast runs, ~18,900 descriptions, 7 new postings.
+
+    The only thing that really has to be proved is that the sweep's OUTPUT is
+    unchanged - this is an optimisation, and an optimisation that alters what
+    reaches the phone is a bug.
+    """
+
+    def _sweep(self, d, jobs, calls, extra=(), no_filter=False):
+        """One in-process sweep against a persistent temp database."""
+        import contextlib
+        import io
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        keep = (jr.DB, jr.TARGETS, sys.argv, jr.claimed_urls)
+        realh = dict(adapters.HYDRATORS)
+        adapters.ADAPTERS["fake"] = lambda tok: [dict(j) for j in jobs]
+
+        def counting(j, kind):
+            calls.append(j["url"])
+        adapters.HYDRATORS["fakeplat"] = counting
+        try:
+            jr.DB, jr.TARGETS = os.path.join(d, "t.sqlite3"), tpath
+            if no_filter:
+                jr.claimed_urls = lambda: set()      # filter made inert
+            sys.argv = ["job_radar.py", "--targets", tpath,
+                        "--min-score", "0", *extra]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            return buf.getvalue()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            adapters.HYDRATORS.clear(); adapters.HYDRATORS.update(realh)
+            jr.DB, jr.TARGETS, sys.argv, jr.claimed_urls = keep
+
+    @staticmethod
+    def _urls(out):
+        return set(re.findall(r"^- (https?://\S+)", out, re.M))
+
+    def _jobs(self):
+        J = fc.job
+        return [J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+                  f"https://x/{i}", age=1, hyd=("fakeplat", i))
+                for i in range(6)]
+
+    def test_the_second_run_skips_everything_it_already_claimed(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        first, second = [], []
+        out1 = self._sweep(d, jobs, first)
+        out2 = self._sweep(d, jobs, second)
+        self.assertEqual(len(first), 6, "run 1 must hydrate the whole shortlist")
+        self.assertEqual(second, [], "run 2 must hydrate nothing")
+        self.assertEqual(self._urls(out1), {f"https://x/{i}" for i in range(6)})
+        self.assertEqual(self._urls(out2), set(), "nothing is new on run 2")
+        self.assertIn("6 recurring", out2)
+
+    def test_the_output_is_identical_with_the_filter_inert(self):
+        """The whole point. Same postings shown, far fewer requests.
+
+        Compared against jr.claimed_urls stubbed to an empty set, which
+        disables the skip and changes nothing else - rather than against
+        --all, which reports every match instead of the new ones and so is
+        not a control.
+        """
+        jobs = self._jobs()
+        d1, d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
+        on, off = [], []
+        self._sweep(d1, jobs, on)                      # seed
+        self._sweep(d2, jobs, off, no_filter=True)      # seed
+        out_on = self._sweep(d1, jobs, on)
+        out_off = self._sweep(d2, jobs, off, no_filter=True)
+        self.assertEqual(self._urls(out_on), self._urls(out_off),
+                         "the skip must not change what is shown")
+        self.assertEqual(len(on), 6, "6 on the seed run, 0 on the second")
+        self.assertEqual(len(off), 12, "no skip: the second run re-hydrates")
+
+    def test_all_mode_is_excluded(self):
+        """--all reports every match, so it needs every score. That is the
+        weekly fast.json rebuild, and the one lane this cannot help."""
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        first, second = [], []
+        self._sweep(d, jobs, first)
+        out = self._sweep(d, jobs, second, extra=["--all"])
+        self.assertEqual(len(second), 6, "--all must still hydrate everything")
+        self.assertNotIn("recurring", out)
+
+    def test_claimed_urls_fails_to_the_safe_side(self):
+        """An empty set skips nothing, so a failed read costs requests and
+        never correctness."""
+        keep = jr.DB
+        try:
+            jr.DB = os.path.join(tempfile.mkdtemp(), "does-not-exist.sqlite3")
+            self.assertEqual(jr.claimed_urls(), set())
+            # a database with no `seen` table - the fresh-install state
+            import sqlite3
+            p = os.path.join(tempfile.mkdtemp(), "empty.sqlite3")
+            sqlite3.connect(p).close()
+            jr.DB = p
+            self.assertEqual(jr.claimed_urls(), set())
+        finally:
+            jr.DB = keep
+
+    def test_cronwrap_reads_the_recurring_count(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        self._sweep(d, jobs, [])
+        out = self._sweep(d, jobs, [])
+        with open(os.path.join(jr.HERE, "cronwrap.sh")) as fh:
+            wrap = fh.read()
+        m = re.search(r'\("recurring",\s*r"([^"]+)"\)', wrap)
+        self.assertIsNotNone(m, "cronwrap.sh has no extractor for recurring")
+        got = re.search(m.group(1), out)
+        self.assertIsNotNone(got)
+        self.assertEqual(int(got.group(1)), 6)
+
+    def test_the_core_metrics_regex_survives_the_new_field(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        self._sweep(d, jobs, [])
+        out = self._sweep(d, jobs, [])
+        line = [l for l in out.splitlines() if "scanned" in l][0]
+        self.assertIsNotNone(re.search(
+            r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
+            line))
+        self.assertIsNotNone(re.match(r"^_.*scanned", line))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -3477,3 +3477,98 @@ evidence will keep arriving every sweep. Without the note the rule gets
 proposed again in three months. A test asserts the excluded titles are still
 tier 0, so if a rule is ever added that tracks one of them, the suite says so
 rather than the log quietly hiding it.
+
+## pass 2 was fetching descriptions to compute scores the sweep threw away
+
+Found while analysing whether the tool needed a description cache. It did not.
+It needed to stop asking for descriptions it had no use for.
+
+One line decides what a sweep actually reports:
+
+```python
+show = sorted(hits if a.all else fresh, ...)
+```
+
+`fresh` is only what the atomic claim actually INSERTED into `seen`. So in the
+normal path, a posting already in `seen` from an earlier run had its
+description fetched over the network, its score computed, and the score
+discarded — it reached the footer's `matched` count and stopped there.
+
+The scale, measured the day the `hydrated` counter was added:
+
+```
+fast lane   91 runs · ~18,900 descriptions fetched · 7 new postings shown
+            about 2,700 detail requests per new job found
+```
+
+The fix is not a cache. Nothing is stored and nothing is reused, so nothing can
+go stale: the sweep declines to ask a question whose answer it would bin.
+`claimed_urls()` reads `seen` on its own short-lived read-only connection, so
+main()'s write connection stays where it has always been, after pass 2. It
+**fails to the empty set** — a missing file, a missing table, any SQLite error
+— because an empty set skips nothing and the sweep then behaves exactly as it
+did before this existed. A failed read costs requests, never correctness.
+
+`--all` is excluded: it reports every match rather than the new ones, so it
+needs every score. That is the weekly `fast.json` rebuild, and the one lane
+this cannot help.
+
+### measured on both lanes
+
+```
+             hydrated/run      requests/day        wall clock
+fast         208 -> 4          32,448 -> 624       154s -> 121s
+daily        237 -> 4           6,162 -> 104       362s -> 246s
+```
+
+98% of pass-2 traffic gone, and about **136 minutes a day** of request time.
+`shortlist` is unchanged on both lanes (279 and 235), which is the check that
+pass 1 was not touched.
+
+### two estimates that were wrong, and why
+
+Worth recording, because both were stated confidently before being measured.
+
+**The reduction was predicted at 78%; it is 98%.** The reasoning was that the
+~52 shortlist entries per run that score below `--min-score` never enter `seen`
+and so would still be hydrated forever — the one gap a cache would uniquely
+cover. In practice `seen` is cumulative over 550 postings and many weeks, so
+almost all of those had scored ≥ 8 at some earlier point and are in the table
+permanently. `recurring` came back at 231 of a 235-row shortlist.
+
+**Pass 2 was estimated at 3–6% of wall clock; it is 22–32%.** That estimate came
+from fitting `time = a·(pass-1 tasks) + b·(hydrates)` to the two lanes:
+
+```
+151 = 520a + 207b
+354 = 1259a + 237b     ->   a ~ 0.27 s/task,  b ~ 0.044 s/hydrate
+```
+
+Two equations and two unknowns is zero degrees of freedom, so there was nothing
+to validate against — but the real defect is that the two lanes' hydrate counts
+were **207 and 237**, nearly identical. The system is ill-conditioned in `b`:
+those two equations are almost parallel in that direction, so `b` was
+essentially undetermined and the fit put the whole difference into `a`. The
+measured cost is roughly 0.15 s/hydrate on the fast lane and 0.46 s on the
+daily one — not even a single constant, because the daily lane's shortlist
+reaches slower platforms that `fast.json`'s 100 boards exclude.
+
+The lesson is narrow and reusable: a two-point fit whose points barely differ
+in one variable cannot measure that variable. Run the experiment instead.
+
+### what it cost: `matched` changed meaning
+
+`matched` is `len(hits)`, and with the skip on, `hits` holds only postings not
+previously claimed — so it reads near zero every run where it used to sit
+stably at 180–222. That stability was a real health signal: a sudden fall meant
+boards had gone quiet.
+
+The signal moves to `recurring`, and both are reported rather than one
+replacing the other, because they answer different questions — a fall in
+`recurring` means boards went quiet, a fall in `matched` only means a slow day.
+`matched` also keeps its exact position in the footer, because cronwrap.sh's
+metrics regex is `_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards`
+and `fast.sh` greps `^_.*scanned` to decide what reaches the log at all.
+
+Expect the cliff in `events.jsonl` at 2026-10-29T18:51Z: `matched` 222 -> 0 and
+`recurring` appearing at 270. Nothing failed.
