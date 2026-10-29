@@ -3653,3 +3653,58 @@ Current state, measured: fast `[237, 236, 234]` against a median of 235, floor
 94. The daily lane holds 8 instrumented runs of the 13 the rule needs, so it
 reports `not judging` and starts judging after tomorrow's runs — visible proof
 that the thin-history silence works rather than an assertion that it does.
+
+## a lane that edits its own config has to say so somewhere
+
+The 19:52 inbox lane resolves employers named in the mail digest to their own
+ATS boards and appends them to `targets.json` itself, with no human in the
+loop. That is the right behaviour and it works: `greenhouse/contactmonkey`
+arrived that way on 2026-10-29, carried a Site Reliability Engineer posting in
+Toronto, and every sweep polled it the same evening, because the sweeps read
+`targets.json` from disk rather than from git.
+
+The flaw was the notification channel. The only place the addition announced
+itself was a modified file in `git status` — so the board sat uncommitted for
+days, looking like an unexplained change on `main`, and the question it
+prompted was "what changed?" rather than "a new board arrived". Using version
+control as the alerting mechanism for a cron job has that failure built in:
+`git status` stops meaning *work you did* and starts meaning *a lane ran*.
+
+Three options were on the table. Keep committing by hand — which is what had
+already failed. Make the lane report instead of write, which is safest but
+gives up the automatic coverage growth and leaves a live board unswept until
+someone acts. Or keep the write and give it a journal.
+
+The journal won, because the write is not the problem. `discover.add_boards`
+now appends one line per board to `boards_added.log`, and `morning_check.sh`
+reads it as section 7:
+
+```
+---- 7. boards the mail lane added itself ----
+  1 added in the last 1d:
+    2026-10-29T19:52:03Z greenhouse/contactmonkey added by inbox.py
+```
+
+Four details are load-bearing:
+
+- **It goes in `add_boards`, not in `inbox.py`.** That function is the single
+  choke point every write passes through — `--add-employer-boards`,
+  `--add-boards`, `discover.py --add`, and whatever calls it next. Journaling
+  at the caller would have covered one of them.
+- **It runs after `os.replace`, never before.** The journal records what
+  landed, not what was attempted.
+- **It cannot cost us a board.** `targets.json` has already been replaced by
+  the time the journal is written, so an `OSError` here is cosmetic. It is
+  caught, reported loudly on stderr, and the board is still returned as added.
+  A journal that could lose a board would be worse than no journal.
+- **It is gitignored, and selftest enforces that.** Committing the journal
+  would recreate the original problem one level up: every night the lane found
+  a board, the tree would be dirty again. The new tier-1 check `files the
+  lanes write themselves stay out of git` covers it alongside `digest.md`,
+  `events.jsonl` and the lane logs — and deliberately excludes `fast.json`,
+  which is generated *and* committed because the fast lane's board list has to
+  travel with the code.
+
+Section 7 also flags an uncommitted `targets.json` directly, so the thing that
+used to be discovered by accident is now stated. It never sets the failure
+flag: a board being added is the lane working, not a fault.

@@ -389,6 +389,33 @@ def _secrets():
     return not leaked, f"{len(must_ignore)} checked" if not leaked else "; ".join(leaked)
 
 
+@check(1, "files the lanes write themselves stay out of git")
+def _generated():
+    """Not secrets - churn. A lane that writes to its own config or log on a
+    schedule must not be able to dirty the working tree, or `git status` stops
+    meaning "work you did" and starts meaning "a cron job ran".
+
+    boards_added.log is the reason this exists: the 19:52 inbox lane appends a
+    board to targets.json by itself, and before the journal the only place
+    that showed up was an unexplained modified file on main. Committing the
+    journal would recreate the same problem one level up.
+
+    fast.json is deliberately absent: it is generated AND committed, because
+    the fast lane's board list has to travel with the code.
+    """
+    want = ["radar/boards_added.log", "radar/digest.md", "radar/events.jsonl",
+            "radar/radar.log", "radar/fast.log"]
+    bad = []
+    for f in want:
+        rc, _ = sh("git", "check-ignore", "-q", f, cwd=ROOT)
+        if rc != 0:
+            bad.append(f"{f} NOT ignored")
+    _, out = sh("git", "ls-files", cwd=ROOT)
+    tracked = set(out.split("\n"))
+    bad += [f"{f} IS TRACKED" for f in want if f in tracked]
+    return not bad, f"{len(want)} checked" if not bad else "; ".join(bad)
+
+
 # ---------------------------------------------------------------- 2 SERVICE --
 
 @check(2, "cron.service is active")

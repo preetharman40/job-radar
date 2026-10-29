@@ -45,6 +45,13 @@ radar/*.sqlite3-shm
 # Output of the last run. Rewritten on every cron tick — pure churn.
 radar/digest.md
 
+# Boards the 19:52 inbox lane added to targets.json by itself, one line each.
+# Already covered by radar/*.log below, but named here on purpose: this file
+# exists so that a lane writing to its own config announces itself somewhere a
+# human reads, and committing it would make every such night dirty the tree -
+# which is the exact problem it was built to remove.
+radar/boards_added.log
+
 # `inbox.py --md` output. Not credentials, but it is a transcript of the job
 # alerts sent to a private address — which titles you watch, in which city.
 # Same class as digest.md, so same treatment.

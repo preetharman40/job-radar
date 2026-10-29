@@ -2377,5 +2377,91 @@ class TestFloorCheckExitCodes(unittest.TestCase):
 
 
 
+# ------------------------------------------------------- board-add journal --
+
+class TestBoardJournal(unittest.TestCase):
+    """The 19:52 inbox lane appends boards to targets.json with no human in the
+    loop. Until the journal existed, the only place that showed up was a
+    modified file in `git status` - greenhouse/contactmonkey was added on
+    2026-10-29, swept the same evening, and still looked like an unexplained
+    change on main the next morning."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dc = _mod("dc", "discover.py")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.tg = os.path.join(self.d, "targets.json")
+        with open(self.tg, "w") as fh:
+            json.dump({"greenhouse": ["acme"], "workday": []}, fh)
+        self.dc.JOURNAL = os.path.join(self.d, "boards_added.log")
+
+    def _lines(self):
+        if not os.path.exists(self.dc.JOURNAL):
+            return []
+        with open(self.dc.JOURNAL) as fh:
+            return [l.rstrip() for l in fh if l.strip()]
+
+    def test_every_added_board_is_recorded(self):
+        self.dc.add_boards(self.tg, [("greenhouse", "newco")])
+        lines = self._lines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("greenhouse/newco", lines[0])
+
+    def test_a_tenant_board_records_tenant_and_site(self):
+        """Workday targets are dicts, and str() of one is unreadable."""
+        self.dc.add_boards(self.tg, [("workday", {"tenant": "t1",
+                                                  "site": "s1"})])
+        self.assertIn("workday/t1:s1", self._lines()[0])
+
+    def test_a_duplicate_records_nothing(self):
+        self.dc.add_boards(self.tg, [("greenhouse", "newco")])
+        self.dc.add_boards(self.tg, [("greenhouse", "newco")])
+        self.assertEqual(len(self._lines()), 1)
+
+    def test_an_already_present_board_records_nothing(self):
+        self.assertEqual(self.dc.add_boards(self.tg, [("greenhouse", "acme")]),
+                         [])
+        self.assertEqual(self._lines(), [])
+
+    def test_it_appends_rather_than_replaces(self):
+        self.dc.add_boards(self.tg, [("greenhouse", "one")])
+        self.dc.add_boards(self.tg, [("greenhouse", "two")])
+        self.assertEqual(len(self._lines()), 2)
+
+    def test_an_unwritable_journal_does_not_cost_the_board(self):
+        """targets.json has already been replaced by the time the journal is
+        written. Letting an OSError here propagate would turn a cosmetic
+        problem into a lost board."""
+        self.dc.JOURNAL = os.path.join(self.d, "no-such-dir", "x.log")
+        added = self.dc.add_boards(self.tg, [("greenhouse", "newco")])
+        self.assertEqual(added, [("greenhouse", "newco")])
+        with open(self.tg) as fh:
+            self.assertIn("newco", json.load(fh)["greenhouse"])
+
+    def test_the_line_parses_the_way_morning_check_parses_it(self):
+        """morning_check.sh splits on the first space and calls
+        fromisoformat on the head. The two have to agree."""
+        self.dc.add_boards(self.tg, [("greenhouse", "newco")])
+        head, _, rest = self._lines()[0].partition(" ")
+        dt = datetime.fromisoformat(head.replace("Z", "+00:00"))
+        self.assertIsNotNone(dt.tzinfo)
+        self.assertIn("added by", rest)
+
+    def test_morning_check_actually_reads_the_journal(self):
+        with open(os.path.join(HERE, "morning_check.sh")) as fh:
+            mc = fh.read()
+        self.assertIn("boards_added.log", mc)
+        self.assertIn("targets.json has uncommitted board additions", mc)
+
+    def test_the_journal_lives_next_to_the_config_it_describes(self):
+        fresh = _mod("dc2", "discover.py")
+        self.assertEqual(os.path.dirname(fresh.JOURNAL),
+                         os.path.dirname(fresh.TARGETS))
+
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
