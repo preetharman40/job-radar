@@ -3348,3 +3348,49 @@ test. The legitimate seam was already there: `from adapters import ADAPTERS`
 binds the *same dict object*, so inserting a key through `adapters.ADAPTERS` — a
 declared name on the package that owns it — is visible to `job_radar`
 immediately. Same seam `TestAgeFromHydrate` uses for `HYDRATORS`.
+
+## the commit gate removed itself and reported success
+
+Found while committing the near-miss log, and the mechanism is worth keeping
+because nothing in the system noticed.
+
+The in-place edit helper used to apply that change wrote its result to a temp
+file and `os.replace`d it over the original. A freshly created temp file gets
+default permissions, so **every file it touched came back at 0644** — and three
+scripts lost their executable bit: `job_radar.py`, `selftest.py`,
+`test_pure.py`.
+
+Losing `+x` on those is invisible from every direction the tool looks:
+
+- the cron lanes invoke `python3 job_radar.py`, which does not need the bit;
+- `selftest`'s *"every cron command exists and is executable"* check covers the
+  commands in the crontab, and those are the `.sh` wrappers, not the Python;
+- `git` recorded `mode change 100755 => 100644` in the diff, where nobody read it.
+
+And then the part that matters. The pre-commit hook began:
+
+```bash
+[ -x "$R/selftest.py" ] || exit 0
+```
+
+The intent was "skip quietly in a worktree that has no `radar/`". The effect,
+once `selftest.py` was no longer executable, was that **the gate skipped itself
+and exited 0** — so the commit went through with no tests run and no message
+saying so. The suite had in fact been run by hand and passed, which is the only
+reason this was harmless; as a mechanism it is a gate that disappears exactly
+when something has gone wrong with the tree.
+
+Two fixes, from both sides:
+
+1. **The guard distinguishes absent from broken.** `-e` and exit 0 is a
+   legitimate skip; present-but-not-executable prints what happened and exits
+   1. *A guard whose failure mode is silence is not a guard.*
+2. **`selftest` grew a tier-1 check** — *"entry points keep their executable
+   bit"* — over the 22 files that are invoked by path rather than through
+   `python3`, the hook among them. Verified from the failing side: `chmod -x
+   logq.py` turns it red.
+
+The edit helper now reads the mode before writing and `chmod`s the temp file to
+match before the replace. The same class of bug as *"never rewrite a shell
+script while cron is running it"* above: an atomic replace is atomic about
+**content** and says nothing about metadata.

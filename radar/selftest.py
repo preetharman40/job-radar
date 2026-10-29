@@ -347,6 +347,29 @@ def _interface():
                           if not problems else "; ".join(problems))
 
 
+@check(1, "entry points keep their executable bit")
+def _exec_bits():
+    """A lost +x is silent, and it disabled the commit gate once already.
+
+    On 2026-10-29 an edit helper wrote its temp file at 0644 and replaced
+    three scripts with it. Nothing noticed: the sweeps run `python3 x.py` and
+    do not care, "every cron command is executable" only covers the crontab's
+    own commands (the .sh wrappers), and the pre-commit hook's guard read
+    `[ -x selftest.py ] || exit 0` - so the gate removed itself and reported
+    success. These are the files invoked by PATH rather than through python3.
+    """
+    want = ["job_radar.py", "inbox.py", "discover.py", "verify_tracked.py",
+            "board_health.py", "make_fast.py", "prune_live.py", "logq.py",
+            "ratecheck.py", "rescore.py", "purge_expired.py", "nearmiss.py",
+            "selftest.py", "test_pure.py", "harvest.py", "hunt.py", "hn.py",
+            "signals.py", "canada_employers.py", "notify_send.py",
+            "fetchcore.py", "pre-commit.hook"]
+    bad = [f for f in want
+           if not os.access(os.path.join(HERE, f), os.X_OK)]
+    return not bad, (f"{len(want)} files" if not bad
+                     else f"NOT EXECUTABLE: {', '.join(bad)}")
+
+
 @check(1, "no secret is tracked by git")
 def _secrets():
     must_ignore = ["radar/inbox.json", "radar/.ntfy_topic", "applications.md",
