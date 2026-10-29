@@ -76,6 +76,25 @@ else
   echo "  last full sweep ${age}h ago (limit ${limit}h)"
 fi
 
+# --- 4. is the sweep still PRODUCING? --------------------------------------
+# Checks 1-3 all ask "did it run". A lane can run, exit 0, and return almost
+# nothing - a rules file edited into uselessness, an adapter quietly returning
+# empty lists, a platform changing its API shape. floorcheck.py compares the
+# recent shortlist against this lane's own trailing median and complains only
+# when every recent run is below the floor.
+#
+# Exit codes are kept apart on purpose: 1 means the sweep collapsed, 2 means
+# the check itself is broken. Folding them together would let a bug in
+# floorcheck.py impersonate the outage it exists to find.
+fc=$(./floorcheck.py --quiet 2>&1)
+case $? in
+  0) echo "  sweep output within range" ;;
+  1) while IFS= read -r line; do
+       [ -n "$line" ] && note "$line"
+     done <<<"$fc" ;;
+  *) note "floorcheck.py could not run: $(echo "$fc" | head -1)" ;;
+esac
+
 [ ${#problems[@]} -eq 0 ] && exit 0
 
 # --- alert, rate-limited ---------------------------------------------------

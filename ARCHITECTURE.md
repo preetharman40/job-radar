@@ -3572,3 +3572,84 @@ and `fast.sh` greps `^_.*scanned` to decide what reaches the log at all.
 
 Expect the cliff in `events.jsonl` at 2026-10-29T18:51Z: `matched` 222 -> 0 and
 `recurring` appearing at 270. Nothing failed.
+
+## nothing was watching the signal that replaced `matched`
+
+The section above moved the "are the boards still producing" signal off
+`matched`. It did not ask the next question: who was watching the old signal?
+
+Nobody. `matched` occurs in exactly two places outside the sweep — cronwrap.sh
+extracts it into `events.jsonl` and logq.py prints it in a table. No alert, no
+threshold, no watchdog arm. So the change broke nothing, and that is the
+finding: the metric everybody read as the health signal was never wired to
+anything that could wake you up.
+
+That leaves a real gap, because the three existing alarms each answer a
+different question and none of them answers this one:
+
+| alarm | fires when | blind to |
+|---|---|---|
+| cronwrap.sh | a lane exits non-zero | a lane that exits 0 and finds nothing |
+| board_health.py | one board returns zero twice | a gate rejecting everything from every board |
+| watchdog.sh 1–3 | cron is dead, the crontab was overwritten, no recent sweep | a sweep that runs on time and returns nothing |
+
+The uncovered failure is the quiet one: every lane exits 0, every board still
+answers, and the candidate count falls off a cliff. Three plausible causes —
+a rules file edited into uselessness, an adapter returning empty lists without
+raising, a platform changing its JSON shape — and all three look healthy in
+every log.
+
+`floorcheck.py` closes it, and `watchdog.sh` grew a fourth arm that calls it.
+
+**The metric is `shortlist`, not `recurring`.** `shortlist` counts what survived
+every pass-1 gate, so it is the most primitive thing that still means
+"candidates exist", and it is immune to anything pass 2 does — which matters
+precisely because the previous section changed pass 2 underneath it. `recurring`
+is `shortlist` minus whatever is new, so it tracks it but can dip on a busy day;
+`hydrated` now sits at 4 and `matched` at 0 by design. Both remain selectable
+with `--metric` for reading by hand; only `shortlist` is wired to the alert.
+
+**The rule is "every recent run below the floor", never "any".** The tempting
+rule is to alert when the latest run is low, and a single timeout against one
+slow platform does that most weeks. Three consecutive runs is 15 minutes on the
+fast lane, which is also the watchdog's own cadence. The floor is 40% of the
+median of that lane's earlier runs in a 14-day window.
+
+Three deliberate silences, each of which is a way to get this wrong rather than
+a shortcut:
+
+- **A missing metric is not a zero.** On the day this was written 410 of the
+  468 records in `events.jsonl` had no `shortlist` field, because the counter
+  was added that afternoon. Reading absent as 0 would drag the median under the
+  floor and then report the collapse it had just invented.
+- **A failed run is not a low reading.** Its footer is absent or truncated and
+  cronwrap has already alerted on it; counting it here turns one failure into a
+  second, differently worded alert.
+- **A baseline too thin or too small to divide is not judged.** Under ten
+  comparable runs, or a median under 20, and it says so and stays quiet. A lane
+  that is not running at all is the watchdog's sweep-recency check and
+  `logq.py --gaps`, not this.
+
+The baseline excludes the recent window so a collapse cannot pull down the
+median it is measured against — but it does age out, so a collapse lasting
+past 14 days becomes the new normal and this goes quiet. That is why it is an
+alert and not the thing anyone reads; `morning_check.sh` prints the levels as
+section 6 either way.
+
+Exit codes are kept apart: 1 means the sweep collapsed, 2 means the checker
+itself is broken. Folding them together would let a bug in `floorcheck.py`
+impersonate the outage it exists to find, which is the same failure shape as
+the pre-commit hook that skipped itself and reported success.
+
+One structural change came with it. `floorcheck.py` needs the event log, and
+`logq.py` already walks it including every rotated generation — a walk that is
+load-bearing, since a duplicate would go stale at the first logrotate. So
+`logq.py` grew an `__all__` and selftest's boundary check grew a fourth watched
+module, which turns the new dependency into a checked contract instead of a
+reach-in. Proved by making a scratch file read `logq._sources` and
+`logq.not_a_real_name`: both flagged, "is private" and "does not exist".
+
+Current state, measured: fast `[237, 236, 234]` against a median of 235, floor
+94. The daily lane holds 8 instrumented runs of the 13 the rule needs, so it
+reports `not judging` and starts judging after tomorrow's runs — visible proof
+that the thin-history silence works rather than an assertion that it does.

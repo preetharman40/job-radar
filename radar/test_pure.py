@@ -22,20 +22,25 @@ because each one has already cost somebody a day.
 
 Standard library only - unittest, no pytest.
 """
+import contextlib
 import glob
+import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import adapters                                                    # noqa: E402
 import fetchcore as fc                                             # noqa: E402
+import floorcheck as fcheck                                        # noqa: E402
 import job_radar as jr                                             # noqa: E402
+import logq                                                        # noqa: E402
 
 # title_match consults VENDORS, which main() normally fills from targets.json.
 # Without this the vendor family never matches and a third of the title rules
@@ -2194,6 +2199,181 @@ class TestSeenSkip(unittest.TestCase):
             r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
             line))
         self.assertIsNotNone(re.match(r"^_.*scanned", line))
+
+
+
+# ---------------------------------------------------------------- floorcheck --
+
+def _series(values, lane="fast", rc=0, key="shortlist", now=None, step_min=5):
+    """Synthetic events.jsonl records, oldest first, ending just before `now`.
+
+    A value of None writes a record WITHOUT the metric, which is how the real
+    log looks for every run older than the day the counter was added.
+    """
+    now = now or datetime(2026, 10, 29, 22, 0, tzinfo=timezone.utc)
+    out = []
+    for i, v in enumerate(values):
+        ts = now - timedelta(minutes=step_min * (len(values) - i))
+        row = {"ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "label": lane, "rc": rc}
+        if v is not None:
+            row[key] = v
+        out.append(row)
+    return out
+
+
+NOW = datetime(2026, 10, 29, 22, 0, tzinfo=timezone.utc)
+
+
+class TestFloorCheck(unittest.TestCase):
+    """The gap between "the lane failed" and "a board went quiet": every lane
+    exits 0, every board answers, and the candidate count falls off a cliff.
+
+    Written after the seen-skip landed, when `matched` stopped being a usable
+    health signal and nothing was watching what replaced it."""
+
+    def test_a_sustained_collapse_trips(self):
+        v = fcheck.assess(_series([236] * 12 + [9, 11, 8]), "fast", now=NOW)
+        self.assertFalse(v.ok)
+        self.assertTrue(v.judged)
+        self.assertEqual(v.values, [9, 11, 8])
+        self.assertEqual(v.median, 236)
+
+    def test_one_low_run_is_a_blip(self):
+        v = fcheck.assess(_series([236] * 12 + [9, 236, 237]), "fast", now=NOW)
+        self.assertTrue(v.ok)
+
+    def test_even_the_newest_run_alone_is_a_blip(self):
+        """The tempting rule is "alert when the latest run is low". A single
+        timeout against one slow platform does that most weeks."""
+        v = fcheck.assess(_series([236] * 12 + [236, 237, 9]), "fast", now=NOW)
+        self.assertTrue(v.ok)
+
+    def test_a_missing_metric_is_not_a_zero(self):
+        """410 of the 468 records in events.jsonl had no `shortlist` field the
+        day this was written, because the counter was added that afternoon.
+        Reading those as 0 would drag the median below the floor and then
+        report the collapse it had just invented."""
+        v = fcheck.assess(_series([None] * 300 + [236] * 12 + [236, 237, 236]),
+                          "fast", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertEqual(v.median, 236)
+
+    def test_failed_runs_are_not_low_readings(self):
+        """A failed run's footer is absent or truncated and cronwrap has
+        already alerted on it. Counting it here turns one failure into a
+        second, differently-worded alert."""
+        rows = (_series([236] * 15, now=NOW - timedelta(hours=1))
+                + _series([0, 0, 0], rc=1, now=NOW))
+        v = fcheck.assess(rows, "fast", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertEqual(v.values, [236, 236, 236])
+
+    def test_true_is_not_a_count(self):
+        """isinstance(True, int) is True in Python."""
+        rows = _series([236] * 12 + [236, 237, 236])
+        rows[-1]["shortlist"] = True
+        v = fcheck.assess(rows, "fast", now=NOW)
+        self.assertEqual(v.values, [236, 236, 237])
+
+    def test_other_lanes_do_not_pollute(self):
+        rows = (_series([236] * 15)
+                + _series([0, 0, 0], lane="verify", now=NOW))
+        v = fcheck.assess(rows, "fast", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertEqual(v.values, [236, 236, 236])
+
+    def test_a_thin_history_is_not_judged(self):
+        v = fcheck.assess(_series([236] * 5), "fast", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertFalse(v.judged)
+        self.assertIn("not judging", v.note)
+
+    def test_a_median_too_small_to_divide_is_not_judged(self):
+        """`hydrated` sits at 4 since the seen-skip landed, so 40% of it is
+        noise. The checker has to refuse rather than alert."""
+        v = fcheck.assess(_series([4] * 15, key="hydrated"), "fast",
+                          metric="hydrated", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertFalse(v.judged)
+        self.assertIn("too small", v.note)
+
+    def test_the_baseline_ages_out_and_the_check_goes_quiet(self):
+        """Documented drift, asserted so it cannot surprise anyone: a collapse
+        that outlives the window becomes the new normal. That is why this
+        alerts rather than being the thing anyone reads."""
+        rows = (_series([236] * 15, now=NOW - timedelta(days=20))
+                + _series([9, 8, 7], now=NOW))
+        v = fcheck.assess(rows, "fast", now=NOW)
+        self.assertTrue(v.ok)
+        self.assertFalse(v.judged)
+
+    def test_the_collapse_cannot_lower_its_own_baseline(self):
+        rows = _series([100, 100, 100, 1, 1, 1])
+        v = fcheck.assess(rows, "fast", recent_n=3, min_baseline=3, now=NOW)
+        self.assertEqual(v.median, 100)        # not median(100,100,100,1,1,1)
+        self.assertFalse(v.ok)
+
+    def test_a_value_exactly_at_the_floor_is_not_a_collapse(self):
+        v = fcheck.assess(_series([100] * 12 + [40, 1, 1]), "fast", now=NOW)
+        self.assertTrue(v.ok)                  # 40 == 0.4 * 100, compared >=
+
+    def test_every_watched_lane_is_a_real_lane(self):
+        """A typo in LANES would not fail - it would silently never judge."""
+        for lane in fcheck.LANES:
+            self.assertIn(lane, logq.CADENCE)
+
+
+class TestFloorCheckExitCodes(unittest.TestCase):
+    """watchdog.sh branches on the exit code, and it must be able to tell "the
+    sweep collapsed" (1) from "this checker is broken" (2). Folding those
+    together would let a bug in floorcheck.py impersonate the outage it exists
+    to find."""
+
+    def _run(self, rows, argv):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "events.jsonl")
+        with open(path, "w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+        keep_events, keep_argv = logq.EVENTS, sys.argv
+        buf = io.StringIO()
+        try:
+            logq.EVENTS = path
+            sys.argv = ["floorcheck.py"] + argv
+            with contextlib.redirect_stdout(buf):
+                rc = fcheck.main()
+        finally:
+            logq.EVENTS, sys.argv = keep_events, keep_argv
+        return rc, buf.getvalue()
+
+    def test_healthy_is_rc_0_and_quiet_says_nothing(self):
+        rc, out = self._run(_series([236] * 15, now=datetime.now(timezone.utc)),
+                            ["--quiet", "--lane", "fast"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "")
+
+    def test_a_collapse_is_rc_1_and_names_the_lane(self):
+        rows = _series([236] * 12 + [9, 8, 7], now=datetime.now(timezone.utc))
+        rc, out = self._run(rows, ["--quiet", "--lane", "fast"])
+        self.assertEqual(rc, 1)
+        self.assertIn("fast", out)
+        self.assertIn("collapsed", out)
+
+    def test_a_bad_invocation_is_rc_2_not_rc_1(self):
+        r = subprocess.run([sys.executable, os.path.join(HERE, "floorcheck.py"),
+                            "--metric", "no-such-metric"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2)
+
+    def test_watchdog_branches_on_all_three_codes(self):
+        with open(os.path.join(HERE, "watchdog.sh")) as fh:
+            wd = fh.read()
+        self.assertIn("./floorcheck.py --quiet", wd)
+        arm = wd.split("floorcheck.py --quiet")[1][:600]
+        for code in ("0)", "1)", "*)"):
+            self.assertIn(code, arm)
+        self.assertIn("note", arm)
+
 
 
 

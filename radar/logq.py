@@ -47,6 +47,13 @@ CADENCE = {
     "logrotate": ("03:17 Sundays", 168.0),
 }
 
+# logq owns the event log, so floorcheck.py reads it from here rather than
+# growing a second copy of the rotated-generation walk in _sources() - that
+# walk is load-bearing, and a duplicate of it would go stale at the first
+# logrotate. Declaring the surface puts the dependency under selftest's
+# boundary check instead of leaving it as a reach-in.
+__all__ = ["CADENCE", "EVENTS", "load"]
+
 
 def _sources():
     """events.jsonl plus every rotated generation, oldest first.
