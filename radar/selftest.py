@@ -599,7 +599,7 @@ def _logq():
                                  else f"rc={rc} {out.strip()[-120:]}")
 
 
-@check(4, "ratecheck parses radar.log")
+@check(4, "ratecheck parses every lane log")
 def _ratecheck():
     rc, out = sh(sys.executable, os.path.join(HERE, "ratecheck.py"),
                  "--days", "3", timeout=120)

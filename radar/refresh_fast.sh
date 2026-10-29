@@ -23,13 +23,24 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+RAW="$(mktemp)"
+trap 'rm -f "$TMP" "$RAW"' EXIT
 
 echo "=== $(date -u +%Y-%m-%dT%H:%MZ) refreshing fast.json ==="
+# Keep the summary and every dead-board/rate-limit line, not `tail -3`. The
+# first real run of this lane, on 2026-10-28, hit three 429s on
+# workday/BDO Canada and they reached the log only by luck: they happened to be
+# the last three lines of the digest, so `tail -3` caught them. Ten errors, or
+# one Workday truncation line after them, and the log would have shown none.
+#
+# Written to a file and grepped rather than piped, so `pipefail` still sees
+# job_radar's own exit status - a pipeline ending in `|| true` would mask a
+# sweep that died outright.
 python3 job_radar.py --all --no-claim \
   --level entry,mid,senior \
   --min-score 8 \
   --max-age 30 \
-  --md "$TMP" | tail -3
+  --md "$TMP" > "$RAW"
+grep -E '^_.*scanned|^>> |^- [a-z]+/' "$RAW" || true
 
 python3 make_fast.py "$TMP"
