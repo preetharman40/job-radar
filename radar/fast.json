@@ -101,6 +101,7 @@
     "gitlab",
     "later",
     "okta",
+    "stackadapt",
     "stay22",
     "tailscale",
     "trolley",
@@ -116,7 +117,6 @@
   "ashby": [
     "1password",
     "airbyte",
-    "benevity",
     "camunda",
     "cerebras",
     "coder",
@@ -136,16 +136,25 @@
     "telus-digital"
   ],
   "recruitee": [],
-  "rippling": [],
-  "workable": [],
+  "rippling": [
+    "rentsync_careers"
+  ],
+  "workable": [
+    "irth-solutions",
+    "swtch-energy"
+  ],
   "smartrecruiters": [
     "AccorHotel",
+    "AmericanIronandMetal",
     "Dexterra",
     "EgisGroup",
     "GDMSI",
     "Medfar",
     "SGS",
     "Scalian"
+  ],
+  "breezy": [
+    "auctria"
   ],
   "workday": [
     {
@@ -197,6 +206,13 @@
       "cluster": "wd3",
       "site": "External",
       "country_facet": "Country"
+    },
+    {
+      "name": "Thomson Reuters",
+      "tenant": "thomsonreuters",
+      "cluster": "wd5",
+      "site": "External_Career_Site",
+      "country_facet": "Location_Country"
     },
     {
       "name": "Aritzia",
@@ -261,6 +277,13 @@
       "country_facet": null
     },
     {
+      "name": "TC Energy",
+      "tenant": "tcenergy",
+      "cluster": "wd3",
+      "site": "CAREER_SITE_TC",
+      "country_facet": "Country"
+    },
+    {
       "name": "Recurrent Energy",
       "tenant": "recurrentenergy",
       "cluster": "wd12",
@@ -273,11 +296,52 @@
       "site": "TMX_Careers"
     },
     {
-      "name": "PwC Canada",
-      "tenant": "pwc",
+      "name": "Autodesk",
+      "tenant": "autodesk",
+      "cluster": "wd1",
+      "site": "Ext"
+    },
+    {
+      "name": "Broadridge",
+      "tenant": "broadridge",
+      "cluster": "wd5",
+      "site": "Careers"
+    },
+    {
+      "name": "BDO Canada",
+      "tenant": "bdo",
       "cluster": "wd3",
-      "site": "Global_Experienced_Careers",
-      "max_pages": 2
+      "site": "BDO"
+    },
+    {
+      "name": "Nasdaq",
+      "tenant": "nasdaq",
+      "cluster": "wd1",
+      "site": "Global_External_Site"
+    },
+    {
+      "name": "Onepoint",
+      "tenant": "onepoint",
+      "cluster": "wd3",
+      "site": "WepointCA"
+    },
+    {
+      "name": "Proofpoint",
+      "tenant": "proofpoint",
+      "cluster": "wd5",
+      "site": "ProofpointCareers"
+    },
+    {
+      "name": "TD SYNNEX",
+      "tenant": "synnex",
+      "cluster": "wd5",
+      "site": "hyvecareers"
+    },
+    {
+      "name": "Accenture",
+      "tenant": "accenture",
+      "cluster": "wd103",
+      "site": "AccentureCareers"
     }
   ],
   "phenom": [
@@ -288,6 +352,10 @@
     {
       "name": "Air Canada",
       "base": "https://careers.aircanada.com/ca/en"
+    },
+    {
+      "name": "OpenText",
+      "base": "https://careers.opentext.com/us/en"
     },
     {
       "name": "City of Edmonton",
@@ -321,6 +389,15 @@
     {
       "name": "Celestica",
       "base": "https://careers.celestica.com"
+    },
+    {
+      "name": "Imperial Oil",
+      "base": "https://jobs.exxonmobil.com",
+      "default_location": "Canada"
+    },
+    {
+      "name": "Alstom",
+      "base": "https://jobsearch.alstom.com"
     }
   ],
   "oracle": [],

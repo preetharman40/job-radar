@@ -604,6 +604,83 @@ class TestRatecheck(unittest.TestCase):
             "  - workday/TC Energy: HTTPError HTTP Error 429: Too Many Requests")
         self.assertEqual(m.group(1).strip(), "workday/TC Energy")
 
+    def test_run_of_reads_all_three_log_shapes(self):
+        """One run per lane, and the three lanes write three shapes. fast.log
+        has no header at all - its stamp is a prefix on every line."""
+        self.assertEqual(
+            self.rc._run_of("# Job Radar - NEW SINCE LAST RUN - "
+                            "2026-10-28T18:12Z"),
+            (("2026-10-28", "18:12"), ""))
+        self.assertEqual(
+            self.rc._run_of("=== 2026-10-28T19:13Z refreshing fast.json ==="),
+            (("2026-10-28", "19:13"), " refreshing fast.json ==="))
+        stamp, rest = self.rc._run_of(
+            "2026-10-28T19:22Z - workday/BDO Canada: HTTPError "
+            "HTTP Error 429: Too Many Requests")
+        self.assertEqual(stamp, ("2026-10-28", "19:22"))
+        # The payload must start at the board, not at the timestamp, or every
+        # fast-lane board would be named "2026-10-28T19:22Z - workday".
+        self.assertEqual(self.rc.BOARD_RE.match(rest).group(1).strip(),
+                         "workday/BDO Canada")
+        self.assertEqual(self.rc._run_of("  some other line"),
+                         (None, "  some other line"))
+
+    def _write_logs(self, d, utc):
+        """Two logs whose runs share a UTC stamp, one error in the fast one."""
+        with open(os.path.join(d, "radar.log"), "w") as fh:
+            fh.write(f"# Job Radar - NEW SINCE LAST RUN - {utc}\n"
+                     "_0 shown · 1 matched · 56429 scanned · 9 boards_\n")
+        with open(os.path.join(d, "fast.log"), "w") as fh:
+            fh.write(f"{utc} _0 shown · 1 matched · 11824 scanned · 520 boards_"
+                     f"\n{utc} - workday/BDO Canada: HTTPError HTTP Error 429: "
+                     "Too Many Requests\n")
+
+    def test_scan_sees_the_fast_lane_and_keeps_the_lanes_apart(self):
+        """The whole point of reading more than radar.log. The two logs here
+        carry the SAME run stamp - the fast lane and a sweep both fire at :07 -
+        so a key without the lane in it would add their errors together and
+        report one run that never ran."""
+        lanes = (("daily", "radar.log"), ("fast", "fast.log"))
+        utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        with tempfile.TemporaryDirectory() as d:
+            self._write_logs(d, utc)
+            was, self.rc.HERE = self.rc.HERE, d
+            try:
+                runs, errs, boards, worst, day_of = self.rc.scan(2, lanes)
+            finally:
+                self.rc.HERE = was
+        day = sorted({k[0] for k in runs})[0]
+        self.assertEqual(runs[(day, "daily")], 1)
+        self.assertEqual(runs[(day, "fast")], 1)
+        self.assertEqual(errs[("fast", utc)], 1)
+        self.assertNotIn(("daily", utc), errs)
+        self.assertEqual(boards["workday/BDO Canada"], 1)
+        self.assertEqual(worst, (1, utc, "fast"))
+
+    def test_scan_skips_a_log_that_does_not_exist_yet(self):
+        """refresh.log only appears the first Sunday the rebuild runs, and a
+        missing lane log must not be an error - it was missing on 2026-10-28,
+        which is when this gap was found."""
+        utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        with tempfile.TemporaryDirectory() as d:
+            self._write_logs(d, utc)
+            was, self.rc.HERE = self.rc.HERE, d
+            try:
+                runs, _, _, _, _ = self.rc.scan(2)      # the real LANES tuple
+            finally:
+                self.rc.HERE = was
+        self.assertEqual({k[1] for k in runs}, {"daily", "fast"})
+
+    def test_a_steady_trickle_in_the_fast_lane_still_alerts(self):
+        """A tenant throttling the 5-minute lane 3 times in each of 156 runs
+        never trips the per-RUN threshold of 5, and loses 468 queries a day.
+        The per-DAY threshold is what catches it, and 20 sits in the gap
+        between every real incident (29, 38, 39, 156, 222, 222) and every
+        quiet day (0 or 2)."""
+        self.assertLess(3, self.rc.PER_SWEEP_ALERT)
+        self.assertLess(self.rc.PER_DAY_ALERT, 29)
+        self.assertGreater(self.rc.PER_DAY_ALERT, 2)
+
 
 class TestFetchcore(unittest.TestCase):
     """The transport layer's pure half - the HTML and date helpers.

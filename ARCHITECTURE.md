@@ -3055,3 +3055,83 @@ runs. The pool is **286 US-ONLY postings carrying a tier-4 title**, so checking
 them means 286 extra fetches per sweep — far too much for a lane that fires
 every five minutes. If it is ever worth doing it belongs in a separate
 once-daily pass, not here.
+
+## ratecheck could not see the lane that makes most of the requests
+
+`ratecheck.py` exists to answer one question — are we being throttled? — and
+until 2026-10-28 it read `radar.log` and nothing else. That is the 30-minute
+sweep: 26 runs a day. The fast lane makes **156 runs a day** and writes
+`fast.log`, and the weekly `fast.json` rebuild writes `refresh.log`. Neither
+was read. The lane with six times the request volume was the one lane the
+rate-limit monitor could not see.
+
+It was worse than an unread file. `fast.sh` captures the digest and keeps only
+the lines it wants:
+
+```bash
+printf '%s\n' "$out" | grep -E '^_.*scanned|^>> '
+```
+
+Rate-limit lines are `- workday/BDO Canada: HTTPError HTTP Error 429: Too Many
+Requests`, so that filter **discarded every error the fast lane ever hit**.
+`grep -c 429 fast.log` returning 0 was not evidence of health; it was evidence
+of filtering, and reading it as health is exactly the trap.
+
+`refresh.log` had the mirror-image problem. `refresh_fast.sh` piped the sweep
+through `| tail -3`, and the first real run of that lane produced three 429s on
+`workday/BDO Canada` — which reached the log **only because they happened to be
+the last three lines of the digest**. Four errors, or one Workday truncation
+line after them, and the log would have shown none of it.
+
+The fix is three parts, because any one alone leaves a hole:
+
+- `fast.sh` and `refresh_fast.sh` keep `^- [a-z]+/` — the dead-board and
+  truncation lines. It cannot match a posting (`- **Company** ·`,
+  `- matched:`, `- https://…`, `` - `CA` · `` — none is
+  lowercase-word-slash), and on current boards it costs nothing: no board in
+  `fast.json` produced an error line in the three sweeps before the change.
+- `ratecheck.py` reads all three logs, with the run key taken from the line
+  rather than the file, because the three lanes delimit runs three ways — a
+  `# Job Radar` header, a stamp prefixed to every line, and a `=== … ===`
+  banner. A log that does not exist yet is skipped, not an error.
+- the lane is **part of the run key**. The fast lane and a sweep both fire at
+  `:07`, so a key of bare UTC stamp would add their errors together and report
+  one run that never ran.
+
+### a per-run threshold cannot see the fast lane's shape of trouble
+
+`PER_SWEEP_ALERT = 5` was written for a lane that runs 26 times a day. A tenant
+that throttles the fast lane steadily yields 2–4 errors in each of 156 runs —
+several hundred lost queries a day, never once tripping a count of 5. So a
+lane's **day total** alerts too, at `PER_DAY_ALERT = 20`.
+
+20 is read off the history, not chosen. Every real incident in 40 days of
+`radar.log` ran 29, 38, 39, 156, 222 and 222 errors in a day; every other day
+was 0 or 2. Nothing between 3 and 28 has ever happened, so the threshold sits
+in that gap: it fires on all six incidents and on none of the quiet days.
+
+### never rewrite a shell script while cron is running it
+
+Applying the change above cost one fast-lane run, `rc=127`:
+
+```
+01:15:01Z  fast  rc=127  149s
+01:17:03   fast.sh rewritten in place
+```
+
+The run started at 01:15 against the old file and was still sweeping two
+minutes later. **bash reads a script incrementally, by byte offset.** When it
+finished the sweep and went to read the next line, the file under it had been
+replaced and its saved offset now pointed into the middle of a comment, so it
+executed `dropped them, which meant…` and died with `dropped: command not
+found`. `bash -n` passes on the file; the comment block runs clean in
+isolation; nothing was wrong with the script. The edit was wrong.
+
+`open(path, "w")` truncates and rewrites in place, which is precisely what a
+running script must not have happen. Every data file here is already written
+`temp + os.replace`, which swaps the directory entry and leaves the running
+process reading the old inode untouched — the same rule applies to the scripts,
+and did not get applied to them. The next run at 01:20 was clean with no
+intervention, because each fast run re-polls every board from scratch; the cost
+was one skipped cycle, and `cronwrap.sh` caught it and pushed the failure to
+the phone, which is the part that worked.
