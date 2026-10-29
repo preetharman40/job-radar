@@ -82,7 +82,10 @@ m = re.search(r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
               text)
 if m:
     rec["shown"], rec["matched"], rec["scanned"], rec["boards"] = map(int, m.groups())
-for key, rx in (("pushed",  r">> pushed (\d+) notification"),
+for key, rx in (("shortlist", r"(\d+) shortlisted"),
+                ("recurring", r"(\d+) recurring"),
+                ("hydrated",  r"(\d+) hydrated"),
+                ("pushed",  r">> pushed (\d+) notification"),
                 ("tracked", r">> [Tt]racked (\d+) new posting"),
                 ("sampled", r"sampled (\d+) boards"),
                 ("checked", r"\((\d+) checked\)"),

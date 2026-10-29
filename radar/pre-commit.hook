@@ -19,7 +19,22 @@
 # Bypass once with:  git commit --no-verify
 set -uo pipefail
 R="$(git rev-parse --show-toplevel)/radar"
-[ -x "$R/selftest.py" ] || exit 0
+# ABSENT means there is nothing to check - a worktree without radar/, which
+# is a legitimate skip. NOT EXECUTABLE means something took the bit off a
+# script that is there, and that must be loud: this guard was a single
+# `[ -x ... ] || exit 0` until 2026-10-29, when an in-place edit helper wrote
+# its temp file at 0644 and os.replace'd it over three scripts. selftest.py
+# lost +x, the hook exited 0 on the next commit, and the commit went through
+# with no gate and no message. A guard whose failure mode is silence is not a
+# guard. (selftest's own "entry points keep their executable bit" check now
+# catches the same damage from the other side.)
+[ -e "$R/selftest.py" ] || exit 0
+if [ ! -x "$R/selftest.py" ]; then
+  echo "pre-commit: $R/selftest.py exists but is NOT executable."
+  echo "  Something stripped its mode - fix with: chmod +x $R/selftest.py"
+  echo "  Refusing rather than skipping: a skipped gate looks like a passed one."
+  exit 1
+fi
 
 args=(--quick)
 [ "${RADAR_FULL_SELFTEST:-0}" = "1" ] && args=()

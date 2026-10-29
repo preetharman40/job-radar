@@ -1487,5 +1487,715 @@ class TestGoldenMaster(unittest.TestCase):
                          + "".join(drift[:10]))
 
 
+class TestNearMiss(unittest.TestCase):
+    """The near-miss detector decides what a HUMAN reviews, nothing else.
+
+    Its failure modes are asymmetric and both matter. Too loose and the review
+    list fills with payroll and GTM roles and stops being read at all - that is
+    what killed the first version, which flagged 146 of 2,884 rejects. Too
+    tight and it hides the gaps it exists to find. The cases below are real
+    titles from a 2,958-title sample of six live boards.
+    """
+
+    # "Network Deployment Engineer" and "Senior Network Engineer" were here
+    # until 2026-10-29. They are genuine gaps in titles.json and they are
+    # deliberately NOT wanted - networking was ruled out as a specialism, so
+    # they belong in TestNearMissNetworkExcluded instead. Left recorded here
+    # rather than silently dropped: they are the reason that class exists.
+    REAL_MISSES = [
+        "Capacity Engineer",
+        "Infrastructure Operations Analyst",
+        "Sr Platform Monitoring Engineer",
+        "DCSC Automation Specialist",
+        "Data Center Infrastructure Management (DCIM) Administrator",
+        "Cloud Security Engineer",
+        "Technical Operations Engineer",
+    ]
+
+    # Every one of these is tier 0 in a real sweep and SHOULD stay unflagged.
+    NOT_INFRA = [
+        # "operations" is overwhelmingly a business word
+        "Fraud Operations Analyst",
+        "Marketing Operations Manager",
+        "People Operations Specialist",
+        "GTM Strategy & Operations Analyst",
+        "Legal Operations Manager",
+        "Recruiting Operations Program Manager",
+        "Credit Risk Operations Associate",
+        # ...and so are "systems", "cloud" and "pipeline"
+        "Business Systems Architect (Tax)",
+        "FP&A Analyst, Cloud Finance",
+        "Account Executive, Product Sales (Data Pipeline)",
+        # product engineering: `platform` names the product, not the job
+        "Senior Software Engineer, Backend (Card Loan Platform)",
+        "Frontend Engineer, UI Platform",
+        "Full Stack Engineer, Web Presence and Platform",
+        "Machine Learning Engineer, Growth Platform",
+        "Engineering Manager, Serverless Compute Platform",
+        "Software Engineer II, Backend (Online Storage)",
+    ]
+
+    def test_flags_the_titles_the_rules_actually_miss(self):
+        for t in self.REAL_MISSES:
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "acme")[0], 0,
+                                 "precondition: this title is tier 0 today. If "
+                                 "a rule now covers it, move it out of this list")
+                self.assertTrue(jr.near_miss(t))
+
+    def test_does_not_flag_business_or_product_engineering_roles(self):
+        for t in self.NOT_INFRA:
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+    def test_needs_both_a_technical_token_and_an_engineering_head(self):
+        # a technical token with no engineering head noun
+        self.assertFalse(jr.near_miss("Director of Cloud"))
+        self.assertFalse(jr.near_miss("Kubernetes"))
+        # an engineering head noun with no technical token
+        self.assertFalse(jr.near_miss("Mechanical Engineer"))
+        self.assertFalse(jr.near_miss("Quality Analyst"))
+        # both
+        self.assertTrue(jr.near_miss("Kubernetes Operations Specialist"))
+
+    def test_empty_and_none_are_safe(self):
+        self.assertFalse(jr.near_miss(""))
+        self.assertFalse(jr.near_miss(None))
+
+    def test_it_is_diagnostics_only_and_changes_no_verdict(self):
+        """near_miss must never be able to alter tier, family or level.
+
+        The whole feature is safe only because it is read nowhere in the
+        decision path. If this ever fails, the review log has started
+        influencing what gets notified.
+        """
+        for t in self.REAL_MISSES + self.NOT_INFRA:
+            before = (jr.title_match(t, "acme"), jr.level_of(t))
+            jr.near_miss(t)
+            self.assertEqual((jr.title_match(t, "acme"), jr.level_of(t)), before)
+
+
+class TestNearMissTable(unittest.TestCase):
+    """The log writes to its own table and dedupes across sweeps."""
+
+    def test_db_creates_the_table_and_insert_or_ignore_dedupes(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.sqlite3")
+            real = jr.DB
+            try:
+                jr.DB = path
+                c = jr.db()
+                names = {r[0] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertIn("nearmiss", names)
+                row = ("u1", "Capacity Engineer", "acme", "Toronto, ON", "t0")
+                for _ in range(3):      # a full sweep re-rejects it every run
+                    c.execute("INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                              row)
+                c.commit()
+                self.assertEqual(
+                    c.execute("SELECT COUNT(*) FROM nearmiss").fetchone()[0], 1)
+                # first_seen keeps the FIRST sighting, not the latest
+                c.execute("INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                          ("u1", "Capacity Engineer", "acme", "Toronto, ON", "t9"))
+                c.commit()
+                self.assertEqual(
+                    c.execute("SELECT first_seen FROM nearmiss").fetchone()[0],
+                    "t0")
+                c.close()
+            finally:
+                jr.DB = real
+
+
+
+class TestNearMissSweep(unittest.TestCase):
+    """End-to-end: does a full sweep actually log near-misses, and does it
+    still do everything it did before?
+
+    selftest's one-board sweep cannot cover this. It passes `--targets` a
+    temporary file, so `a.targets == TARGETS` is False and the near-miss path
+    is switched off - correct behaviour, and useless as a test. This runs the
+    real main() in-process, so there is no network and no shared state.
+
+    The fake platform is registered by MUTATING adapters.ADAPTERS, not by
+    replacing job_radar's own reference to it. Two reasons, and the second is
+    the real one: `from adapters import ADAPTERS` binds the same dict object,
+    so an inserted key is visible to job_radar immediately; and ADAPTERS is a
+    declared name on the adapters package, where job_radar does not re-export
+    it. Reaching for jr.ADAPTERS passes the test and fails the module-boundary
+    check, which is the check telling the truth - job_radar re-exporting the
+    adapter registry would let any caller depend on the registry through the
+    wrong module. Same seam TestAgeFromHydrate uses for HYDRATORS.
+    """
+
+    def _run(self, jobs, argv_targets=None, extra=()):
+        import contextlib
+        import io
+        import sqlite3
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        if argv_targets == "other":
+            argv_targets = os.path.join(d, "fast.json")
+            with open(argv_targets, "w") as fh:
+                json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        dbp = os.path.join(d, "t.sqlite3")
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        try:
+            jr.DB, jr.TARGETS = dbp, tpath
+            sys.argv = ["job_radar.py", "--targets", argv_targets or tpath,
+                        "--all", "--min-score", "0", *extra]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                jr.main()
+            c = sqlite3.connect(dbp)
+            near = {r[0] for r in c.execute("SELECT url FROM nearmiss")}
+            seen = {r[0] for r in c.execute("SELECT url FROM seen")}
+            c.close()
+            return buf.getvalue(), near, seen
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            jr.DB, jr.TARGETS, sys.argv = keep
+
+    def test_logs_the_near_miss_and_nothing_else(self):
+        J = fc.job
+        jobs = [
+            # a real match: must be claimed, must NOT appear in nearmiss
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+              "u-match", age=1),
+            # tier 0, infra-shaped, Canadian, fresh -> the whole point
+            J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+              "u-near", age=1),
+            # tier 0 but a business role -> must stay out of the log
+            J("fake", "Acme", "Fraud Operations Analyst", "Toronto, ON",
+              "u-biz", age=1),
+            # infra-shaped and tier 0, but NOT Canada. Location is tested
+            # before the title gate, so this must never reach the log - that
+            # ordering is what keeps the table small.
+            J("fake", "Acme", "Capacity Engineer", "Austin, TX",
+              "u-us", age=1),
+            # infra-shaped, Canadian, but far past --max-age
+            J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+              "u-stale", age=999),
+            # infra-shaped, Canadian, fresh, but an exec title the sweep
+            # would have excluded anyway via --level
+            J("fake", "Acme", "Director of Capacity Engineering",
+              "Toronto, ON", "u-exec", age=1),
+        ]
+        out, near, seen = self._run(jobs)
+        self.assertEqual(near, {"u-near"},
+                         "the log must hold exactly the eligible infra reject")
+        self.assertIn("u-match", seen, "the real match must still be claimed")
+        self.assertNotIn("u-near", seen,
+                         "a near-miss must never be claimed or notified")
+        self.assertIn("1 near-miss titles logged", out,
+                      "the footer must report the count")
+
+    def test_the_location_log_fills_from_the_other_gate(self):
+        """Mirror of the title log, and gated the opposite way.
+
+        A row here must have PASSED the title, level and age tests and failed
+        only on geography. Without the title test the log would fill with
+        Fraud Operations Analysts in Toronto, which says nothing about the
+        location rules.
+        """
+        import sqlite3
+        J = fc.job
+        jobs = [
+            # good title, Canada named unambiguously, but ", NY" trips the
+            # foreign veto and canadian_option cannot split a comma list.
+            # This is the real miss the detector was built from.
+            J("fake", "Acme", "DevOps Engineer", "SEA, SF, NY, Toronto",
+              "u-locmiss", age=1),
+            # dropped on location, but the title is tier 0 anyway -> not a
+            # location near-miss, it says nothing about the geography rules
+            J("fake", "Acme", "Fraud Operations Analyst", "SEA, SF, NY, Toronto",
+              "u-badtitle", age=1),
+            # dropped on location with no unambiguous Canadian marker. The
+            # ambiguous-city list is why: bare "London" is not evidence.
+            J("fake", "Acme", "DevOps Engineer", "London, United Kingdom",
+              "u-uk", age=1),
+            J("fake", "Acme", "DevOps Engineer", "London", "u-london", age=1),
+            # kept outright, so it is in neither log
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON", "u-ok", age=1),
+        ]
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        dbp = os.path.join(d, "t.sqlite3")
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        try:
+            import contextlib
+            import io
+            jr.DB, jr.TARGETS = dbp, tpath
+            sys.argv = ["job_radar.py", "--targets", tpath, "--all",
+                        "--min-score", "0"]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            c = sqlite3.connect(dbp)
+            loc = {r[0]: r[1] for r in
+                   c.execute("SELECT url, bucket FROM nearmiss_loc")}
+            seen = {r[0] for r in c.execute("SELECT url FROM seen")}
+            c.close()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            jr.DB, jr.TARGETS, sys.argv = keep
+        self.assertEqual(set(loc), {"u-locmiss"},
+                         "only the eligible, unambiguously-Canadian drop")
+        self.assertEqual(loc["u-locmiss"], "OTHER",
+                         "the bucket it was given is recorded, for the fix")
+        self.assertIn("u-ok", seen, "the kept posting is still claimed")
+        self.assertNotIn("u-locmiss", seen,
+                         "a near-miss is never claimed or notified")
+        self.assertIn("1 near-miss locations logged", buf.getvalue())
+
+    def test_the_fast_lane_logs_nothing(self):
+        """Any --targets other than the default switches collection off.
+
+        The fast lane runs 156 times a day over the same 100 boards. Letting
+        it log would add 156x the write volume for rows the daily sweep
+        already holds.
+        """
+        J = fc.job
+        jobs = [J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+                  "u-near", age=1)]
+        out, near, seen = self._run(jobs, argv_targets="other")
+        self.assertEqual(near, set())
+        self.assertNotIn("near-miss", out)
+
+    def test_no_claim_still_logs(self):
+        """The weekly fast.json rebuild is a full sweep with --no-claim.
+
+        --no-claim suppresses notify and track, which are decisions. The
+        near-miss log is not a decision, so it still fills - and that run
+        reads every board, which makes it the best sample of the week.
+        """
+        J = fc.job
+        jobs = [J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+                  "u-near", age=1),
+                J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+                  "u-match", age=1)]
+        out, near, seen = self._run(jobs, extra=["--no-claim"])
+        self.assertEqual(near, {"u-near"})
+        self.assertEqual(seen, set(), "--no-claim must claim nothing")
+
+
+class TestNearMissLocation(unittest.TestCase):
+    """The location gate's own review log.
+
+    This detector's whole value is the choice of marker. A first version
+    flagged any Canada-ish word and caught 115 of 2,724 real drops at about 2%
+    precision - `London, United Kingdom` 55 times, bare `London` 31, Dublin
+    variants, every one correctly dropped. The ambiguous-city list is exactly
+    the set of names that cannot carry this alone, so only the unambiguous
+    markers count. On the same 2,724 drops the final version flags 2, and both
+    are real misses.
+    """
+
+    # Real strings. Both of these are dropped today and should not be: ", NY"
+    # trips the foreign veto, and canadian_option cannot split a comma list.
+    REAL_MISSES = ["SEA, SF, NY, Toronto", "Toronto, NY, SEA, SF"]
+    # Dropped and correctly so. These are why the ambiguous list is excluded.
+    CORRECTLY_DROPPED = [
+        "London, United Kingdom", "London", "Dublin, London",
+        "London OR Dublin", "London, United Kingdom; Paris, France",
+        "Dublin, London, Paris, Berlin, Stockholm", "London, UK",
+        "Austin, TX", "Paris, France", "Bengaluru, India", "",
+    ]
+
+    def test_flags_the_real_misses(self):
+        for l in self.REAL_MISSES:
+            with self.subTest(l):
+                self.assertFalse(jr.classify_location(l)[1],
+                                 "precondition: this location is dropped today")
+                self.assertTrue(jr.near_miss_location(l))
+
+    def test_does_not_flag_ambiguous_cities_abroad(self):
+        for l in self.CORRECTLY_DROPPED:
+            with self.subTest(l):
+                self.assertFalse(jr.near_miss_location(l))
+
+    def test_unambiguous_markers_only(self):
+        # safe city, real region name, bare province code after a comma
+        self.assertTrue(jr.near_miss_location("Mississauga"))
+        self.assertTrue(jr.near_miss_location("Remote (Alberta)"))
+        self.assertTrue(jr.near_miss_location("somewhere, ON"))
+        # an ambiguous city with no qualifier is not a marker
+        self.assertFalse(jr.near_miss_location("Windsor"))
+        self.assertFalse(jr.near_miss_location("Victoria"))
+        self.assertFalse(jr.near_miss_location(None))
+
+    def test_it_changes_no_verdict(self):
+        for l in self.REAL_MISSES + self.CORRECTLY_DROPPED:
+            before = jr.classify_location(l)
+            jr.near_miss_location(l)
+            self.assertEqual(jr.classify_location(l), before)
+
+
+class TestNearMissNetworkExcluded(unittest.TestCase):
+    """Networking is a different specialism, excluded by request 2026-10-29.
+
+    These titles were never tracked - all tier 0 - but the review log surfaced
+    31 of them in its first sweep, 21% of a list whose only value is being
+    short enough to read. The exclusion is by SUBJECT: dropped when networking
+    is what the job is, kept when a strong devops token earns it a place.
+    """
+
+    NETWORK = [
+        "Network Engineer", "Senior Network Engineer", "Network Administrator",
+        "Network Analyst", "Network Automation Specialist",
+        "Senior Network Security Administrator", "DDI Network Engineer",
+        "Assistant Network Management Engineer", "Sr. Network Mgmt Engineer",
+        "Senior Network Monitoring Engineer",
+        "Senior Routing Engine Developer (CX Platform)",
+        "Specialist - Systems and Network Administration",
+    ]
+
+    def test_network_titles_stay_out_of_the_log(self):
+        for t in self.NETWORK:
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+    def test_a_strong_devops_token_still_earns_a_place(self):
+        # Each needs a strong token AND an engineering head noun - the
+        # detector's two standing conditions still apply. "SRE, Network
+        # Reliability" was tried here and fails correctly: `reliability` is
+        # not a head noun, so nothing is being done by this rescue at all.
+        for t in ("Kubernetes Network Engineer",
+                  "DevOps Network Automation Specialist",
+                  "SRE Network Platform Engineer"):
+            with self.subTest(t):
+                self.assertTrue(jr.near_miss(t))
+
+    def test_cloud_and_platform_are_deliberately_not_strong_enough(self):
+        """`platform` alone rescued telecom product-dev titles."""
+        self.assertFalse(jr.near_miss("Senior Routing Engine Developer (CX Platform)"))
+        self.assertFalse(jr.near_miss("Cloud Network Engineer"))
+
+    def test_the_exclusion_does_not_leak_into_the_pipeline(self):
+        """Excluding from the LOG must not change what the sweep tracks.
+
+        These titles were already tier 0, and that is the only reason the
+        exclusion is safe. If a rule is ever added that makes one of them
+        tier > 0, this test fails and says so.
+        """
+        for t in self.NETWORK:
+            self.assertEqual(jr.title_match(t, "acme")[0], 0, t)
+
+
+
+class TestSweepCounters(unittest.TestCase):
+    """shortlist and hydrated - the pass-2 request cost, which was unmeasured.
+
+    `boards` counts pass-1 fetch tasks and `scanned` counts what they
+    returned; between `scanned` and `matched` the sweep reported nothing, so
+    the second request per finalist was invisible. For the fast lane that is
+    520 list requests a run against an unknown number of detail requests, 156
+    times a day.
+    """
+
+    def test_will_hydrate_matches_what_hydrate_actually_does(self):
+        """One predicate, read by both, so the count cannot drift."""
+        real = dict(adapters.HYDRATORS)
+        try:
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS["fakeplat"] = lambda j, kind: None
+            # has hyd, platform is registered -> costs a request
+            self.assertTrue(jr.will_hydrate({"hyd": ("fakeplat", "x")}))
+            # has hyd, platform not registered -> costs nothing
+            self.assertFalse(jr.will_hydrate({"hyd": ("missing", "x")}))
+            # no hyd at all - lever, workable, rippling and the rest
+            self.assertFalse(jr.will_hydrate({}))
+            self.assertFalse(jr.will_hydrate({"hyd": None}))
+        finally:
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS.update(real)
+
+    def test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist(self):
+        import contextlib
+        import io
+        J = fc.job
+        # three shortlist members; only the two carrying a registered `hyd`
+        # may count as a pass-2 request
+        jobs = [
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON", "u1", age=1,
+              hyd=("fakeplat", "a")),
+            J("fake", "Acme", "SRE", "Toronto, ON", "u2", age=1,
+              hyd=("fakeplat", "b")),
+            J("fake", "Acme", "Platform Engineer", "Toronto, ON", "u3", age=1),
+        ]
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        real = dict(adapters.HYDRATORS)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        adapters.HYDRATORS["fakeplat"] = lambda j, kind: None
+        try:
+            jr.DB, jr.TARGETS = os.path.join(d, "t.sqlite3"), tpath
+            sys.argv = ["job_radar.py", "--targets", tpath, "--all",
+                        "--min-score", "0"]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            out = buf.getvalue()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS.update(real)
+            jr.DB, jr.TARGETS, sys.argv = keep
+        self.assertIn("3 shortlisted", out)
+        self.assertIn("2 hydrated", out)
+        return out
+
+    def test_cronwrap_can_parse_the_footer_this_sweep_writes(self):
+        """The two halves have to agree, and once did not.
+
+        cronwrap.sh extracts its metrics with regexes embedded in a heredoc,
+        and the comment there records an anchored pattern that silently read
+        one lane and not the other. So rather than restate the patterns, read
+        them out of the shell script and apply them to a footer main() really
+        produced.
+        """
+        out = self.test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist()
+        with open(os.path.join(jr.HERE, "cronwrap.sh")) as fh:
+            wrap = fh.read()
+        for key, want in (("shortlist", 3), ("hydrated", 2)):
+            m = re.search(r'\("%s",\s*r"([^"]+)"\)' % key, wrap)
+            self.assertIsNotNone(
+                m, f"cronwrap.sh has no extractor for {key} - the event "
+                   f"record would silently lack it")
+            got = re.search(m.group(1), out)
+            self.assertIsNotNone(got, f"{key} pattern {m.group(1)!r} does not "
+                                      f"match the footer main() wrote")
+            self.assertEqual(int(got.group(1)), want)
+
+    def test_the_core_metrics_regex_still_matches(self):
+        """Appending to the footer must not break the fields cronwrap already
+        reads, nor fast.sh's grep that decides what reaches the log."""
+        out = self.test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist()
+        line = [l for l in out.splitlines() if "scanned" in l][0]
+        self.assertIsNotNone(re.search(
+            r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
+            line))
+        self.assertIsNotNone(re.match(r"^_.*scanned", line),
+                             "fast.sh greps ^_.*scanned to keep the summary")
+
+
+
+class TestVendorSalesEngineer(unittest.TestCase):
+    """`sales` left the vendor rule on 2026-10-29, and why matters.
+
+    The whole vendor family - nine rules, 85 registered vendor names - had
+    produced exactly ONE tracked row in the tool's lifetime, measured against
+    all 80 rows in the tracker: a Fivetran "Sales Engineer, Enterprise". Every
+    other vendor rule had produced zero.
+
+    The mechanism is the part to remember when adding any future vendor rule.
+    A vendor title reaches --notify-min-score on its TITLE ALONE, with no
+    technical evidence at all, because tier 3 x 3 = 9 plus the +4 vendor bonus
+    plus +2 for mid level is exactly 15. The Fivetran req mentioned Terraform
+    and Kubernetes, which took it from 15 to 23 - that made the alert loud, it
+    did not cause it.
+    """
+
+    def _vendor(self):
+        jr.VENDORS.add("fivetran")
+
+    def test_sales_engineer_at_a_vendor_is_now_invisible(self):
+        self._vendor()
+        for t in ("Sales Engineer, Enterprise",
+                  "Senior Sales Engineer, Enterprise",
+                  "Ubuntu Sales Engineer (Entry-Level)"):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (0, None))
+
+    def test_solutions_and_field_engineer_are_deliberately_kept(self):
+        """Hands-on pre-sales rather than a quota-carrying track, and both
+        have produced zero rows - so keeping them costs nothing measured."""
+        self._vendor()
+        for t in ("Solutions Engineer", "Solution Engineer", "Field Engineer"):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (3, "vendor"))
+
+    def test_the_support_path_this_family_exists_for_is_untouched(self):
+        self._vendor()
+        for t, tier in (("Support Engineer", 4),
+                        ("Technical Support Engineer", 4),
+                        ("Customer Success Engineer", 4),
+                        ("Escalation Engineer", 4),
+                        ("Implementation Engineer", 3),
+                        ("Technical Account Manager", 3)):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (tier, "vendor"))
+
+    def test_a_vendor_title_still_reaches_notify_on_its_title_alone(self):
+        """Not a regression - a property of the design, pinned so the next
+        person adding a vendor rule sees the cost in a failing diff."""
+        self._vendor()
+        tier, fam = jr.title_match("Solutions Engineer", "fivetran")
+        bare, _, _ = jr.score("Solutions Engineer", "fivetran", tier, fam, "")
+        self.assertGreaterEqual(bare, 15,
+                                "a vendor title scores >= the notify threshold "
+                                "with an EMPTY job description")
+
+    def test_vendor_rules_only_fire_at_a_registered_vendor(self):
+        for t in ("Sales Engineer, Enterprise", "Solutions Engineer",
+                  "Support Engineer"):
+            with self.subTest(t):
+                self.assertEqual(
+                    jr.title_match(t, "some-canadian-bank"), (0, None))
+
+    def test_sales_engineer_does_not_land_in_the_near_miss_log_either(self):
+        """It is not a gap to review - it is a decision. NEAR_BIZ holds
+        `sales`, so the review list does not re-surface it every sweep."""
+        for t in ("Sales Engineer, Enterprise", "Senior Sales Engineer"):
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+
+
+class TestSeenSkip(unittest.TestCase):
+    """Skipping pass 2 for postings already in `seen`.
+
+    `show` is `hits if a.all else fresh`, and `fresh` is only what the atomic
+    claim actually inserted, so a posting already in `seen` had its
+    description fetched and its score computed for nothing. Measured on
+    2026-10-29: 91 fast runs, ~18,900 descriptions, 7 new postings.
+
+    The only thing that really has to be proved is that the sweep's OUTPUT is
+    unchanged - this is an optimisation, and an optimisation that alters what
+    reaches the phone is a bug.
+    """
+
+    def _sweep(self, d, jobs, calls, extra=(), no_filter=False):
+        """One in-process sweep against a persistent temp database."""
+        import contextlib
+        import io
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        keep = (jr.DB, jr.TARGETS, sys.argv, jr.claimed_urls)
+        realh = dict(adapters.HYDRATORS)
+        adapters.ADAPTERS["fake"] = lambda tok: [dict(j) for j in jobs]
+
+        def counting(j, kind):
+            calls.append(j["url"])
+        adapters.HYDRATORS["fakeplat"] = counting
+        try:
+            jr.DB, jr.TARGETS = os.path.join(d, "t.sqlite3"), tpath
+            if no_filter:
+                jr.claimed_urls = lambda: set()      # filter made inert
+            sys.argv = ["job_radar.py", "--targets", tpath,
+                        "--min-score", "0", *extra]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            return buf.getvalue()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            adapters.HYDRATORS.clear(); adapters.HYDRATORS.update(realh)
+            jr.DB, jr.TARGETS, sys.argv, jr.claimed_urls = keep
+
+    @staticmethod
+    def _urls(out):
+        return set(re.findall(r"^- (https?://\S+)", out, re.M))
+
+    def _jobs(self):
+        J = fc.job
+        return [J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+                  f"https://x/{i}", age=1, hyd=("fakeplat", i))
+                for i in range(6)]
+
+    def test_the_second_run_skips_everything_it_already_claimed(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        first, second = [], []
+        out1 = self._sweep(d, jobs, first)
+        out2 = self._sweep(d, jobs, second)
+        self.assertEqual(len(first), 6, "run 1 must hydrate the whole shortlist")
+        self.assertEqual(second, [], "run 2 must hydrate nothing")
+        self.assertEqual(self._urls(out1), {f"https://x/{i}" for i in range(6)})
+        self.assertEqual(self._urls(out2), set(), "nothing is new on run 2")
+        self.assertIn("6 recurring", out2)
+
+    def test_the_output_is_identical_with_the_filter_inert(self):
+        """The whole point. Same postings shown, far fewer requests.
+
+        Compared against jr.claimed_urls stubbed to an empty set, which
+        disables the skip and changes nothing else - rather than against
+        --all, which reports every match instead of the new ones and so is
+        not a control.
+        """
+        jobs = self._jobs()
+        d1, d2 = tempfile.mkdtemp(), tempfile.mkdtemp()
+        on, off = [], []
+        self._sweep(d1, jobs, on)                      # seed
+        self._sweep(d2, jobs, off, no_filter=True)      # seed
+        out_on = self._sweep(d1, jobs, on)
+        out_off = self._sweep(d2, jobs, off, no_filter=True)
+        self.assertEqual(self._urls(out_on), self._urls(out_off),
+                         "the skip must not change what is shown")
+        self.assertEqual(len(on), 6, "6 on the seed run, 0 on the second")
+        self.assertEqual(len(off), 12, "no skip: the second run re-hydrates")
+
+    def test_all_mode_is_excluded(self):
+        """--all reports every match, so it needs every score. That is the
+        weekly fast.json rebuild, and the one lane this cannot help."""
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        first, second = [], []
+        self._sweep(d, jobs, first)
+        out = self._sweep(d, jobs, second, extra=["--all"])
+        self.assertEqual(len(second), 6, "--all must still hydrate everything")
+        self.assertNotIn("recurring", out)
+
+    def test_claimed_urls_fails_to_the_safe_side(self):
+        """An empty set skips nothing, so a failed read costs requests and
+        never correctness."""
+        keep = jr.DB
+        try:
+            jr.DB = os.path.join(tempfile.mkdtemp(), "does-not-exist.sqlite3")
+            self.assertEqual(jr.claimed_urls(), set())
+            # a database with no `seen` table - the fresh-install state
+            import sqlite3
+            p = os.path.join(tempfile.mkdtemp(), "empty.sqlite3")
+            sqlite3.connect(p).close()
+            jr.DB = p
+            self.assertEqual(jr.claimed_urls(), set())
+        finally:
+            jr.DB = keep
+
+    def test_cronwrap_reads_the_recurring_count(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        self._sweep(d, jobs, [])
+        out = self._sweep(d, jobs, [])
+        with open(os.path.join(jr.HERE, "cronwrap.sh")) as fh:
+            wrap = fh.read()
+        m = re.search(r'\("recurring",\s*r"([^"]+)"\)', wrap)
+        self.assertIsNotNone(m, "cronwrap.sh has no extractor for recurring")
+        got = re.search(m.group(1), out)
+        self.assertIsNotNone(got)
+        self.assertEqual(int(got.group(1)), 6)
+
+    def test_the_core_metrics_regex_survives_the_new_field(self):
+        d = tempfile.mkdtemp()
+        jobs = self._jobs()
+        self._sweep(d, jobs, [])
+        out = self._sweep(d, jobs, [])
+        line = [l for l in out.splitlines() if "scanned" in l][0]
+        self.assertIsNotNone(re.search(
+            r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
+            line))
+        self.assertIsNotNone(re.match(r"^_.*scanned", line))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

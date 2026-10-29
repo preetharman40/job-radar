@@ -3201,3 +3201,374 @@ main() re-applies the cap to the corrected value, reporting the count in the
 sweep footer the same way the `"N Locations"` geography re-check does. A date
 from pass 1 is never overwritten: only a *missing* age is filled, so a hydrate
 that reads a different date cannot silently re-age a row.
+
+## the title gate was the one filter that could not report itself
+
+Of the three gates in pass 1, two keep a record and one does not.
+`classify_location()` reports `dropped_geo` in the sweep footer, the age cap
+reports `dropped_age`, and a **tier-0 title is dropped with no trace anywhere**
+— never hydrated, never scored, never printed, never logged. Roughly 56,000 of
+the 58,300 postings a full sweep reads leave through that gate every half hour
+and nothing records what they were.
+
+So "are we missing relevant jobs?" was a question the tool structurally could
+not answer. Every title gap found so far was found by accident, by noticing one
+posting by hand: the `"Engineer II"` level bug (9 of 12 such titles were being
+scored as entry and collecting the +4 junior bonus), `"Senior Associate"` being
+read as senior on a banking ladder where it is a mid rank, and the kubernetes
+adjacency gap. Three real defects, all found by eye, none by the tool.
+
+### measuring it first, because the shape of the problem was not obvious
+
+2,958 real titles, pulled from six live Greenhouse boards:
+
+```
+raw titles              2,958
+pass the title gate        74   (2%)
+tier 0 -> invisible     2,884   (97%)
+```
+
+The 97% is **correct**, and that is the first thing a detector has to respect.
+Stripe alone listed 729 postings, overwhelmingly risk, fraud, legal and sales.
+A naive detector keying on the obvious words produces a review list made almost
+entirely of jobs nobody wants:
+
+```
+Fraud Operations Analyst          Marketing Operations Manager
+People Operations Specialist      GTM Strategy & Operations Analyst
+Business Systems Architect (Tax)  FP&A Analyst, Cloud Finance
+```
+
+`operations`, `systems`, `cloud` and `pipeline` all appear in business titles an
+order of magnitude more often than in infrastructure ones. Keying on bare
+`\boperations?\b` adds **12** titles to the review list, of which one is real.
+
+### three separate mechanisms produce a real miss
+
+Measured with the rules as they stand:
+
+```
+Platform Engineer                     tier 4  PASS
+Sr Platform Monitoring Engineer       tier 0  INVISIBLE   <- adjacency
+Infrastructure Engineer               tier 4  PASS
+Infrastructure Operations Analyst     tier 0  INVISIBLE   <- adjacency
+Network Operations Engineer           tier 2  PASS
+Network Engineer                      tier 0  INVISIBLE   <- no rule at all
+Automation Engineer                   tier 3  PASS
+DCSC Automation Specialist            tier 0  INVISIBLE   <- head noun missing
+Lead Cloud Platform Engineer          tier 4  dropped: level=exec
+```
+
+1. **Adjacency.** `\bplatform\s+engineer` requires the words to touch. One
+   inserted word hides a genuine platform role. The fix already exists in the
+   rule set and is applied to exactly one of the 22 rules — the kubernetes rule
+   carries `[\s/()\[\],.-]*(?:[a-z0-9]+[\s/()\[\],.-]+)?` between token and head.
+2. **A missing head noun, or no rule.** `automation engineer` is covered,
+   `automation specialist` is not. `Network Engineer` and `Capacity Engineer`
+   are untouched by any rule.
+3. **`level_of()`, a second title gate.** `L_EXEC` matches staff, principal,
+   architect, director, head of, vp, manager, **lead** and fellow, so a tier-4
+   title can still be excluded by `--level entry,mid,senior`. This is why three
+   of Thomson Reuters' four titles were never going to alert.
+
+The property that makes all of this tractable: `title_match()` returns the
+**maximum** tier among matching rules, so a rule added to `titles.json` can only
+ever raise a posting's tier, never lower one. The list is safe to extend, which
+means the problem is evidence, not design.
+
+### the detector is three patterns, and the exclusions are most of the work
+
+`near_miss()` is deliberately not one regex. It requires a **technical token**
+and an **engineering head noun**, and rejects **business domains** and **product
+engineering**. The last exclusion is the one that mattered: titles of the shape
+`Senior Software Engineer, Backend (Card Loan Platform)` — where `platform`
+names the product and not the work — were **116 of the first 146 flags**.
+Affirm, Stripe and Databricks list dozens each, and they are also not the jobs
+this search is for.
+
+```
+first attempt   146 of 2,884 rejects flagged   (unreadable)
++ business-domain exclusion
++ product-engineering exclusion
++ the sweep's own level and age tests
+final            19 of 2,884 rejects flagged   (0.66%)
+```
+
+All 19 are plausible infra roles: Capacity Engineer, Network Deployment
+Engineer, Senior Network Engineer, Infrastructure Operations Analyst, Sr
+Platform Monitoring Engineer, DCSC Automation Specialist, DCIM Administrator,
+Cloud Security Engineer, Technical Operations Engineer.
+
+`operations` is admitted only when **qualified** by a technical word —
+`(technical|service|systems?)\s+operations?` — which adds exactly one title,
+the genuine `Technical Operations Engineer`, against twelve for the bare word.
+
+### where it is collected, and why that position is the whole design
+
+Collection happens **inside the pass-1 loop, after the location test**. That
+ordering is not incidental:
+
+- Collecting before the location test would log tens of thousands of US and EU
+  titles per sweep.
+- Collecting after it leaves only rejects that were *otherwise eligible* — the
+  posting is somewhere you could work, recent enough for `--max-age`, and at a
+  level `--level` accepts. The log answers "what would have been shown but for
+  the title rule", which is the only version of the question worth reading.
+
+Three further constraints, each chosen to make the feature unable to cost
+anything:
+
+- **Full sweeps only** (`a.targets == TARGETS`). The fast lane polls the same
+  100 boards 156 times a day and would add nothing but 156× the write volume.
+- **A table, not a log file.** A full sweep re-rejects the same titles 26 times
+  a day; `INSERT OR IGNORE` on a `url` primary key deduplicates for free,
+  exactly as `seen` does, and `first_seen` keeps the first sighting.
+- **Written last, in its own transaction, after the claim.** `db_write()`
+  returns False on a lock rather than raising, and nothing reads `near`. If a
+  diagnostic write ever blocked and took the `seen` claim with it, a review log
+  would be costing real notifications — the one trade this feature must not
+  make.
+
+Read it with `nearmiss.py`. Nothing in the decision path reads the table, and a
+test asserts that `near_miss()` cannot alter tier, family or level.
+
+### the test could not use the existing end-to-end check
+
+`selftest`'s one-board sweep passes `--targets` a temporary file, so
+`a.targets == TARGETS` is false and the near-miss path is switched off — correct
+behaviour, and useless as a test of it. The integration tests in `test_pure.py`
+run the real `main()` in-process against a fake adapter instead.
+
+Registering that fake is where the module boundary earned its keep. The obvious
+move, replacing `jr.ADAPTERS`, passes the test and **fails the boundary check** —
+`ADAPTERS` is not in `job_radar.__all__`, because `job_radar` must not re-export
+the adapter registry and let callers depend on it through the wrong module.
+Widening `__all__` to quiet the check would have traded the architecture for a
+test. The legitimate seam was already there: `from adapters import ADAPTERS`
+binds the *same dict object*, so inserting a key through `adapters.ADAPTERS` — a
+declared name on the package that owns it — is visible to `job_radar`
+immediately. Same seam `TestAgeFromHydrate` uses for `HYDRATORS`.
+
+## the commit gate removed itself and reported success
+
+Found while committing the near-miss log, and the mechanism is worth keeping
+because nothing in the system noticed.
+
+The in-place edit helper used to apply that change wrote its result to a temp
+file and `os.replace`d it over the original. A freshly created temp file gets
+default permissions, so **every file it touched came back at 0644** — and three
+scripts lost their executable bit: `job_radar.py`, `selftest.py`,
+`test_pure.py`.
+
+Losing `+x` on those is invisible from every direction the tool looks:
+
+- the cron lanes invoke `python3 job_radar.py`, which does not need the bit;
+- `selftest`'s *"every cron command exists and is executable"* check covers the
+  commands in the crontab, and those are the `.sh` wrappers, not the Python;
+- `git` recorded `mode change 100755 => 100644` in the diff, where nobody read it.
+
+And then the part that matters. The pre-commit hook began:
+
+```bash
+[ -x "$R/selftest.py" ] || exit 0
+```
+
+The intent was "skip quietly in a worktree that has no `radar/`". The effect,
+once `selftest.py` was no longer executable, was that **the gate skipped itself
+and exited 0** — so the commit went through with no tests run and no message
+saying so. The suite had in fact been run by hand and passed, which is the only
+reason this was harmless; as a mechanism it is a gate that disappears exactly
+when something has gone wrong with the tree.
+
+Two fixes, from both sides:
+
+1. **The guard distinguishes absent from broken.** `-e` and exit 0 is a
+   legitimate skip; present-but-not-executable prints what happened and exits
+   1. *A guard whose failure mode is silence is not a guard.*
+2. **`selftest` grew a tier-1 check** — *"entry points keep their executable
+   bit"* — over the 22 files that are invoked by path rather than through
+   `python3`, the hook among them. Verified from the failing side: `chmod -x
+   logq.py` turns it red.
+
+The edit helper now reads the mode before writing and `chmod`s the temp file to
+match before the replace. The same class of bug as *"never rewrite a shell
+script while cron is running it"* above: an atomic replace is atomic about
+**content** and says nothing about metadata.
+
+## the same log for the other pass-1 gate, and why its detector is narrow
+
+The title log above left the geography gate in the same blind spot it had: 2,724
+of 2,957 real location strings are dropped, and nothing recorded which.
+
+The gate's **precision** is measurable and is perfect. Of 2,957 strings pulled
+from six live boards, 230 were classified `CA` and every one is genuinely
+Canada-eligible — `Remote Canada` ×81, `Remote, Canada; Remote, United States`
+×39, `Toronto, Canada` ×17. No false positives. That last form is worth
+pausing on: it appears 39 times, and it only classifies `CA` because the first
+rung of the ladder lets an explicit Canada win *before* the foreign veto. Union
+the locations and the rung fires; keep the first arrival and 39 postings become
+a coin flip.
+
+**Recall** is what cannot be measured without a log, and the first attempt at a
+detector proved why it needs care. Flagging any Canada-ish word caught 115 of
+2,724 drops at roughly 2% precision:
+
+```
+ 55  London, United Kingdom          4  London, Dublin
+ 31  London                          3  London OR Dublin
+  5  Dublin, London                  1  SEA, SF, NY, Toronto      <- real
+```
+
+`CA_CITIES_AMBIGUOUS` already names the problem: London, Windsor, Hamilton,
+Victoria, Burlington, Richmond and the rest exist in several countries and are
+exactly the words that cannot carry this alone. So `near_miss_location()` reads
+**only the unambiguous markers** — the safe-city list, the real region names,
+and a bare province code after a comma or bracket. On the same 2,724 drops that
+flags **2**, and both are real:
+
+```
+SEA, SF, NY, Toronto
+Toronto, NY, SEA, SF
+```
+
+Both are dropped because `", NY"` trips the foreign veto, so rung 2 cannot fire
+even though it found Toronto, and `canadian_option` — the rescue built for
+precisely this shape — splits on `/`, `;` and `|` but **not comma**, so it sees
+one segment and gives up. The fix is one separator, and it is monotonic in the
+safe direction: `canadian_option` is reached only after rungs 1–3 fail, so it
+can turn a drop into a keep and never the reverse. Not applied yet; the log is
+what will say how often it matters on Canadian boards rather than American ones.
+
+Collection mirrors the title log and is gated the opposite way: a row must have
+**passed** the title, level and age tests and failed only on geography.
+Without the title test it would fill with Fraud Operations Analysts in Toronto,
+which says nothing about the location rules. The hint runs before
+`title_match()` because it is three regexes against ~56,000 strings that
+rejects nearly all of them.
+
+It is a second table rather than a `kind` column on the first, deliberately: a
+column would mean an `ALTER` on a live file five processes share, and a schema
+that differs between a migrated database and a freshly created one. The
+payloads also differ — a location near-miss records the bucket it was given,
+and points at the location regexes rather than at `titles.json`.
+
+### networking was ruled out, and the reason is in the code
+
+The first sweep's log surfaced 31 networking titles at exactly the employers
+this search targets: Moneris, BMO, TMX Group, Scotiabank, Rogers, Hydro One,
+RBC, Ubisoft, Accenture, Alstom, Government of Alberta. Three candidate rules
+were measured against them — `network engineer` admits 6, adding
+admin/analyst/specialist admits 10, allowing one intervening word admits 16 —
+and the answer was **no to all three**. Routing, switching and firewalls are a
+different specialism from containers and CI/CD, not a widening of this one, and
+the broader two options also add the `Analyst` and `Administrator` titles that
+are excluded by standing request.
+
+None of these were ever tracked: every one is tier 0 and always has been. What
+changed is the log, where 31 of 146 rows was 21% of a list whose only value is
+being short enough to read. `NEAR_NET` now excludes them **by subject** —
+dropped when networking is what the job is, kept when a strong devops token
+earns a place anyway — and `cloud` and `platform` are deliberately not strong
+enough, the same finding that shaped `NEAR_SWE`. 26 rows went, 146 to 120.
+
+The exclusion is written down with its measurements for one reason: a Moneris
+"Network Engineer" in Toronto looks exactly like a missing rule, and the
+evidence will keep arriving every sweep. Without the note the rule gets
+proposed again in three months. A test asserts the excluded titles are still
+tier 0, so if a rule is ever added that tracks one of them, the suite says so
+rather than the log quietly hiding it.
+
+## pass 2 was fetching descriptions to compute scores the sweep threw away
+
+Found while analysing whether the tool needed a description cache. It did not.
+It needed to stop asking for descriptions it had no use for.
+
+One line decides what a sweep actually reports:
+
+```python
+show = sorted(hits if a.all else fresh, ...)
+```
+
+`fresh` is only what the atomic claim actually INSERTED into `seen`. So in the
+normal path, a posting already in `seen` from an earlier run had its
+description fetched over the network, its score computed, and the score
+discarded — it reached the footer's `matched` count and stopped there.
+
+The scale, measured the day the `hydrated` counter was added:
+
+```
+fast lane   91 runs · ~18,900 descriptions fetched · 7 new postings shown
+            about 2,700 detail requests per new job found
+```
+
+The fix is not a cache. Nothing is stored and nothing is reused, so nothing can
+go stale: the sweep declines to ask a question whose answer it would bin.
+`claimed_urls()` reads `seen` on its own short-lived read-only connection, so
+main()'s write connection stays where it has always been, after pass 2. It
+**fails to the empty set** — a missing file, a missing table, any SQLite error
+— because an empty set skips nothing and the sweep then behaves exactly as it
+did before this existed. A failed read costs requests, never correctness.
+
+`--all` is excluded: it reports every match rather than the new ones, so it
+needs every score. That is the weekly `fast.json` rebuild, and the one lane
+this cannot help.
+
+### measured on both lanes
+
+```
+             hydrated/run      requests/day        wall clock
+fast         208 -> 4          32,448 -> 624       154s -> 121s
+daily        237 -> 4           6,162 -> 104       362s -> 246s
+```
+
+98% of pass-2 traffic gone, and about **136 minutes a day** of request time.
+`shortlist` is unchanged on both lanes (279 and 235), which is the check that
+pass 1 was not touched.
+
+### two estimates that were wrong, and why
+
+Worth recording, because both were stated confidently before being measured.
+
+**The reduction was predicted at 78%; it is 98%.** The reasoning was that the
+~52 shortlist entries per run that score below `--min-score` never enter `seen`
+and so would still be hydrated forever — the one gap a cache would uniquely
+cover. In practice `seen` is cumulative over 550 postings and many weeks, so
+almost all of those had scored ≥ 8 at some earlier point and are in the table
+permanently. `recurring` came back at 231 of a 235-row shortlist.
+
+**Pass 2 was estimated at 3–6% of wall clock; it is 22–32%.** That estimate came
+from fitting `time = a·(pass-1 tasks) + b·(hydrates)` to the two lanes:
+
+```
+151 = 520a + 207b
+354 = 1259a + 237b     ->   a ~ 0.27 s/task,  b ~ 0.044 s/hydrate
+```
+
+Two equations and two unknowns is zero degrees of freedom, so there was nothing
+to validate against — but the real defect is that the two lanes' hydrate counts
+were **207 and 237**, nearly identical. The system is ill-conditioned in `b`:
+those two equations are almost parallel in that direction, so `b` was
+essentially undetermined and the fit put the whole difference into `a`. The
+measured cost is roughly 0.15 s/hydrate on the fast lane and 0.46 s on the
+daily one — not even a single constant, because the daily lane's shortlist
+reaches slower platforms that `fast.json`'s 100 boards exclude.
+
+The lesson is narrow and reusable: a two-point fit whose points barely differ
+in one variable cannot measure that variable. Run the experiment instead.
+
+### what it cost: `matched` changed meaning
+
+`matched` is `len(hits)`, and with the skip on, `hits` holds only postings not
+previously claimed — so it reads near zero every run where it used to sit
+stably at 180–222. That stability was a real health signal: a sudden fall meant
+boards had gone quiet.
+
+The signal moves to `recurring`, and both are reported rather than one
+replacing the other, because they answer different questions — a fall in
+`recurring` means boards went quiet, a fall in `matched` only means a slow day.
+`matched` also keeps its exact position in the footer, because cronwrap.sh's
+metrics regex is `_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards`
+and `fast.sh` greps `^_.*scanned` to decide what reaches the log at all.
+
+Expect the cliff in `events.jsonl` at 2026-10-29T18:51Z: `matched` 222 -> 0 and
+`recurring` appearing at 270. Nothing failed.

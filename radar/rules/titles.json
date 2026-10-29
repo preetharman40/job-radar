@@ -144,9 +144,34 @@
    "family": "vendor"
   },
   {
-   "re": "\\b(solutions?|sales|field)\\s+engineer\\b",
+   "re": "\\b(solutions?|field)\\s+engineer\\b",
    "tier": 3,
-   "family": "vendor"
+   "family": "vendor",
+   "note": [
+    "`sales` was removed on 2026-10-29, after the only tracked row this entire",
+    "vendor family has ever produced turned out to be one nobody wanted: a",
+    "Fivetran \"Sales Engineer, Enterprise\". Measured against all 80 tracker rows,",
+    "every other vendor rule - support engineer, customer success, escalation,",
+    "implementation, onboarding, deployment, TAM, professional services,",
+    "developer advocate - has produced ZERO. Nine rules and 85 vendor names, and",
+    "the family's lifetime output was that one sales job.",
+    "",
+    "The mechanism is worth keeping in mind for any future vendor rule. A vendor",
+    "title reaches the notify threshold on its title ALONE:",
+    "",
+    "    tier 3 x 3 = 9  +  vendor bonus 4  +  level mid 2  =  15",
+    "",
+    "and 15 is exactly --notify-min-score. The Fivetran req's Terraform and",
+    "Kubernetes mentions took it from 15 to 23 - they made the alert loud, they",
+    "did not cause it. No technical evidence was ever required.",
+    "",
+    "`solutions` and `field` are kept. Both are hands-on pre-sales engineering",
+    "rather than a quota-carrying track, both are the original intent of the",
+    "vendor path (support/solutions work at a DevOps tool vendor converting into",
+    "SRE), and both have produced zero rows so far - so keeping them costs",
+    "nothing measured and removing them would gain nothing measured either.",
+    "Revisit if either one ever produces a surprise of its own."
+   ]
   },
   {
    "re": "\\b(implementation|onboarding|deployment)\\s+engineer",

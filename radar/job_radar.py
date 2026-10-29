@@ -66,16 +66,18 @@ __all__ = [
     # title / level / location / score - the pure core
     "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
+    "near_miss", "near_miss_location",
     "arrangement", "canadian_option", "score", "band_of",
     # per-posting checks that need the classifier
     "offshore_marker", "office_mismatch",
     # pipeline
-    "hydrate", "append_to_tracker", "main",
+    "hydrate", "will_hydrate", "append_to_tracker", "main",
     # tracker duplicate guard
     "dupe_norm", "loc_compatible", "parse_tracker_rows",
     "tracker_row_active", "find_tracker_dupe",
     # infrastructure
-    "FileLock", "TRACKER_LOCK", "db", "db_write", "atomic_write",
+    "FileLock", "TRACKER_LOCK", "db", "db_write", "claimed_urls",
+    "atomic_write",
     "notify", "ntfy_topic",
 ]
 
@@ -240,6 +242,148 @@ def level_of(title):
     if L_ENTRY.search(t):
         return "entry"
     return "mid"
+
+
+# ------------------------------------------------- near-miss diagnostics ---
+# Which titles did the TITLE GATE throw away that a person would have wanted
+# to see?
+#
+# This is the one filter the tool could not report on. classify_location()
+# reports `dropped_geo`, the age cap reports `dropped_age`, but a tier-0 title
+# is dropped in pass 1 and leaves no trace anywhere: never hydrated, never
+# scored, never printed, never logged. 56,000 postings a sweep vanish with no
+# record of what they were, so "are we missing relevant jobs?" was a question
+# the tool structurally could not answer. Every title gap found so far - the
+# "Engineer II" level bug, "Senior Associate", the kubernetes adjacency gap -
+# was found by noticing one posting by hand on LinkedIn.
+#
+# These three patterns do NOT filter anything. They decide only what gets
+# written to the `nearmiss` table for review. Nothing here can cause a posting
+# to be notified, tracked, scored or shown.
+#
+# Measured on 2,958 real titles from six boards: 2,884 scored tier 0, and this
+# flags 19 of them (0.66%), every one a plausible infra role. The three
+# exclusions below are what took it there from 146.
+
+# A technical token. Deliberately NOT "operations", "systems" or "monitoring"
+# on their own: in a real sample those words appear far more often in business
+# titles (Fraud Operations Analyst, Marketing Operations Manager, People
+# Operations Specialist, Business Systems Architect (Tax)) than in infra ones,
+# and keying on them put 100+ payroll and GTM roles in the review list.
+NEAR_TECH = re.compile(
+    r"\b(kubernetes|k8s|openshift|helm|terraform|ansible|puppet|chef|"
+    r"docker|container|containers|jenkins|ci/?cd|gitops|devops|devsecops|sre|"
+    r"site\s+reliability|observability|prometheus|grafana|splunk|"
+    r"linux|unix|rhel|ubuntu|solaris|vmware|virtuali[sz]ation|hypervisor|"
+    r"aws|azure|gcp|google\s+cloud|cloud|serverless|"
+    r"infrastructure|infra|platform|sysadmin|system\s+administrat|"
+    r"network|networking|firewall|load\s+balanc|dns|bgp|"
+    r"storage|backup|disaster\s+recovery|provisioning|orchestration|"
+    r"automation|scripting|bash|powershell|"
+    r"deployment|release\s+engineer|build\s+engineer|tooling|"
+    r"capacity|latency|uptime|availability|scalability|"
+    r"endpoint|intune|jamf|active\s+directory|datacent(?:er|re)|"
+    r"data\s+cent(?:er|re)|"
+    # "operations" QUALIFIED by a technical word, never on its own. Measured on
+    # the same sample: this phrase adds exactly one title, the genuine miss
+    # "Technical Operations Engineer", where a bare \boperations?\b would add
+    # twelve - Risk Operations Analyst, Monetization Operations Analyst,
+    # Community Operations Specialist and the rest of the business pile.
+    r"(?:technical|service|systems?)\s+operations?)\b", re.I)
+
+# ...attached to a job that is actually done by an engineer or an admin.
+NEAR_HEAD = re.compile(
+    r"\b(engineer|engineering|administrator|admin|analyst|specialist|"
+    r"developer|architect|technician|consultant|operator|ops)\b", re.I)
+
+# A business domain. These are not infra roles whatever vocabulary they borrow,
+# and they are the bulk of what a technical-token match picks up by accident.
+NEAR_BIZ = re.compile(
+    r"\b(financ\w*|marketing|sales|legal|people|recruit\w*|payroll|"
+    r"tax|audit\w*|revenue|gtm|procurement|facilities|workplace|hr|talent|"
+    r"benefits|compensation|fraud|credit|aml|sanctions|underwrit\w*|claims|"
+    r"billing|collections|brand|social|seo|partnership\w*|bizops|strategy|"
+    r"content|communications|comms|office|logistics|supply|merchandis\w*|"
+    r"investor|accounting|treasury|fp&a)\b", re.I)
+
+# Product engineering. "Senior Software Engineer, Backend (Card Loan Platform)"
+# is a backend SWE role where `platform` names the PRODUCT, not the work, and
+# these alone were 116 of the original 146 flags - Affirm, Stripe and
+# Databricks list dozens of them. They are also not the jobs this search is
+# for: the target is infrastructure and support-adjacent operations work, not
+# an application-engineering ladder.
+NEAR_SWE = re.compile(
+    r"\b(software|backend|back[\s-]?end|frontend|front[\s-]?end|"
+    r"full[\s-]?stack|fullstack|mobile|ios|android|web|game|firmware|embedded|"
+    r"machine\s+learning|ml|ai|data|research|qa|test)\s+engineer\b"
+    r"|\bengineering\s+manager\b|\bmanager\s+[IVX0-9]*,?\s*engineering\b", re.I)
+
+
+# Networking as a SPECIALISM, excluded by request on 2026-10-29: "I don't want
+# network engineer jobs to get tracked". They were never tracked - every one of
+# these titles is tier 0 and always has been - but the review log surfaced 31 of
+# them in its first sweep (Moneris, BMO, TMX, Scotiabank, Rogers, Hydro One,
+# RBC, Ubisoft, Accenture, Alstom, Gov of Alberta), which is 21% of a list whose
+# only value is being short enough to read.
+#
+# Recorded here rather than left as a gap, because the evidence is going to keep
+# arriving: a Moneris "Network Engineer" in Toronto looks exactly like a missing
+# rule, and without this comment the rule gets proposed again every few months.
+# Three candidates were measured against those 31 rows - network+engineer admits
+# 6, adding admin/analyst/specialist admits 10, allowing one intervening word
+# admits 16 - and the answer was no to all three. Routing, switching and
+# firewalls are a different specialism from containers and CI/CD, not a widening
+# of this one.
+#
+# The exclusion is by SUBJECT, not by token: a title is dropped from the log when
+# networking is what the job is, and kept when a strong devops token earns it a
+# place anyway. `cloud` and `platform` are deliberately NOT strong enough - the
+# same measurement that built NEAR_SWE showed `platform` alone rescuing telecom
+# product-dev titles like "Senior Routing Engine Developer (CX Platform)".
+NEAR_NET = re.compile(
+    r"\b(network|networking|routing)[\s/()-]*(?:[a-z]+[\s/()-]+)?"
+    r"(engineer|engineering|administrat\w+|admin|analyst|specialist|"
+    r"technician|developer|architect)\b", re.I)
+NEAR_NET_OK = re.compile(
+    r"\b(kubernetes|k8s|devops|sre|site\s+reliability|terraform|ansible|"
+    r"docker|container|ci/?cd|gitops|observability)\b", re.I)
+
+
+def near_miss(title):
+    """True when a tier-0 title looks like infra work a person should review.
+
+    Diagnostics only - see the block comment above. A title that matches here
+    is still dropped from the sweep exactly as before; the only consequence is
+    a row in `nearmiss` for the weekly read.
+    """
+    t = title or ""
+    if NEAR_NET.search(t) and not NEAR_NET_OK.search(t):
+        return False
+    return bool(NEAR_TECH.search(t) and NEAR_HEAD.search(t)
+                and not NEAR_BIZ.search(t) and not NEAR_SWE.search(t))
+
+
+def near_miss_location(loc):
+    """True when a DROPPED location names Canada unambiguously.
+
+    The location gate's precision is measurable and is 100%: of 2,957 real
+    strings, all 230 it called CA were genuinely Canada-eligible. Its RECALL is
+    not measurable without this, which is the whole reason for the log.
+
+    What makes it usable is the choice of marker. A first attempt flagged any
+    Canada-ish word and caught 115 of 2,724 drops at roughly 2% precision -
+    `London, United Kingdom` 55 times, bare `London` 31, Dublin variants - all
+    correctly dropped. The ambiguous-city list is exactly the set of names that
+    cannot carry this on their own, so this reads only the UNAMBIGUOUS markers:
+    the safe-city list, the real region names, and a bare province code after a
+    comma or bracket. On the same 2,724 drops that flags 2, and both are the
+    real misses (`SEA, SF, NY, Toronto` and `Toronto, NY, SEA, SF` - dropped
+    because `, NY` trips the foreign veto while canadian_option cannot split a
+    comma-separated list).
+    """
+    l = loc or ""
+    return bool(CA_SAFE_RE.search(l) or CA_REGION_RE.search(l)
+                or CA_PROVINCE_CODE.search(l))
 
 
 # --------------------------------------------------------------- locations ---
@@ -557,11 +701,25 @@ def office_mismatch(j):
 # it and re-derives whatever the adapter changed.
 
 
-def hydrate(j):
+def will_hydrate(j):
+    """Does this posting cost a pass-2 HTTP request?
+
+    Read by hydrate() and by main()'s request counter, so the count and the
+    behaviour cannot drift apart. Ten of the 22 platforms deliver the
+    description in the pass-1 list response - lever's `descriptionPlain`,
+    workable, rippling, teamtailor, recruitee, taleo, wpjobs, oracle, amazon,
+    html - and those cost nothing here however many finalists they produce.
+    The other twelve need one request each.
+    """
     kind = j.get("hyd")
-    fn = adapters.HYDRATORS.get(kind[0]) if kind else None
-    if not fn:
+    return bool(kind and adapters.HYDRATORS.get(kind[0]))
+
+
+def hydrate(j):
+    if not will_hydrate(j):
         return j
+    kind = j["hyd"]
+    fn = adapters.HYDRATORS[kind[0]]
     before = j.get("location") or ""
     try:
         fn(j, kind)
@@ -1103,7 +1261,49 @@ def db():
     # re-adds them, because dedupe only looks at URLs currently in the file.
     c.execute("CREATE TABLE IF NOT EXISTS dismissed("
               "url TEXT PRIMARY KEY, at TEXT)")
+    # Titles the TITLE GATE rejected that still look like infra work. Pure
+    # diagnostics: nothing reads this table to make a decision. A table rather
+    # than a log file because a full sweep re-rejects the same titles 26 times
+    # a day and INSERT OR IGNORE deduplicates for free, exactly as `seen` does.
+    c.execute("CREATE TABLE IF NOT EXISTS nearmiss("
+              "url TEXT PRIMARY KEY, title TEXT, company TEXT, location TEXT, "
+              "first_seen TEXT)")
+    # The same idea for the OTHER pass-1 gate. A separate table rather than a
+    # `kind` column on the one above, deliberately: adding a column would mean
+    # an ALTER on a live file five processes share, and a schema that differs
+    # between a migrated database and a freshly created one. The payloads also
+    # genuinely differ - a location near-miss needs the bucket it was given,
+    # and the fix it points at is a location regex, not a title rule.
+    c.execute("CREATE TABLE IF NOT EXISTS nearmiss_loc("
+              "url TEXT PRIMARY KEY, title TEXT, company TEXT, location TEXT, "
+              "bucket TEXT, first_seen TEXT)")
     return c
+
+
+def claimed_urls():
+    """Every URL already in `seen`, for the pass-2 skip in main().
+
+    Read-only, on its own short-lived connection, so the position and
+    lifetime of main()'s write connection are unchanged - it is still opened
+    after pass 2, where it has always been.
+
+    Failure returns the EMPTY set, which is the safe direction: an empty set
+    skips nothing, so the sweep does exactly what it did before this existed.
+    A failed read costs requests, never correctness. A missing file or table
+    is the normal state of a fresh install, not an error.
+    """
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=30)
+    except sqlite3.Error:
+        return set()
+    try:
+        return {u for (u,) in c.execute("SELECT url FROM seen")}
+    except sqlite3.Error as e:
+        print(f">> could not read `seen` ({e}); hydrating the whole shortlist",
+              file=sys.stderr)
+        return set()
+    finally:
+        c.close()
 
 
 # --------------------------------------------------------------------- main --
@@ -1204,13 +1404,46 @@ def main():
     jobs = list(_byurl.values())
 
     # Pass 1: cheap filters on title + location only.
+    #
+    # The near-miss log is collected HERE, and the position in this loop is the
+    # whole reason it stays small: location is tested first, so a title only
+    # reaches the gate once the posting is already somewhere you could work.
+    # Collecting before the location test would mean logging tens of thousands
+    # of US and EU titles a sweep; collecting after it leaves a list of rejects
+    # that were otherwise eligible, which is the only list worth reading.
+    # Full sweeps only - the fast lane runs 156 times a day over the same 100
+    # boards and would add nothing but 156x the write volume.
+    log_near = (a.targets == TARGETS)
+    near = []
+    near_loc = []
     shortlist = []
     for j in jobs:
         bucket, keep = classify_location(j["location"])
         if not keep or bucket not in buckets:
+            # The location log is the mirror of the title log below, and it is
+            # gated the same way: the posting must be one this sweep would
+            # otherwise have SHOWN. Without the title test it would fill with
+            # Fraud Operations Analysts in Toronto, which says nothing about
+            # the location rules. The hint runs first because it is three
+            # regexes against ~56,000 strings and rejects almost all of them,
+            # so title_match only runs on the handful that survive.
+            if log_near and near_miss_location(j["location"]):
+                tier, fam = title_match(j["title"], j["company"])
+                if (tier and fam in fams and level_of(j["title"]) in levels
+                        and (j["age"] is None or j["age"] <= a.max_age)):
+                    near_loc.append((j, bucket))
             continue
         tier, fam = title_match(j["title"], j["company"])
-        if tier == 0 or fam not in fams:
+        if tier == 0:
+            # Same level and age tests the pipeline would have applied, so the
+            # log holds postings that WOULD have been shown but for the title
+            # rule - not every stale exec req on a Canadian board.
+            if (log_near and near_miss(j["title"])
+                    and level_of(j["title"]) in levels
+                    and (j["age"] is None or j["age"] <= a.max_age)):
+                near.append(j)
+            continue
+        if fam not in fams:
             continue
         if fam == "vendor" and bucket in NO_VENDOR_BUCKETS:
             continue
@@ -1224,6 +1457,48 @@ def main():
         shortlist.append(j)
 
     # Pass 2: fetch descriptions for the shortlist, then score properly.
+    #
+    # Counted HERE because `shortlist` is reassigned three times below - by the
+    # hydrate map, the geography re-check and the age re-check - so by the time
+    # the footer is written the pass-2 cost is no longer recoverable from it.
+    #
+    # These two numbers were the hole in the sweep report. `boards` counts
+    # pass-1 fetch tasks and `scanned` counts what they returned, and between
+    # `scanned` and `matched` there was nothing at all: the second request per
+    # finalist was simply unmeasured. For the fast lane that is 520 list
+    # requests a run against an unknown number of detail requests, 156 times a
+    # day, which made "is the 429 from pass 1 or pass 2" unanswerable and any
+    # description-caching decision a guess.
+    n_shortlist = len(shortlist)
+
+    # Pass 2 for a posting already in `seen` is work this sweep throws away.
+    #
+    # `show` is `hits if a.all else fresh`, and `fresh` is only what the
+    # atomic claim actually INSERTED. A posting already in `seen` cannot be
+    # fresh, so in the normal path its description was fetched and its score
+    # computed for nothing - it reached the footer's `matched` count and
+    # stopped there. Measured on 2026-10-29: the fast lane hydrated ~207
+    # postings in each of 91 runs, about 18,900 descriptions, to find 7 new
+    # ones. 78% of the fast lane's shortlist and 79% of the daily lane's were
+    # already claimed.
+    #
+    # This is NOT a cache. Nothing is stored and nothing is reused, so nothing
+    # can go stale: the sweep is declining to ask a question whose answer it
+    # would have discarded. The claim inserts the same rows, `fresh` is
+    # identical and `show` is byte-for-byte the same.
+    #
+    # --all is excluded because it reports every match rather than the new
+    # ones, so it needs every score - that is the weekly fast.json rebuild,
+    # and the one lane this cannot help.
+    recurring = 0
+    if not a.all:
+        claimed = claimed_urls()
+        if claimed:
+            before_seen = len(shortlist)
+            shortlist = [j for j in shortlist if j["url"] not in claimed]
+            recurring = before_seen - len(shortlist)
+
+    n_hydrated = sum(1 for j in shortlist if will_hydrate(j))
     with cf.ThreadPoolExecutor(a.workers) as ex:
         shortlist = list(ex.map(hydrate, shortlist))
 
@@ -1326,6 +1601,26 @@ def main():
         fresh = []
         a.notify = a.track = False
 
+    # Diagnostics, so it goes LAST and its failure is survivable: a separate
+    # transaction after the claim, never before it. If this blocked and took
+    # the claim with it, a review log would be costing real notifications -
+    # exactly the trade this feature must not make. db_write returns False on
+    # a lock rather than raising, and nothing downstream reads `near`.
+    if near:
+        def _near():
+            conn.executemany(
+                "INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                [(j["url"], j["title"], j["company"], j["location"], now)
+                 for j in near])
+        db_write(conn, _near, label="near-miss log")
+    if near_loc:
+        def _near_loc():
+            conn.executemany(
+                "INSERT OR IGNORE INTO nearmiss_loc VALUES(?,?,?,?,?,?)",
+                [(j["url"], j["title"], j["company"], j["location"], b, now)
+                 for j, b in near_loc])
+        db_write(conn, _near_loc, label="near-miss location log")
+
     if a.seed:
         print(f"Seeded {len(hits)} postings into {DB}.\n"
               f"From now on, a plain `python3 job_radar.py` shows only NEW ones.")
@@ -1342,14 +1637,26 @@ def main():
     L = [f"# Job Radar — {'ALL MATCHES' if a.all else 'NEW SINCE LAST RUN'} — {now[:16]}Z",
          f"### {headline}",
          f"_{len(show)} shown · {len(hits)} matched · {len(jobs)} scanned · "
-         f"{len(tasks)} boards · levels={a.level} · families={a.family}"
+         f"{len(tasks)} boards · {n_shortlist} shortlisted · "
+         f"{n_hydrated} hydrated · levels={a.level} · families={a.family}"
+         # `matched` counts NEW matches once the seen-skip is on, so the
+         # signal that used to live in it - "are the boards still producing"
+         # - moves here. Both are reported rather than one replacing the
+         # other, because a sudden fall in `recurring` means boards went
+         # quiet while a fall in `matched` only means a slow day.
+         + (f" · {recurring} recurring" if recurring else "")
          # Worth showing: these are rows that looked like candidates until their
          # real cities were resolved, so a sudden jump means a board started
          # collapsing its locations rather than that the search got narrower.
          + (f" · {dropped_geo} dropped once \"N Locations\" resolved"
             if dropped_geo else "")
          + (f" · {dropped_age} dropped once the posting date arrived"
-            if dropped_age else "") + "_", ""]
+            if dropped_age else "")
+         # The title gate finally reporting itself. Not a count of mistakes -
+         # a count of rejects worth a human glance, read with `nearmiss.py`.
+         + (f" · {len(near)} near-miss titles logged" if near else "")
+         + (f" · {len(near_loc)} near-miss locations logged"
+            if near_loc else "") + "_", ""]
 
     by_fam = {}
     for j in show:

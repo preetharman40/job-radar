@@ -10,7 +10,7 @@
 {"bucket":"CA","company":"okta","family":null,"keep":true,"level":"exec","location":"Bellevue, Washington; Chicago, Illinois; Toronto, Ontario, Canada","tier":0,"title":"Global Paid Search Marketing Manager"}
 {"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Performance Engineer - Open Source"}
 {"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"senior","location":"Denver, Colorado, United States, AMER","tier":0,"title":"Senior Strategic Finance Analyst"}
-{"bucket":"NA-REMOTE","company":"fivetran","family":"vendor","keep":true,"level":"senior","location":"Remote, Colorado, United States, AMER","tier":3,"title":"Senior Sales Engineer, Enterprise"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"senior","location":"Remote, Colorado, United States, AMER","tier":0,"title":"Senior Sales Engineer, Enterprise"}
 {"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"mid","location":"Home based - Worldwide","tier":0,"title":"Channel Partner Sales Executive"}
 {"bucket":"OTHER","company":"Celestica","family":"adjacent","keep":false,"level":"entry","location":"Miyagi, 04, JP","tier":2,"title":"Associate, IT Infrastructure"}
 {"bucket":"OTHER","company":"clickhouse","family":"vendor","keep":false,"level":"senior","location":"Singapore","tier":4,"title":"Senior Technical Customer Support Engineer - Singapore"}
@@ -72,7 +72,7 @@
 {"bucket":"OTHER","company":"elastic","family":"devops","keep":false,"level":"senior","location":"Greece","tier":4,"title":"Senior Information Security Infrastructure Engineer - Security Architecture - InfoSec"}
 {"bucket":"OTHER","company":"cloudflare","family":"vendor","keep":false,"level":"mid","location":"Hybrid","tier":2,"title":"VoidZero Developer Relations Engineer"}
 {"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"exec","location":"Home based - Worldwide","tier":3,"title":"Cloud Professional Services Manager"}
-{"bucket":"NA-REMOTE","company":"fivetran","family":"vendor","keep":true,"level":"exec","location":"Remote, California, United States, AMER","tier":3,"title":"Lead Sales Engineer, Enterprise"}
+{"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"exec","location":"Remote, California, United States, AMER","tier":0,"title":"Lead Sales Engineer, Enterprise"}
 {"bucket":"NA-REMOTE","company":"fivetran","family":"adjacent","keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":3,"title":"Senior  Staff Systems Engineer, Data & Integrations"}
 {"bucket":"US-ONLY","company":"AristaNetworks","family":"adjacent","keep":false,"level":"exec","location":"Hybrid - Austin, TX, United States","tier":2,"title":"Senior Manager, IT Infrastructure & Multi-Cloud Systems"}
 {"bucket":"OTHER","company":"esri","family":"devops","keep":false,"level":"mid","location":"St. Louis, MO - Globe","tier":4,"title":"DevOps / Platform Engineer \u2013 TS/SCI"}
@@ -140,7 +140,7 @@
 {"bucket":"MULTI","company":"Manulife","family":null,"keep":true,"level":"exec","location":"3 Locations","tier":0,"title":"Manager, Technology Business Management (TBM) & FinOps"}
 {"bucket":"CA","company":"TD Bank","family":null,"keep":true,"level":"mid","location":"Toronto, Ontario","tier":0,"title":"Machine Learning Engineer"}
 {"bucket":"CA","company":"Interac","family":"adjacent","keep":true,"level":"mid","location":"Toronto","tier":3,"title":"Systems Engineering, Specialist"}
-{"bucket":"OTHER","company":"zscaler","family":"vendor","keep":false,"level":"senior","location":"Tokyo, JPN","tier":3,"title":"Senior Sales Engineer - Telco"}
+{"bucket":"OTHER","company":"zscaler","family":null,"keep":false,"level":"senior","location":"Tokyo, JPN","tier":0,"title":"Senior Sales Engineer - Telco"}
 {"bucket":"OTHER","company":"HitachiSolutions","family":null,"keep":false,"level":"exec","location":"Hybrid - London, England, United Kingdom","tier":0,"title":"Lead Data Consultant"}
 {"bucket":"CA","company":"BMO","family":"devops","keep":true,"level":"senior","location":"REMOTE/TELETRAVAIL, ON, CAN","tier":4,"title":"Senior Cloud Engineer"}
 {"bucket":"CA","company":"docker","family":"vendor","keep":true,"level":"exec","location":"Canada / United States","tier":3,"title":"Director, Partner Solution Engineer"}
@@ -170,7 +170,7 @@
 {"bucket":"US-ONLY","company":"RedBull","family":null,"keep":false,"level":"mid","location":"Kalamazoo, MI, United States","tier":0,"title":"Sales Trainee"}
 {"bucket":"GLOBAL","company":"supabase","family":null,"keep":true,"level":"mid","location":"Remote, Global","tier":0,"title":"Software Engineer - Storage"}
 {"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
-{"bucket":"GLOBAL","company":"canonical","family":"vendor","keep":true,"level":"entry","location":"Home based - Worldwide","tier":3,"title":"Ubuntu Sales Engineer (Entry-Level)"}
+{"bucket":"GLOBAL","company":"canonical","family":null,"keep":true,"level":"entry","location":"Home based - Worldwide","tier":0,"title":"Ubuntu Sales Engineer (Entry-Level)"}
 {"bucket":"US-ONLY","company":"NBCUniversal3","family":"adjacent","keep":false,"level":"senior","location":"Remote - New York, NEW YORK, United States","tier":3,"title":"Sr. Software Engineer, Automation Engineering"}
 {"bucket":"US-ONLY","company":"ServiceNow","family":"devops","keep":false,"level":"exec","location":"Hybrid - San Diego, CALIFORNIA, United States","tier":4,"title":"Senior Staff Platform Engineer - Kubernetes - Federal"}
 {"bucket":"US-ONLY","company":"smartsheet","family":null,"keep":false,"level":"exec","location":"-REMOTE, USA-","tier":0,"title":"Senior Product Manager \u2013 People Systems"}
@@ -229,7 +229,7 @@
 {"bucket":"MULTI","company":"TD Bank","family":"adjacent","keep":true,"level":"senior","location":"2 Locations","tier":3,"title":"Sr. Business Systems Analyst"}
 {"bucket":"MULTI","company":"Telus Health","family":"adjacent","keep":true,"level":"senior","location":"4 Locations","tier":3,"title":"Systems Analyst III - Health & Welfare Benefits Implementations"}
 {"bucket":"NA-REMOTE","company":"supabase","family":null,"keep":true,"level":"exec","location":"Remote, AMER","tier":0,"title":"Customer Solution Architect, Team Lead "}
-{"bucket":"OTHER","company":"fivetran","family":"vendor","keep":false,"level":"senior","location":"Dublin, Dublin, Ireland, EMEA","tier":3,"title":"Senior Sales Engineer, Commercial"}
+{"bucket":"OTHER","company":"fivetran","family":null,"keep":false,"level":"senior","location":"Dublin, Dublin, Ireland, EMEA","tier":0,"title":"Senior Sales Engineer, Commercial"}
 {"bucket":"CA","company":"BMO","family":"devops","keep":true,"level":"exec","location":"Toronto, ON, CAN","tier":4,"title":"Senior Manager, Azure Cloud Engineering"}
 {"bucket":"NA-REMOTE","company":"fivetran","family":"adjacent","keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":3,"title":"Senior Staff Systems Engineer, GTM"}
 {"bucket":"NA-REMOTE","company":"fivetran","family":null,"keep":true,"level":"exec","location":"Oakland, California, United States, AMER","tier":0,"title":"GTM Strategy & Planning Manager"}
