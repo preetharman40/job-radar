@@ -71,7 +71,7 @@ __all__ = [
     # per-posting checks that need the classifier
     "offshore_marker", "office_mismatch",
     # pipeline
-    "hydrate", "append_to_tracker", "main",
+    "hydrate", "will_hydrate", "append_to_tracker", "main",
     # tracker duplicate guard
     "dupe_norm", "loc_compatible", "parse_tracker_rows",
     "tracker_row_active", "find_tracker_dupe",
@@ -700,11 +700,25 @@ def office_mismatch(j):
 # it and re-derives whatever the adapter changed.
 
 
-def hydrate(j):
+def will_hydrate(j):
+    """Does this posting cost a pass-2 HTTP request?
+
+    Read by hydrate() and by main()'s request counter, so the count and the
+    behaviour cannot drift apart. Ten of the 22 platforms deliver the
+    description in the pass-1 list response - lever's `descriptionPlain`,
+    workable, rippling, teamtailor, recruitee, taleo, wpjobs, oracle, amazon,
+    html - and those cost nothing here however many finalists they produce.
+    The other twelve need one request each.
+    """
     kind = j.get("hyd")
-    fn = adapters.HYDRATORS.get(kind[0]) if kind else None
-    if not fn:
+    return bool(kind and adapters.HYDRATORS.get(kind[0]))
+
+
+def hydrate(j):
+    if not will_hydrate(j):
         return j
+    kind = j["hyd"]
+    fn = adapters.HYDRATORS[kind[0]]
     before = j.get("location") or ""
     try:
         fn(j, kind)
@@ -1416,6 +1430,20 @@ def main():
         shortlist.append(j)
 
     # Pass 2: fetch descriptions for the shortlist, then score properly.
+    #
+    # Counted HERE because `shortlist` is reassigned three times below - by the
+    # hydrate map, the geography re-check and the age re-check - so by the time
+    # the footer is written the pass-2 cost is no longer recoverable from it.
+    #
+    # These two numbers were the hole in the sweep report. `boards` counts
+    # pass-1 fetch tasks and `scanned` counts what they returned, and between
+    # `scanned` and `matched` there was nothing at all: the second request per
+    # finalist was simply unmeasured. For the fast lane that is 520 list
+    # requests a run against an unknown number of detail requests, 156 times a
+    # day, which made "is the 429 from pass 1 or pass 2" unanswerable and any
+    # description-caching decision a guess.
+    n_shortlist = len(shortlist)
+    n_hydrated = sum(1 for j in shortlist if will_hydrate(j))
     with cf.ThreadPoolExecutor(a.workers) as ex:
         shortlist = list(ex.map(hydrate, shortlist))
 
@@ -1554,7 +1582,8 @@ def main():
     L = [f"# Job Radar — {'ALL MATCHES' if a.all else 'NEW SINCE LAST RUN'} — {now[:16]}Z",
          f"### {headline}",
          f"_{len(show)} shown · {len(hits)} matched · {len(jobs)} scanned · "
-         f"{len(tasks)} boards · levels={a.level} · families={a.family}"
+         f"{len(tasks)} boards · {n_shortlist} shortlisted · "
+         f"{n_hydrated} hydrated · levels={a.level} · families={a.family}"
          # Worth showing: these are rows that looked like candidates until their
          # real cities were resolved, so a sudden jump means a board started
          # collapsing its locations rather than that the search got narrower.

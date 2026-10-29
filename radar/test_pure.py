@@ -1890,5 +1890,176 @@ class TestNearMissNetworkExcluded(unittest.TestCase):
 
 
 
+class TestSweepCounters(unittest.TestCase):
+    """shortlist and hydrated - the pass-2 request cost, which was unmeasured.
+
+    `boards` counts pass-1 fetch tasks and `scanned` counts what they
+    returned; between `scanned` and `matched` the sweep reported nothing, so
+    the second request per finalist was invisible. For the fast lane that is
+    520 list requests a run against an unknown number of detail requests, 156
+    times a day.
+    """
+
+    def test_will_hydrate_matches_what_hydrate_actually_does(self):
+        """One predicate, read by both, so the count cannot drift."""
+        real = dict(adapters.HYDRATORS)
+        try:
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS["fakeplat"] = lambda j, kind: None
+            # has hyd, platform is registered -> costs a request
+            self.assertTrue(jr.will_hydrate({"hyd": ("fakeplat", "x")}))
+            # has hyd, platform not registered -> costs nothing
+            self.assertFalse(jr.will_hydrate({"hyd": ("missing", "x")}))
+            # no hyd at all - lever, workable, rippling and the rest
+            self.assertFalse(jr.will_hydrate({}))
+            self.assertFalse(jr.will_hydrate({"hyd": None}))
+        finally:
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS.update(real)
+
+    def test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist(self):
+        import contextlib
+        import io
+        J = fc.job
+        # three shortlist members; only the two carrying a registered `hyd`
+        # may count as a pass-2 request
+        jobs = [
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON", "u1", age=1,
+              hyd=("fakeplat", "a")),
+            J("fake", "Acme", "SRE", "Toronto, ON", "u2", age=1,
+              hyd=("fakeplat", "b")),
+            J("fake", "Acme", "Platform Engineer", "Toronto, ON", "u3", age=1),
+        ]
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        real = dict(adapters.HYDRATORS)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        adapters.HYDRATORS["fakeplat"] = lambda j, kind: None
+        try:
+            jr.DB, jr.TARGETS = os.path.join(d, "t.sqlite3"), tpath
+            sys.argv = ["job_radar.py", "--targets", tpath, "--all",
+                        "--min-score", "0"]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            out = buf.getvalue()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS.update(real)
+            jr.DB, jr.TARGETS, sys.argv = keep
+        self.assertIn("3 shortlisted", out)
+        self.assertIn("2 hydrated", out)
+        return out
+
+    def test_cronwrap_can_parse_the_footer_this_sweep_writes(self):
+        """The two halves have to agree, and once did not.
+
+        cronwrap.sh extracts its metrics with regexes embedded in a heredoc,
+        and the comment there records an anchored pattern that silently read
+        one lane and not the other. So rather than restate the patterns, read
+        them out of the shell script and apply them to a footer main() really
+        produced.
+        """
+        out = self.test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist()
+        with open(os.path.join(jr.HERE, "cronwrap.sh")) as fh:
+            wrap = fh.read()
+        for key, want in (("shortlist", 3), ("hydrated", 2)):
+            m = re.search(r'\("%s",\s*r"([^"]+)"\)' % key, wrap)
+            self.assertIsNotNone(
+                m, f"cronwrap.sh has no extractor for {key} - the event "
+                   f"record would silently lack it")
+            got = re.search(m.group(1), out)
+            self.assertIsNotNone(got, f"{key} pattern {m.group(1)!r} does not "
+                                      f"match the footer main() wrote")
+            self.assertEqual(int(got.group(1)), want)
+
+    def test_the_core_metrics_regex_still_matches(self):
+        """Appending to the footer must not break the fields cronwrap already
+        reads, nor fast.sh's grep that decides what reaches the log."""
+        out = self.test_the_footer_reports_both_and_hydrated_never_exceeds_shortlist()
+        line = [l for l in out.splitlines() if "scanned" in l][0]
+        self.assertIsNotNone(re.search(
+            r"_(\d+) shown · (\d+) matched · (\d+) scanned · (\d+) boards",
+            line))
+        self.assertIsNotNone(re.match(r"^_.*scanned", line),
+                             "fast.sh greps ^_.*scanned to keep the summary")
+
+
+
+class TestVendorSalesEngineer(unittest.TestCase):
+    """`sales` left the vendor rule on 2026-10-29, and why matters.
+
+    The whole vendor family - nine rules, 85 registered vendor names - had
+    produced exactly ONE tracked row in the tool's lifetime, measured against
+    all 80 rows in the tracker: a Fivetran "Sales Engineer, Enterprise". Every
+    other vendor rule had produced zero.
+
+    The mechanism is the part to remember when adding any future vendor rule.
+    A vendor title reaches --notify-min-score on its TITLE ALONE, with no
+    technical evidence at all, because tier 3 x 3 = 9 plus the +4 vendor bonus
+    plus +2 for mid level is exactly 15. The Fivetran req mentioned Terraform
+    and Kubernetes, which took it from 15 to 23 - that made the alert loud, it
+    did not cause it.
+    """
+
+    def _vendor(self):
+        jr.VENDORS.add("fivetran")
+
+    def test_sales_engineer_at_a_vendor_is_now_invisible(self):
+        self._vendor()
+        for t in ("Sales Engineer, Enterprise",
+                  "Senior Sales Engineer, Enterprise",
+                  "Ubuntu Sales Engineer (Entry-Level)"):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (0, None))
+
+    def test_solutions_and_field_engineer_are_deliberately_kept(self):
+        """Hands-on pre-sales rather than a quota-carrying track, and both
+        have produced zero rows - so keeping them costs nothing measured."""
+        self._vendor()
+        for t in ("Solutions Engineer", "Solution Engineer", "Field Engineer"):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (3, "vendor"))
+
+    def test_the_support_path_this_family_exists_for_is_untouched(self):
+        self._vendor()
+        for t, tier in (("Support Engineer", 4),
+                        ("Technical Support Engineer", 4),
+                        ("Customer Success Engineer", 4),
+                        ("Escalation Engineer", 4),
+                        ("Implementation Engineer", 3),
+                        ("Technical Account Manager", 3)):
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "fivetran"), (tier, "vendor"))
+
+    def test_a_vendor_title_still_reaches_notify_on_its_title_alone(self):
+        """Not a regression - a property of the design, pinned so the next
+        person adding a vendor rule sees the cost in a failing diff."""
+        self._vendor()
+        tier, fam = jr.title_match("Solutions Engineer", "fivetran")
+        bare, _, _ = jr.score("Solutions Engineer", "fivetran", tier, fam, "")
+        self.assertGreaterEqual(bare, 15,
+                                "a vendor title scores >= the notify threshold "
+                                "with an EMPTY job description")
+
+    def test_vendor_rules_only_fire_at_a_registered_vendor(self):
+        for t in ("Sales Engineer, Enterprise", "Solutions Engineer",
+                  "Support Engineer"):
+            with self.subTest(t):
+                self.assertEqual(
+                    jr.title_match(t, "some-canadian-bank"), (0, None))
+
+    def test_sales_engineer_does_not_land_in_the_near_miss_log_either(self):
+        """It is not a gap to review - it is a decision. NEAR_BIZ holds
+        `sales`, so the review list does not re-surface it every sweep."""
+        for t in ("Sales Engineer, Enterprise", "Senior Sales Engineer"):
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
