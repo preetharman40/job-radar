@@ -51,6 +51,7 @@ if HERE not in sys.path:
 
 import adapters                                                   # noqa: E402
 from adapters import ADAPTERS, WD_TRUNCATED                       # noqa: E402
+from fetchcore import days_ago                                     # noqa: E402
 
 # What the rest of the radar may read off this module. Everything here is
 # this file's own: paths, the classifier, the scorer, the tracker, the locks
@@ -571,6 +572,13 @@ def hydrate(j):
     # detail. Pass 1 derived bucket, provinces and arrangement from the
     # placeholder, so re-derive them from the corrected text. Doing it here
     # rather than in the adapter is what keeps adapters out of the classifier.
+    # Same reasoning as the location below, for the date. Several adapters
+    # cannot give a posting date in pass 1 and fill it from the detail page -
+    # breezy and the schema.org hydrators read `datePosted` there - so `age`
+    # was None through the pass-1 filter and stayed None afterwards. Re-derive
+    # it, and main() re-applies --max-age to the corrected value.
+    if j.get("age") is None and j.get("posted"):
+        j["age"] = days_ago(j["posted"])
     now = j.get("location") or ""
     if now != before:
         bucket, keep = classify_location(now)
@@ -1229,6 +1237,20 @@ def main():
                           and j["bucket"] in NO_VENDOR_BUCKETS)]
     dropped_geo = before_geo - len(shortlist)
 
+    # --max-age again, now that hydrate may have supplied the date.
+    #
+    # Pass 1 reads `if j["age"] is not None and ...`, so a board that omits the
+    # date sails through the cap entirely - "unknown" is not "too old", and it
+    # must not be, or every undated posting would be discarded. The cost showed
+    # up in the tracker on 2026-10-28: 29 rows filed in three days whose
+    # postings turned out to be 22 to 274 days old, Accenture at 92-93 days and
+    # Nasdaq at 231, all of them through this hole. The date was available by
+    # then - hydrate had read it - and nothing looked at it again.
+    before_age = len(shortlist)
+    shortlist = [j for j in shortlist
+                 if j["age"] is None or j["age"] <= a.max_age]
+    dropped_age = before_age - len(shortlist)
+
     if provs:
         # Keep the wanted provinces, plus anything naming no province at all -
         # those are remote or unclear, never "definitely somewhere else".
@@ -1325,7 +1347,9 @@ def main():
          # real cities were resolved, so a sudden jump means a board started
          # collapsing its locations rather than that the search got narrower.
          + (f" · {dropped_geo} dropped once \"N Locations\" resolved"
-            if dropped_geo else "") + "_", ""]
+            if dropped_geo else "")
+         + (f" · {dropped_age} dropped once the posting date arrived"
+            if dropped_age else "") + "_", ""]
 
     by_fam = {}
     for j in show:

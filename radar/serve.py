@@ -155,6 +155,13 @@ def parse(path):
             "applied": applied, "status": status.strip("`"), "next": nxt,
             "url": f.get("Apply", ""),
             "level": f.get("Level", ""),
+            # When this row entered the tracker. Every block has one, and it is
+            # the only date 25 of 110 rows have: an ATS that omits a posting
+            # date and every mail-sourced row arrive with `Posted: ?`. An age
+            # rule reading Posted alone cannot tell a req found this morning
+            # from one filed in September, so purge_expired.py --older-than
+            # falls back to this.
+            "found": f.get("Found", ""),
             "ats": f.get("ATS", ""),
             # A mail-sourced row carries the mail DOMAIN as its ATS
             # ("linkedin.com"); a board row carries a platform key
@@ -240,12 +247,25 @@ def delete_job(path, url):
         if out == src:
             return False, "nothing removed"
         atomic_write(path, out)
-    # Remember the dismissal so the next sweep does not re-add it.
+    # Remember the dismissal so the next sweep does not re-add it, and drop the
+    # tracked_live row in the SAME transaction.
+    #
+    # Deleting only the tracker row left the live row behind, and it has been
+    # cleaned up by hand at least three times. By 2026-10-28 there were 187
+    # orphans against 110 real rows - every one of them in `dismissed`, so
+    # every one was a deliberate delete whose live row was never removed. They
+    # are not harmless: verify_tracked re-checks each of them against the
+    # board on every run, which is why 281 rows were being verified to report
+    # on 110, and append_to_tracker reads this table for `gone`/`stale` state.
+    #
+    # `dismissed` is what stops the next sweep re-adding the job, so it is
+    # written first and the live delete cannot resurrect anything if it fails.
     try:
         c = sqlite3.connect(DB)
         c.execute("CREATE TABLE IF NOT EXISTS dismissed(url TEXT PRIMARY KEY, at TEXT)")
         c.execute("INSERT OR REPLACE INTO dismissed VALUES(?,?)",
                   (url, time.strftime("%Y-%m-%dT%H:%M:%S")))
+        c.execute("DELETE FROM tracked_live WHERE url = ?", (url,))
         c.commit(); c.close()
     except Exception:
         pass

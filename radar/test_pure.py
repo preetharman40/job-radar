@@ -1381,6 +1381,68 @@ class TestTrackerDuplicates(unittest.TestCase):
             self.assertEqual((n, dup), (1, []))
 
 
+class TestAgeFromHydrate(unittest.TestCase):
+    """--max-age could not see a posting whose date only arrives in pass 2."""
+
+    def _hyd(self, j, sets):
+        was = dict(adapters.HYDRATORS)
+        adapters.HYDRATORS["faketest"] = lambda job, kind: job.update(sets)
+        try:
+            return jr.hydrate(j)
+        finally:
+            adapters.HYDRATORS.clear()
+            adapters.HYDRATORS.update(was)
+
+    def test_age_is_derived_when_hydrate_supplies_the_date(self):
+        j = self._hyd({"hyd": ("faketest", ""), "age": None, "location": "Toronto"},
+                      {"posted": "2026-01-01"})
+        self.assertIsNotNone(j["age"])
+        self.assertGreater(j["age"], 200)      # 2026-01-01 is long past
+
+    def test_an_age_from_pass_1_is_not_overwritten(self):
+        """The listing's own number wins. Only a MISSING age is filled, so a
+        hydrate that reports a different date cannot silently re-age a row."""
+        j = self._hyd({"hyd": ("faketest", ""), "age": 3, "location": "Toronto"},
+                      {"posted": "2026-01-01"})
+        self.assertEqual(j["age"], 3)
+
+    def test_no_date_anywhere_leaves_age_unknown(self):
+        """Unknown is not old: an undated posting must still pass the cap, or
+        every board that omits the field would be discarded wholesale."""
+        j = self._hyd({"hyd": ("faketest", ""), "age": None, "location": "Toronto"},
+                      {"blob": "x"})
+        self.assertIsNone(j["age"])
+
+
+class TestPurgeAge(unittest.TestCase):
+    pe = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pe = _mod("pe", "purge_expired.py")
+
+    def test_posted_wins_and_found_is_the_fallback(self):
+        """25 of 110 tracker rows carry `Posted: ?` - an ATS that omits the
+        date, and every mail-sourced row - and some of those were found the
+        same morning. Reading Posted alone cannot tell them apart."""
+        t = datetime(2026, 10, 28, tzinfo=timezone.utc).date()
+        self.assertEqual(
+            self.pe.age_days({"posted": "2026-10-01", "found": "2026-10-27"}, t), 27)
+        self.assertEqual(
+            self.pe.age_days({"posted": "?", "found": "2026-10-27"}, t), 1)
+        self.assertEqual(
+            self.pe.age_days({"posted": "", "found": ""}, t), None)
+
+    def test_found_under_states_age_which_is_the_safe_direction(self):
+        """A req found on the 27th may have been posted weeks earlier, so the
+        fallback can only make a row look YOUNGER than it is - it keeps a row
+        too long rather than deleting one too early."""
+        t = datetime(2026, 10, 28, tzinfo=timezone.utc).date()
+        self.assertLess(self.pe.age_days({"posted": "?", "found": "2026-10-27"}, t),
+                        self.pe.age_days({"posted": "2026-09-01",
+                                          "found": "2026-10-27"}, t))
+
+
 class TestGoldenMaster(unittest.TestCase):
     """259 real postings, with the verdict the code gives today.
 
