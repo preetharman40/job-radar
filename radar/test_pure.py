@@ -1497,10 +1497,13 @@ class TestNearMiss(unittest.TestCase):
     titles from a 2,958-title sample of six live boards.
     """
 
+    # "Network Deployment Engineer" and "Senior Network Engineer" were here
+    # until 2026-10-29. They are genuine gaps in titles.json and they are
+    # deliberately NOT wanted - networking was ruled out as a specialism, so
+    # they belong in TestNearMissNetworkExcluded instead. Left recorded here
+    # rather than silently dropped: they are the reason that class exists.
     REAL_MISSES = [
         "Capacity Engineer",
-        "Network Deployment Engineer",
-        "Senior Network Engineer",
         "Infrastructure Operations Analyst",
         "Sr Platform Monitoring Engineer",
         "DCSC Automation Specialist",
@@ -1692,6 +1695,66 @@ class TestNearMissSweep(unittest.TestCase):
         self.assertIn("1 near-miss titles logged", out,
                       "the footer must report the count")
 
+    def test_the_location_log_fills_from_the_other_gate(self):
+        """Mirror of the title log, and gated the opposite way.
+
+        A row here must have PASSED the title, level and age tests and failed
+        only on geography. Without the title test the log would fill with
+        Fraud Operations Analysts in Toronto, which says nothing about the
+        location rules.
+        """
+        import sqlite3
+        J = fc.job
+        jobs = [
+            # good title, Canada named unambiguously, but ", NY" trips the
+            # foreign veto and canadian_option cannot split a comma list.
+            # This is the real miss the detector was built from.
+            J("fake", "Acme", "DevOps Engineer", "SEA, SF, NY, Toronto",
+              "u-locmiss", age=1),
+            # dropped on location, but the title is tier 0 anyway -> not a
+            # location near-miss, it says nothing about the geography rules
+            J("fake", "Acme", "Fraud Operations Analyst", "SEA, SF, NY, Toronto",
+              "u-badtitle", age=1),
+            # dropped on location with no unambiguous Canadian marker. The
+            # ambiguous-city list is why: bare "London" is not evidence.
+            J("fake", "Acme", "DevOps Engineer", "London, United Kingdom",
+              "u-uk", age=1),
+            J("fake", "Acme", "DevOps Engineer", "London", "u-london", age=1),
+            # kept outright, so it is in neither log
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON", "u-ok", age=1),
+        ]
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        dbp = os.path.join(d, "t.sqlite3")
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        try:
+            import contextlib
+            import io
+            jr.DB, jr.TARGETS = dbp, tpath
+            sys.argv = ["job_radar.py", "--targets", tpath, "--all",
+                        "--min-score", "0"]
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                jr.main()
+            c = sqlite3.connect(dbp)
+            loc = {r[0]: r[1] for r in
+                   c.execute("SELECT url, bucket FROM nearmiss_loc")}
+            seen = {r[0] for r in c.execute("SELECT url FROM seen")}
+            c.close()
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            jr.DB, jr.TARGETS, sys.argv = keep
+        self.assertEqual(set(loc), {"u-locmiss"},
+                         "only the eligible, unambiguously-Canadian drop")
+        self.assertEqual(loc["u-locmiss"], "OTHER",
+                         "the bucket it was given is recorded, for the fix")
+        self.assertIn("u-ok", seen, "the kept posting is still claimed")
+        self.assertNotIn("u-locmiss", seen,
+                         "a near-miss is never claimed or notified")
+        self.assertIn("1 near-miss locations logged", buf.getvalue())
+
     def test_the_fast_lane_logs_nothing(self):
         """Any --targets other than the default switches collection off.
 
@@ -1721,6 +1784,110 @@ class TestNearMissSweep(unittest.TestCase):
         out, near, seen = self._run(jobs, extra=["--no-claim"])
         self.assertEqual(near, {"u-near"})
         self.assertEqual(seen, set(), "--no-claim must claim nothing")
+
+
+class TestNearMissLocation(unittest.TestCase):
+    """The location gate's own review log.
+
+    This detector's whole value is the choice of marker. A first version
+    flagged any Canada-ish word and caught 115 of 2,724 real drops at about 2%
+    precision - `London, United Kingdom` 55 times, bare `London` 31, Dublin
+    variants, every one correctly dropped. The ambiguous-city list is exactly
+    the set of names that cannot carry this alone, so only the unambiguous
+    markers count. On the same 2,724 drops the final version flags 2, and both
+    are real misses.
+    """
+
+    # Real strings. Both of these are dropped today and should not be: ", NY"
+    # trips the foreign veto, and canadian_option cannot split a comma list.
+    REAL_MISSES = ["SEA, SF, NY, Toronto", "Toronto, NY, SEA, SF"]
+    # Dropped and correctly so. These are why the ambiguous list is excluded.
+    CORRECTLY_DROPPED = [
+        "London, United Kingdom", "London", "Dublin, London",
+        "London OR Dublin", "London, United Kingdom; Paris, France",
+        "Dublin, London, Paris, Berlin, Stockholm", "London, UK",
+        "Austin, TX", "Paris, France", "Bengaluru, India", "",
+    ]
+
+    def test_flags_the_real_misses(self):
+        for l in self.REAL_MISSES:
+            with self.subTest(l):
+                self.assertFalse(jr.classify_location(l)[1],
+                                 "precondition: this location is dropped today")
+                self.assertTrue(jr.near_miss_location(l))
+
+    def test_does_not_flag_ambiguous_cities_abroad(self):
+        for l in self.CORRECTLY_DROPPED:
+            with self.subTest(l):
+                self.assertFalse(jr.near_miss_location(l))
+
+    def test_unambiguous_markers_only(self):
+        # safe city, real region name, bare province code after a comma
+        self.assertTrue(jr.near_miss_location("Mississauga"))
+        self.assertTrue(jr.near_miss_location("Remote (Alberta)"))
+        self.assertTrue(jr.near_miss_location("somewhere, ON"))
+        # an ambiguous city with no qualifier is not a marker
+        self.assertFalse(jr.near_miss_location("Windsor"))
+        self.assertFalse(jr.near_miss_location("Victoria"))
+        self.assertFalse(jr.near_miss_location(None))
+
+    def test_it_changes_no_verdict(self):
+        for l in self.REAL_MISSES + self.CORRECTLY_DROPPED:
+            before = jr.classify_location(l)
+            jr.near_miss_location(l)
+            self.assertEqual(jr.classify_location(l), before)
+
+
+class TestNearMissNetworkExcluded(unittest.TestCase):
+    """Networking is a different specialism, excluded by request 2026-10-29.
+
+    These titles were never tracked - all tier 0 - but the review log surfaced
+    31 of them in its first sweep, 21% of a list whose only value is being
+    short enough to read. The exclusion is by SUBJECT: dropped when networking
+    is what the job is, kept when a strong devops token earns it a place.
+    """
+
+    NETWORK = [
+        "Network Engineer", "Senior Network Engineer", "Network Administrator",
+        "Network Analyst", "Network Automation Specialist",
+        "Senior Network Security Administrator", "DDI Network Engineer",
+        "Assistant Network Management Engineer", "Sr. Network Mgmt Engineer",
+        "Senior Network Monitoring Engineer",
+        "Senior Routing Engine Developer (CX Platform)",
+        "Specialist - Systems and Network Administration",
+    ]
+
+    def test_network_titles_stay_out_of_the_log(self):
+        for t in self.NETWORK:
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+    def test_a_strong_devops_token_still_earns_a_place(self):
+        # Each needs a strong token AND an engineering head noun - the
+        # detector's two standing conditions still apply. "SRE, Network
+        # Reliability" was tried here and fails correctly: `reliability` is
+        # not a head noun, so nothing is being done by this rescue at all.
+        for t in ("Kubernetes Network Engineer",
+                  "DevOps Network Automation Specialist",
+                  "SRE Network Platform Engineer"):
+            with self.subTest(t):
+                self.assertTrue(jr.near_miss(t))
+
+    def test_cloud_and_platform_are_deliberately_not_strong_enough(self):
+        """`platform` alone rescued telecom product-dev titles."""
+        self.assertFalse(jr.near_miss("Senior Routing Engine Developer (CX Platform)"))
+        self.assertFalse(jr.near_miss("Cloud Network Engineer"))
+
+    def test_the_exclusion_does_not_leak_into_the_pipeline(self):
+        """Excluding from the LOG must not change what the sweep tracks.
+
+        These titles were already tier 0, and that is the only reason the
+        exclusion is safe. If a rule is ever added that makes one of them
+        tier > 0, this test fails and says so.
+        """
+        for t in self.NETWORK:
+            self.assertEqual(jr.title_match(t, "acme")[0], 0, t)
+
 
 
 if __name__ == "__main__":

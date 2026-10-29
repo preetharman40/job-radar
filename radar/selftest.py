@@ -458,7 +458,7 @@ def _db():
 def _tables():
     want = {"seen", "live", "sweeps", "dismissed", "tracked_live",
             "board_health", "mail_seen", "mail_role", "employer_board",
-            "nearmiss"}
+            "nearmiss", "nearmiss_loc"}
     c = sqlite3.connect(f"file:{os.path.join(HERE, 'seen.sqlite3')}?mode=ro",
                         uri=True)
     have = {r[0] for r in c.execute(

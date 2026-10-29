@@ -66,7 +66,7 @@ __all__ = [
     # title / level / location / score - the pure core
     "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
-    "near_miss",
+    "near_miss", "near_miss_location",
     "arrangement", "canadian_option", "score", "band_of",
     # per-posting checks that need the classifier
     "offshore_marker", "office_mismatch",
@@ -318,6 +318,36 @@ NEAR_SWE = re.compile(
     r"|\bengineering\s+manager\b|\bmanager\s+[IVX0-9]*,?\s*engineering\b", re.I)
 
 
+# Networking as a SPECIALISM, excluded by request on 2026-10-29: "I don't want
+# network engineer jobs to get tracked". They were never tracked - every one of
+# these titles is tier 0 and always has been - but the review log surfaced 31 of
+# them in its first sweep (Moneris, BMO, TMX, Scotiabank, Rogers, Hydro One,
+# RBC, Ubisoft, Accenture, Alstom, Gov of Alberta), which is 21% of a list whose
+# only value is being short enough to read.
+#
+# Recorded here rather than left as a gap, because the evidence is going to keep
+# arriving: a Moneris "Network Engineer" in Toronto looks exactly like a missing
+# rule, and without this comment the rule gets proposed again every few months.
+# Three candidates were measured against those 31 rows - network+engineer admits
+# 6, adding admin/analyst/specialist admits 10, allowing one intervening word
+# admits 16 - and the answer was no to all three. Routing, switching and
+# firewalls are a different specialism from containers and CI/CD, not a widening
+# of this one.
+#
+# The exclusion is by SUBJECT, not by token: a title is dropped from the log when
+# networking is what the job is, and kept when a strong devops token earns it a
+# place anyway. `cloud` and `platform` are deliberately NOT strong enough - the
+# same measurement that built NEAR_SWE showed `platform` alone rescuing telecom
+# product-dev titles like "Senior Routing Engine Developer (CX Platform)".
+NEAR_NET = re.compile(
+    r"\b(network|networking|routing)[\s/()-]*(?:[a-z]+[\s/()-]+)?"
+    r"(engineer|engineering|administrat\w+|admin|analyst|specialist|"
+    r"technician|developer|architect)\b", re.I)
+NEAR_NET_OK = re.compile(
+    r"\b(kubernetes|k8s|devops|sre|site\s+reliability|terraform|ansible|"
+    r"docker|container|ci/?cd|gitops|observability)\b", re.I)
+
+
 def near_miss(title):
     """True when a tier-0 title looks like infra work a person should review.
 
@@ -326,8 +356,33 @@ def near_miss(title):
     a row in `nearmiss` for the weekly read.
     """
     t = title or ""
+    if NEAR_NET.search(t) and not NEAR_NET_OK.search(t):
+        return False
     return bool(NEAR_TECH.search(t) and NEAR_HEAD.search(t)
                 and not NEAR_BIZ.search(t) and not NEAR_SWE.search(t))
+
+
+def near_miss_location(loc):
+    """True when a DROPPED location names Canada unambiguously.
+
+    The location gate's precision is measurable and is 100%: of 2,957 real
+    strings, all 230 it called CA were genuinely Canada-eligible. Its RECALL is
+    not measurable without this, which is the whole reason for the log.
+
+    What makes it usable is the choice of marker. A first attempt flagged any
+    Canada-ish word and caught 115 of 2,724 drops at roughly 2% precision -
+    `London, United Kingdom` 55 times, bare `London` 31, Dublin variants - all
+    correctly dropped. The ambiguous-city list is exactly the set of names that
+    cannot carry this on their own, so this reads only the UNAMBIGUOUS markers:
+    the safe-city list, the real region names, and a bare province code after a
+    comma or bracket. On the same 2,724 drops that flags 2, and both are the
+    real misses (`SEA, SF, NY, Toronto` and `Toronto, NY, SEA, SF` - dropped
+    because `, NY` trips the foreign veto while canadian_option cannot split a
+    comma-separated list).
+    """
+    l = loc or ""
+    return bool(CA_SAFE_RE.search(l) or CA_REGION_RE.search(l)
+                or CA_PROVINCE_CODE.search(l))
 
 
 # --------------------------------------------------------------- locations ---
@@ -1198,6 +1253,15 @@ def db():
     c.execute("CREATE TABLE IF NOT EXISTS nearmiss("
               "url TEXT PRIMARY KEY, title TEXT, company TEXT, location TEXT, "
               "first_seen TEXT)")
+    # The same idea for the OTHER pass-1 gate. A separate table rather than a
+    # `kind` column on the one above, deliberately: adding a column would mean
+    # an ALTER on a live file five processes share, and a schema that differs
+    # between a migrated database and a freshly created one. The payloads also
+    # genuinely differ - a location near-miss needs the bucket it was given,
+    # and the fix it points at is a location regex, not a title rule.
+    c.execute("CREATE TABLE IF NOT EXISTS nearmiss_loc("
+              "url TEXT PRIMARY KEY, title TEXT, company TEXT, location TEXT, "
+              "bucket TEXT, first_seen TEXT)")
     return c
 
 
@@ -1310,10 +1374,23 @@ def main():
     # boards and would add nothing but 156x the write volume.
     log_near = (a.targets == TARGETS)
     near = []
+    near_loc = []
     shortlist = []
     for j in jobs:
         bucket, keep = classify_location(j["location"])
         if not keep or bucket not in buckets:
+            # The location log is the mirror of the title log below, and it is
+            # gated the same way: the posting must be one this sweep would
+            # otherwise have SHOWN. Without the title test it would fill with
+            # Fraud Operations Analysts in Toronto, which says nothing about
+            # the location rules. The hint runs first because it is three
+            # regexes against ~56,000 strings and rejects almost all of them,
+            # so title_match only runs on the handful that survive.
+            if log_near and near_miss_location(j["location"]):
+                tier, fam = title_match(j["title"], j["company"])
+                if (tier and fam in fams and level_of(j["title"]) in levels
+                        and (j["age"] is None or j["age"] <= a.max_age)):
+                    near_loc.append((j, bucket))
             continue
         tier, fam = title_match(j["title"], j["company"])
         if tier == 0:
@@ -1453,6 +1530,13 @@ def main():
                 [(j["url"], j["title"], j["company"], j["location"], now)
                  for j in near])
         db_write(conn, _near, label="near-miss log")
+    if near_loc:
+        def _near_loc():
+            conn.executemany(
+                "INSERT OR IGNORE INTO nearmiss_loc VALUES(?,?,?,?,?,?)",
+                [(j["url"], j["title"], j["company"], j["location"], b, now)
+                 for j, b in near_loc])
+        db_write(conn, _near_loc, label="near-miss location log")
 
     if a.seed:
         print(f"Seeded {len(hits)} postings into {DB}.\n"
@@ -1480,7 +1564,9 @@ def main():
             if dropped_age else "")
          # The title gate finally reporting itself. Not a count of mistakes -
          # a count of rejects worth a human glance, read with `nearmiss.py`.
-         + (f" · {len(near)} near-miss titles logged" if near else "") + "_", ""]
+         + (f" · {len(near)} near-miss titles logged" if near else "")
+         + (f" · {len(near_loc)} near-miss locations logged"
+            if near_loc else "") + "_", ""]
 
     by_fam = {}
     for j in show:

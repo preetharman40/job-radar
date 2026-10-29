@@ -3394,3 +3394,86 @@ The edit helper now reads the mode before writing and `chmod`s the temp file to
 match before the replace. The same class of bug as *"never rewrite a shell
 script while cron is running it"* above: an atomic replace is atomic about
 **content** and says nothing about metadata.
+
+## the same log for the other pass-1 gate, and why its detector is narrow
+
+The title log above left the geography gate in the same blind spot it had: 2,724
+of 2,957 real location strings are dropped, and nothing recorded which.
+
+The gate's **precision** is measurable and is perfect. Of 2,957 strings pulled
+from six live boards, 230 were classified `CA` and every one is genuinely
+Canada-eligible — `Remote Canada` ×81, `Remote, Canada; Remote, United States`
+×39, `Toronto, Canada` ×17. No false positives. That last form is worth
+pausing on: it appears 39 times, and it only classifies `CA` because the first
+rung of the ladder lets an explicit Canada win *before* the foreign veto. Union
+the locations and the rung fires; keep the first arrival and 39 postings become
+a coin flip.
+
+**Recall** is what cannot be measured without a log, and the first attempt at a
+detector proved why it needs care. Flagging any Canada-ish word caught 115 of
+2,724 drops at roughly 2% precision:
+
+```
+ 55  London, United Kingdom          4  London, Dublin
+ 31  London                          3  London OR Dublin
+  5  Dublin, London                  1  SEA, SF, NY, Toronto      <- real
+```
+
+`CA_CITIES_AMBIGUOUS` already names the problem: London, Windsor, Hamilton,
+Victoria, Burlington, Richmond and the rest exist in several countries and are
+exactly the words that cannot carry this alone. So `near_miss_location()` reads
+**only the unambiguous markers** — the safe-city list, the real region names,
+and a bare province code after a comma or bracket. On the same 2,724 drops that
+flags **2**, and both are real:
+
+```
+SEA, SF, NY, Toronto
+Toronto, NY, SEA, SF
+```
+
+Both are dropped because `", NY"` trips the foreign veto, so rung 2 cannot fire
+even though it found Toronto, and `canadian_option` — the rescue built for
+precisely this shape — splits on `/`, `;` and `|` but **not comma**, so it sees
+one segment and gives up. The fix is one separator, and it is monotonic in the
+safe direction: `canadian_option` is reached only after rungs 1–3 fail, so it
+can turn a drop into a keep and never the reverse. Not applied yet; the log is
+what will say how often it matters on Canadian boards rather than American ones.
+
+Collection mirrors the title log and is gated the opposite way: a row must have
+**passed** the title, level and age tests and failed only on geography.
+Without the title test it would fill with Fraud Operations Analysts in Toronto,
+which says nothing about the location rules. The hint runs before
+`title_match()` because it is three regexes against ~56,000 strings that
+rejects nearly all of them.
+
+It is a second table rather than a `kind` column on the first, deliberately: a
+column would mean an `ALTER` on a live file five processes share, and a schema
+that differs between a migrated database and a freshly created one. The
+payloads also differ — a location near-miss records the bucket it was given,
+and points at the location regexes rather than at `titles.json`.
+
+### networking was ruled out, and the reason is in the code
+
+The first sweep's log surfaced 31 networking titles at exactly the employers
+this search targets: Moneris, BMO, TMX Group, Scotiabank, Rogers, Hydro One,
+RBC, Ubisoft, Accenture, Alstom, Government of Alberta. Three candidate rules
+were measured against them — `network engineer` admits 6, adding
+admin/analyst/specialist admits 10, allowing one intervening word admits 16 —
+and the answer was **no to all three**. Routing, switching and firewalls are a
+different specialism from containers and CI/CD, not a widening of this one, and
+the broader two options also add the `Analyst` and `Administrator` titles that
+are excluded by standing request.
+
+None of these were ever tracked: every one is tier 0 and always has been. What
+changed is the log, where 31 of 146 rows was 21% of a list whose only value is
+being short enough to read. `NEAR_NET` now excludes them **by subject** —
+dropped when networking is what the job is, kept when a strong devops token
+earns a place anyway — and `cloud` and `platform` are deliberately not strong
+enough, the same finding that shaped `NEAR_SWE`. 26 rows went, 146 to 120.
+
+The exclusion is written down with its measurements for one reason: a Moneris
+"Network Engineer" in Toronto looks exactly like a missing rule, and the
+evidence will keep arriving every sweep. Without the note the rule gets
+proposed again in three months. A test asserts the excluded titles are still
+tier 0, so if a rule is ever added that tracks one of them, the suite says so
+rather than the log quietly hiding it.

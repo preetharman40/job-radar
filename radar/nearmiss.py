@@ -12,10 +12,16 @@ reads them back. The list is the evidence for editing rules/titles.json:
 title_match() returns the MAX tier among matching rules, so a rule added there
 can only ever raise a posting's tier, never lower one.
 
-    python3 nearmiss.py                  # last 14 days, grouped by title
+Both pass-1 gates are covered. The title log answers "what would have been
+shown but for the title rule"; the location log answers the same question for
+the geography rule, and points at the regexes in job_radar rather than at
+titles.json.
+
+    python3 nearmiss.py                  # last 14 days, both gates
+    python3 nearmiss.py --kind location  # just the geography misses
     python3 nearmiss.py --days 60 --by company
     python3 nearmiss.py --urls            # with links, to go and look
-    python3 nearmiss.py --prune 180       # bound the table
+    python3 nearmiss.py --prune 180       # bound both tables
 """
 import argparse
 import collections
@@ -45,6 +51,8 @@ def main():
                     default="title", help="group the report (default: title)")
     ap.add_argument("--limit", type=int, default=60)
     ap.add_argument("--urls", action="store_true", help="print the job links")
+    ap.add_argument("--kind", choices=("title", "location", "both"),
+                    default="both", help="which gate to report (default: both)")
     ap.add_argument("--prune", type=int, metavar="DAYS",
                     help="delete rows older than DAYS and exit")
     a = ap.parse_args()
@@ -54,9 +62,9 @@ def main():
         return 0
     conn = sqlite3.connect(jr.DB, timeout=30)
     conn.execute("PRAGMA busy_timeout=30000")
-    try:
-        conn.execute("SELECT 1 FROM nearmiss LIMIT 1")
-    except sqlite3.OperationalError:
+    have = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "nearmiss" not in have:
         print("  no `nearmiss` table yet - it is created by the next full "
               "sweep (the :07/:37 lane), not by the 5-minute fast lane")
         return 0
@@ -67,13 +75,20 @@ def main():
         # Through db_write, not a bare execute: five processes share this file
         # and a maintenance read-out must never be the writer that kills a
         # sweep holding the lock.
-        n = [0]
+        n = [0, 0]
 
         def _go():
             n[0] = conn.execute("DELETE FROM nearmiss WHERE first_seen < ?",
                                 (cut,)).rowcount
+        def _go2():
+            if "nearmiss_loc" in have:
+                n[1] = conn.execute(
+                    "DELETE FROM nearmiss_loc WHERE first_seen < ?",
+                    (cut,)).rowcount
         if jr.db_write(conn, _go, label="nearmiss prune"):
-            print(f"  deleted {n[0]} rows older than {a.prune} days")
+            jr.db_write(conn, _go2, label="nearmiss_loc prune")
+            print(f"  deleted {n[0]} title rows and {n[1]} location rows "
+                  f"older than {a.prune} days")
         return 0
 
     rs = rows(conn, a.days)
@@ -114,7 +129,45 @@ def main():
     print(f"\n  To act on one: add a rule to rules/titles.json. A new rule can "
           f"only raise\n  a posting's tier, never lower one, so the list is "
           f"safe to extend.")
+    _locations(conn, a, have)
     return 0
+
+
+def _locations(conn, a, have):
+    """The geography gate's own misses.
+
+    Kept separate in the report because the action is different: a row here
+    means the location REGEXES missed a Canadian string, not that a title rule
+    is absent. Expect this list to be short - the gate's precision measured
+    100% on 2,957 real strings, and the detector only reads unambiguous
+    Canadian markers.
+    """
+    if a.kind == "title" or "nearmiss_loc" not in have:
+        return
+    cut = (datetime.utcnow() - timedelta(days=a.days)).isoformat(timespec="seconds")
+    rs = list(conn.execute(
+        "SELECT title, company, location, bucket, url FROM nearmiss_loc "
+        "WHERE first_seen >= ? ORDER BY first_seen DESC", (cut,)))
+    total = conn.execute("SELECT COUNT(*) FROM nearmiss_loc").fetchone()[0]
+    print(f"\n  ---- LOCATION gate ----")
+    if not rs:
+        print(f"  no location near-misses in the last {a.days} days "
+              f"({total} all time) - the geography rules caught everything "
+              f"that named Canada unambiguously")
+        return
+    print(f"  {len(rs)} postings dropped on LOCATION that name Canada "
+          f"unambiguously  ({total} all time)")
+    print(f"  these passed the title, level and age tests - only geography "
+          f"rejected them\n")
+    print(f"  {'bucket':10}  {'company':20}  title / location")
+    for title, co, loc, bucket, url in rs[:a.limit or 40]:
+        print(f"  {bucket:10}  {co[:20]:20}  {title[:44]}")
+        print(f"  {'':10}  {'':20}  {loc[:60]}")
+        if a.urls:
+            print(f"  {'':10}  {'':20}  {url}")
+    print(f"\n  To act on one: these point at the location regexes in "
+          f"job_radar.py\n  (CA_CITIES_SAFE, CA_REGIONS, canadian_option), "
+          f"not at titles.json.")
 
 
 if __name__ == "__main__":
