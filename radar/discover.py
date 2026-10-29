@@ -24,9 +24,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TARGETS = os.path.join(HERE, "targets.json")
+# Append-only record of boards the lanes added to themselves. Gitignored:
+# see _journal() for why it exists at all.
+JOURNAL = os.path.join(HERE, "boards_added.log")
 
 # The adapters package is the one part of the radar this file can depend on
 # eagerly: it imports nothing from job_radar, so a broken engine cannot take
@@ -620,6 +624,44 @@ def _radar():
 _radar.mod = None
 
 
+def _journal(added):
+    """Record what was appended, so `git status` is not the notification.
+
+    The 19:52 inbox lane resolves employers named in the mail to their own ATS
+    boards and writes them into targets.json by itself. That behaviour is
+    worth keeping - the board is swept the same night, with no human in the
+    loop. The side effect was that the ONLY place it announced itself was a
+    modified file in `git status`: greenhouse/contactmonkey was added on
+    2026-10-29, carried a Toronto SRE posting, was polled by every sweep that
+    evening, and still looked like an unexplained change on main the next day.
+
+    So the addition gets written down where a human reads it -
+    morning_check.sh section 7 - instead of being inferred from version
+    control. Append-only and gitignored, because a file the lanes write on
+    their own schedule must not be the thing that dirties the tree.
+
+    Wrapped and non-fatal on purpose: targets.json has already been replaced
+    by the time this runs, so a journal that cannot be written must never cost
+    us the board. It says so loudly rather than failing.
+    """
+    # argv[0] is "-" under `python3 -` and "-c" under `python3 -c`; the field
+    # is only worth having when it names the lane that did it.
+    who = os.path.basename(sys.argv[0] or "")
+    if not who.endswith(".py"):
+        who = "?"
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        with open(JOURNAL, "a") as fh:
+            for platform, target in added:
+                name = (f"{platform}/{target['tenant']}:{target.get('site')}"
+                        if isinstance(target, dict)
+                        else f"{platform}/{target}")
+                fh.write(f"{stamp} {name} added by {who}\n")
+    except OSError as e:
+        print(f"  !! could not write {JOURNAL} ({e}) - the board(s) WERE "
+              f"still added to targets.json", file=sys.stderr)
+
+
 def add_boards(targets_path, found):
     """Append confirmed boards to targets.json. Returns the list actually added.
 
@@ -651,6 +693,8 @@ def add_boards(targets_path, found):
         json.dump(tg, fh, indent=2)
         fh.write("\n")
     os.replace(tmp, targets_path)
+    # After the replace, never before: the journal records what landed.
+    _journal(added)
     return added
 
 
