@@ -244,6 +244,7 @@ def _interface():
         import adapters
         import fetchcore
         import job_radar
+        import logq
     except Exception as e:
         return False, f"cannot import: {type(e).__name__}: {e}"
 
@@ -263,7 +264,7 @@ def _interface():
                         f"{sorted(platforms - set(adapters.ADAPTERS))}")
 
     WATCHED = {"job_radar": job_radar, "fetchcore": fetchcore,
-               "adapters": adapters}
+               "adapters": adapters, "logq": logq}
     files = sorted(glob.glob(os.path.join(HERE, "*.py")) +
                    ["/home/harman/devops/tailor/gaps.py",
                     "/home/harman/devops/tailor/tailor.py"])
@@ -286,7 +287,7 @@ def _interface():
         # now produce a false positive, which is the safe direction.
         alias = {"jr": job_radar, "job_radar": job_radar,
                  "fc": fetchcore, "fetchcore": fetchcore,
-                 "adapters": adapters}
+                 "adapters": adapters, "logq": logq}
         for n in ast.walk(tree):
             if isinstance(n, ast.Import):
                 for a in n.names:
@@ -342,7 +343,8 @@ def _interface():
 
     return not problems, (f"{len(adapters.ADAPTERS)} adapters, "
                           f"{len(job_radar.__all__)}+{len(fetchcore.__all__)}"
-                          f"+{len(adapters.__all__)} declared names, "
+                          f"+{len(adapters.__all__)}+{len(logq.__all__)}"
+                          f" declared names, "
                           f"{reads} cross-module reads ok"
                           if not problems else "; ".join(problems))
 
@@ -361,7 +363,8 @@ def _exec_bits():
     want = ["job_radar.py", "inbox.py", "discover.py", "verify_tracked.py",
             "board_health.py", "make_fast.py", "prune_live.py", "logq.py",
             "ratecheck.py", "rescore.py", "purge_expired.py", "nearmiss.py",
-            "selftest.py", "test_pure.py", "harvest.py", "hunt.py", "hn.py",
+            "floorcheck.py", "selftest.py", "test_pure.py", "harvest.py",
+            "hunt.py", "hn.py",
             "signals.py", "canada_employers.py", "notify_send.py",
             "fetchcore.py", "pre-commit.hook"]
     bad = [f for f in want
@@ -497,11 +500,12 @@ def _help():
     bad = []
     for f in ("job_radar.py", "inbox.py", "discover.py", "verify_tracked.py",
               "board_health.py", "make_fast.py", "prune_live.py", "logq.py",
-              "ratecheck.py", "rescore.py", "purge_expired.py", "nearmiss.py"):
+              "ratecheck.py", "rescore.py", "purge_expired.py", "nearmiss.py",
+              "floorcheck.py"):
         rc, out = sh(sys.executable, os.path.join(HERE, f), "--help", timeout=30)
         if rc != 0:
             bad.append(f"{f} rc={rc} {out.strip()[:60]}")
-    return not bad, "12 entry points" if not bad else "; ".join(bad)
+    return not bad, "13 entry points" if not bad else "; ".join(bad)
 
 
 @check(4, "one-board sweep runs the real pipeline without touching state")
