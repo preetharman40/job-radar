@@ -3135,3 +3135,69 @@ and did not get applied to them. The next run at 01:20 was clean with no
 intervention, because each fast run re-polls every board from scratch; the cost
 was one skipped cycle, and `cronwrap.sh` caught it and pushed the failure to
 the phone, which is the part that worked.
+
+## deleting a job left half of it behind
+
+The tracker, the web app and the database are three views of one thing:
+`applications.md` *is* the web app's data — `serve.py` parses it on every
+request — and `tracked_live` holds the liveness state the page decorates it
+with. `delete_job` removed the markdown row and its detail block, recorded the
+URL in `dismissed` so the next sweep would not re-add it, and **left the
+`tracked_live` row where it was**.
+
+By 2026-10-28 that was 187 orphan rows against 110 real ones. All 187 were in
+`dismissed`, which is the proof of what happened: every one was a deliberate
+delete that never finished. They had been cleaned out by hand at least three
+times, which is the signal that the cleanup belonged in the code.
+
+They are not inert. `verify_tracked` re-checks every row in that table against
+its board on every run — 281 rows were being verified to report on 110 — and
+`append_to_tracker` reads the same table for `gone`/`stale` state. So the fix
+is one statement in the same transaction as the `dismissed` insert, which is
+written first: `dismissed` is what stops a re-add, so if the live delete fails
+nothing can come back.
+
+## an age rule needs a date, and a quarter of the rows have none
+
+`--older-than 20` sounds like one line until you look: 25 of 110 rows carry
+`Posted: ?`. An ATS that omits the field, and every mail-sourced row, arrive
+that way — and some of those were found the same morning. Reading `Posted`
+alone cannot tell a req found at breakfast from one filed in September.
+
+Every detail block carries **`Found:`**, the day the row entered the tracker,
+so age falls back to that. With the fallback nothing in the tracker is
+undatable. `Found` is a *lower* bound — a req found on the 27th may have been
+posted weeks earlier — and that is the safe direction for a rule that deletes:
+it under-states age, so it keeps a row too long rather than removing one too
+early.
+
+The guard that already existed is the other half. Purging 37 expired rows by
+hand on 2026-10-13 also deleted two APPLIED jobs, PagerDuty and Manulife,
+which had to be restored from backup. Anything whose status is not `toapply`
+is kept however old it is; `--include-applied` overrides and says what it is
+about to lose. On the 2026-10-28 run that guard saved four rows, one of them
+an application sent six weeks earlier.
+
+### `--max-age` had a hole exactly the shape of these rows
+
+Pass 1 reads:
+
+```python
+if j["age"] is not None and j["age"] > a.max_age:
+```
+
+`None` means "the board did not say", and it must pass — otherwise every
+undated posting on every board would be discarded wholesale. But several
+adapters only learn the date in **pass 2**, from the posting page's
+`datePosted`, and nothing looked at `age` again after hydrate filled it in.
+
+So the 30-day cap never applied to those boards at all. The evidence was in the
+tracker: 29 rows filed within three days whose postings turned out to be 22 to
+274 days old — Accenture at 92–93 days, Nasdaq at 231 — every one of them
+through this hole, and the purge above was partly cleaning up after it.
+
+`hydrate()` now re-derives `age` when it was unknown and a date arrived, and
+main() re-applies the cap to the corrected value, reporting the count in the
+sweep footer the same way the `"N Locations"` geography re-check does. A date
+from pass 1 is never overwritten: only a *missing* age is filled, so a hydrate
+that reads a different date cannot silently re-age a row.
