@@ -3201,3 +3201,150 @@ main() re-applies the cap to the corrected value, reporting the count in the
 sweep footer the same way the `"N Locations"` geography re-check does. A date
 from pass 1 is never overwritten: only a *missing* age is filled, so a hydrate
 that reads a different date cannot silently re-age a row.
+
+## the title gate was the one filter that could not report itself
+
+Of the three gates in pass 1, two keep a record and one does not.
+`classify_location()` reports `dropped_geo` in the sweep footer, the age cap
+reports `dropped_age`, and a **tier-0 title is dropped with no trace anywhere**
+— never hydrated, never scored, never printed, never logged. Roughly 56,000 of
+the 58,300 postings a full sweep reads leave through that gate every half hour
+and nothing records what they were.
+
+So "are we missing relevant jobs?" was a question the tool structurally could
+not answer. Every title gap found so far was found by accident, by noticing one
+posting by hand: the `"Engineer II"` level bug (9 of 12 such titles were being
+scored as entry and collecting the +4 junior bonus), `"Senior Associate"` being
+read as senior on a banking ladder where it is a mid rank, and the kubernetes
+adjacency gap. Three real defects, all found by eye, none by the tool.
+
+### measuring it first, because the shape of the problem was not obvious
+
+2,958 real titles, pulled from six live Greenhouse boards:
+
+```
+raw titles              2,958
+pass the title gate        74   (2%)
+tier 0 -> invisible     2,884   (97%)
+```
+
+The 97% is **correct**, and that is the first thing a detector has to respect.
+Stripe alone listed 729 postings, overwhelmingly risk, fraud, legal and sales.
+A naive detector keying on the obvious words produces a review list made almost
+entirely of jobs nobody wants:
+
+```
+Fraud Operations Analyst          Marketing Operations Manager
+People Operations Specialist      GTM Strategy & Operations Analyst
+Business Systems Architect (Tax)  FP&A Analyst, Cloud Finance
+```
+
+`operations`, `systems`, `cloud` and `pipeline` all appear in business titles an
+order of magnitude more often than in infrastructure ones. Keying on bare
+`\boperations?\b` adds **12** titles to the review list, of which one is real.
+
+### three separate mechanisms produce a real miss
+
+Measured with the rules as they stand:
+
+```
+Platform Engineer                     tier 4  PASS
+Sr Platform Monitoring Engineer       tier 0  INVISIBLE   <- adjacency
+Infrastructure Engineer               tier 4  PASS
+Infrastructure Operations Analyst     tier 0  INVISIBLE   <- adjacency
+Network Operations Engineer           tier 2  PASS
+Network Engineer                      tier 0  INVISIBLE   <- no rule at all
+Automation Engineer                   tier 3  PASS
+DCSC Automation Specialist            tier 0  INVISIBLE   <- head noun missing
+Lead Cloud Platform Engineer          tier 4  dropped: level=exec
+```
+
+1. **Adjacency.** `\bplatform\s+engineer` requires the words to touch. One
+   inserted word hides a genuine platform role. The fix already exists in the
+   rule set and is applied to exactly one of the 22 rules — the kubernetes rule
+   carries `[\s/()\[\],.-]*(?:[a-z0-9]+[\s/()\[\],.-]+)?` between token and head.
+2. **A missing head noun, or no rule.** `automation engineer` is covered,
+   `automation specialist` is not. `Network Engineer` and `Capacity Engineer`
+   are untouched by any rule.
+3. **`level_of()`, a second title gate.** `L_EXEC` matches staff, principal,
+   architect, director, head of, vp, manager, **lead** and fellow, so a tier-4
+   title can still be excluded by `--level entry,mid,senior`. This is why three
+   of Thomson Reuters' four titles were never going to alert.
+
+The property that makes all of this tractable: `title_match()` returns the
+**maximum** tier among matching rules, so a rule added to `titles.json` can only
+ever raise a posting's tier, never lower one. The list is safe to extend, which
+means the problem is evidence, not design.
+
+### the detector is three patterns, and the exclusions are most of the work
+
+`near_miss()` is deliberately not one regex. It requires a **technical token**
+and an **engineering head noun**, and rejects **business domains** and **product
+engineering**. The last exclusion is the one that mattered: titles of the shape
+`Senior Software Engineer, Backend (Card Loan Platform)` — where `platform`
+names the product and not the work — were **116 of the first 146 flags**.
+Affirm, Stripe and Databricks list dozens each, and they are also not the jobs
+this search is for.
+
+```
+first attempt   146 of 2,884 rejects flagged   (unreadable)
++ business-domain exclusion
++ product-engineering exclusion
++ the sweep's own level and age tests
+final            19 of 2,884 rejects flagged   (0.66%)
+```
+
+All 19 are plausible infra roles: Capacity Engineer, Network Deployment
+Engineer, Senior Network Engineer, Infrastructure Operations Analyst, Sr
+Platform Monitoring Engineer, DCSC Automation Specialist, DCIM Administrator,
+Cloud Security Engineer, Technical Operations Engineer.
+
+`operations` is admitted only when **qualified** by a technical word —
+`(technical|service|systems?)\s+operations?` — which adds exactly one title,
+the genuine `Technical Operations Engineer`, against twelve for the bare word.
+
+### where it is collected, and why that position is the whole design
+
+Collection happens **inside the pass-1 loop, after the location test**. That
+ordering is not incidental:
+
+- Collecting before the location test would log tens of thousands of US and EU
+  titles per sweep.
+- Collecting after it leaves only rejects that were *otherwise eligible* — the
+  posting is somewhere you could work, recent enough for `--max-age`, and at a
+  level `--level` accepts. The log answers "what would have been shown but for
+  the title rule", which is the only version of the question worth reading.
+
+Three further constraints, each chosen to make the feature unable to cost
+anything:
+
+- **Full sweeps only** (`a.targets == TARGETS`). The fast lane polls the same
+  100 boards 156 times a day and would add nothing but 156× the write volume.
+- **A table, not a log file.** A full sweep re-rejects the same titles 26 times
+  a day; `INSERT OR IGNORE` on a `url` primary key deduplicates for free,
+  exactly as `seen` does, and `first_seen` keeps the first sighting.
+- **Written last, in its own transaction, after the claim.** `db_write()`
+  returns False on a lock rather than raising, and nothing reads `near`. If a
+  diagnostic write ever blocked and took the `seen` claim with it, a review log
+  would be costing real notifications — the one trade this feature must not
+  make.
+
+Read it with `nearmiss.py`. Nothing in the decision path reads the table, and a
+test asserts that `near_miss()` cannot alter tier, family or level.
+
+### the test could not use the existing end-to-end check
+
+`selftest`'s one-board sweep passes `--targets` a temporary file, so
+`a.targets == TARGETS` is false and the near-miss path is switched off — correct
+behaviour, and useless as a test of it. The integration tests in `test_pure.py`
+run the real `main()` in-process against a fake adapter instead.
+
+Registering that fake is where the module boundary earned its keep. The obvious
+move, replacing `jr.ADAPTERS`, passes the test and **fails the boundary check** —
+`ADAPTERS` is not in `job_radar.__all__`, because `job_radar` must not re-export
+the adapter registry and let callers depend on it through the wrong module.
+Widening `__all__` to quiet the check would have traded the architecture for a
+test. The legitimate seam was already there: `from adapters import ADAPTERS`
+binds the *same dict object*, so inserting a key through `adapters.ADAPTERS` — a
+declared name on the package that owns it — is visible to `job_radar`
+immediately. Same seam `TestAgeFromHydrate` uses for `HYDRATORS`.

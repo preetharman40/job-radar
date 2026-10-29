@@ -66,6 +66,7 @@ __all__ = [
     # title / level / location / score - the pure core
     "TITLE_RULES", "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
+    "near_miss",
     "arrangement", "canadian_option", "score", "band_of",
     # per-posting checks that need the classifier
     "offshore_marker", "office_mismatch",
@@ -240,6 +241,93 @@ def level_of(title):
     if L_ENTRY.search(t):
         return "entry"
     return "mid"
+
+
+# ------------------------------------------------- near-miss diagnostics ---
+# Which titles did the TITLE GATE throw away that a person would have wanted
+# to see?
+#
+# This is the one filter the tool could not report on. classify_location()
+# reports `dropped_geo`, the age cap reports `dropped_age`, but a tier-0 title
+# is dropped in pass 1 and leaves no trace anywhere: never hydrated, never
+# scored, never printed, never logged. 56,000 postings a sweep vanish with no
+# record of what they were, so "are we missing relevant jobs?" was a question
+# the tool structurally could not answer. Every title gap found so far - the
+# "Engineer II" level bug, "Senior Associate", the kubernetes adjacency gap -
+# was found by noticing one posting by hand on LinkedIn.
+#
+# These three patterns do NOT filter anything. They decide only what gets
+# written to the `nearmiss` table for review. Nothing here can cause a posting
+# to be notified, tracked, scored or shown.
+#
+# Measured on 2,958 real titles from six boards: 2,884 scored tier 0, and this
+# flags 19 of them (0.66%), every one a plausible infra role. The three
+# exclusions below are what took it there from 146.
+
+# A technical token. Deliberately NOT "operations", "systems" or "monitoring"
+# on their own: in a real sample those words appear far more often in business
+# titles (Fraud Operations Analyst, Marketing Operations Manager, People
+# Operations Specialist, Business Systems Architect (Tax)) than in infra ones,
+# and keying on them put 100+ payroll and GTM roles in the review list.
+NEAR_TECH = re.compile(
+    r"\b(kubernetes|k8s|openshift|helm|terraform|ansible|puppet|chef|"
+    r"docker|container|containers|jenkins|ci/?cd|gitops|devops|devsecops|sre|"
+    r"site\s+reliability|observability|prometheus|grafana|splunk|"
+    r"linux|unix|rhel|ubuntu|solaris|vmware|virtuali[sz]ation|hypervisor|"
+    r"aws|azure|gcp|google\s+cloud|cloud|serverless|"
+    r"infrastructure|infra|platform|sysadmin|system\s+administrat|"
+    r"network|networking|firewall|load\s+balanc|dns|bgp|"
+    r"storage|backup|disaster\s+recovery|provisioning|orchestration|"
+    r"automation|scripting|bash|powershell|"
+    r"deployment|release\s+engineer|build\s+engineer|tooling|"
+    r"capacity|latency|uptime|availability|scalability|"
+    r"endpoint|intune|jamf|active\s+directory|datacent(?:er|re)|"
+    r"data\s+cent(?:er|re)|"
+    # "operations" QUALIFIED by a technical word, never on its own. Measured on
+    # the same sample: this phrase adds exactly one title, the genuine miss
+    # "Technical Operations Engineer", where a bare \boperations?\b would add
+    # twelve - Risk Operations Analyst, Monetization Operations Analyst,
+    # Community Operations Specialist and the rest of the business pile.
+    r"(?:technical|service|systems?)\s+operations?)\b", re.I)
+
+# ...attached to a job that is actually done by an engineer or an admin.
+NEAR_HEAD = re.compile(
+    r"\b(engineer|engineering|administrator|admin|analyst|specialist|"
+    r"developer|architect|technician|consultant|operator|ops)\b", re.I)
+
+# A business domain. These are not infra roles whatever vocabulary they borrow,
+# and they are the bulk of what a technical-token match picks up by accident.
+NEAR_BIZ = re.compile(
+    r"\b(financ\w*|marketing|sales|legal|people|recruit\w*|payroll|"
+    r"tax|audit\w*|revenue|gtm|procurement|facilities|workplace|hr|talent|"
+    r"benefits|compensation|fraud|credit|aml|sanctions|underwrit\w*|claims|"
+    r"billing|collections|brand|social|seo|partnership\w*|bizops|strategy|"
+    r"content|communications|comms|office|logistics|supply|merchandis\w*|"
+    r"investor|accounting|treasury|fp&a)\b", re.I)
+
+# Product engineering. "Senior Software Engineer, Backend (Card Loan Platform)"
+# is a backend SWE role where `platform` names the PRODUCT, not the work, and
+# these alone were 116 of the original 146 flags - Affirm, Stripe and
+# Databricks list dozens of them. They are also not the jobs this search is
+# for: the target is infrastructure and support-adjacent operations work, not
+# an application-engineering ladder.
+NEAR_SWE = re.compile(
+    r"\b(software|backend|back[\s-]?end|frontend|front[\s-]?end|"
+    r"full[\s-]?stack|fullstack|mobile|ios|android|web|game|firmware|embedded|"
+    r"machine\s+learning|ml|ai|data|research|qa|test)\s+engineer\b"
+    r"|\bengineering\s+manager\b|\bmanager\s+[IVX0-9]*,?\s*engineering\b", re.I)
+
+
+def near_miss(title):
+    """True when a tier-0 title looks like infra work a person should review.
+
+    Diagnostics only - see the block comment above. A title that matches here
+    is still dropped from the sweep exactly as before; the only consequence is
+    a row in `nearmiss` for the weekly read.
+    """
+    t = title or ""
+    return bool(NEAR_TECH.search(t) and NEAR_HEAD.search(t)
+                and not NEAR_BIZ.search(t) and not NEAR_SWE.search(t))
 
 
 # --------------------------------------------------------------- locations ---
@@ -1103,6 +1191,13 @@ def db():
     # re-adds them, because dedupe only looks at URLs currently in the file.
     c.execute("CREATE TABLE IF NOT EXISTS dismissed("
               "url TEXT PRIMARY KEY, at TEXT)")
+    # Titles the TITLE GATE rejected that still look like infra work. Pure
+    # diagnostics: nothing reads this table to make a decision. A table rather
+    # than a log file because a full sweep re-rejects the same titles 26 times
+    # a day and INSERT OR IGNORE deduplicates for free, exactly as `seen` does.
+    c.execute("CREATE TABLE IF NOT EXISTS nearmiss("
+              "url TEXT PRIMARY KEY, title TEXT, company TEXT, location TEXT, "
+              "first_seen TEXT)")
     return c
 
 
@@ -1204,13 +1299,33 @@ def main():
     jobs = list(_byurl.values())
 
     # Pass 1: cheap filters on title + location only.
+    #
+    # The near-miss log is collected HERE, and the position in this loop is the
+    # whole reason it stays small: location is tested first, so a title only
+    # reaches the gate once the posting is already somewhere you could work.
+    # Collecting before the location test would mean logging tens of thousands
+    # of US and EU titles a sweep; collecting after it leaves a list of rejects
+    # that were otherwise eligible, which is the only list worth reading.
+    # Full sweeps only - the fast lane runs 156 times a day over the same 100
+    # boards and would add nothing but 156x the write volume.
+    log_near = (a.targets == TARGETS)
+    near = []
     shortlist = []
     for j in jobs:
         bucket, keep = classify_location(j["location"])
         if not keep or bucket not in buckets:
             continue
         tier, fam = title_match(j["title"], j["company"])
-        if tier == 0 or fam not in fams:
+        if tier == 0:
+            # Same level and age tests the pipeline would have applied, so the
+            # log holds postings that WOULD have been shown but for the title
+            # rule - not every stale exec req on a Canadian board.
+            if (log_near and near_miss(j["title"])
+                    and level_of(j["title"]) in levels
+                    and (j["age"] is None or j["age"] <= a.max_age)):
+                near.append(j)
+            continue
+        if fam not in fams:
             continue
         if fam == "vendor" and bucket in NO_VENDOR_BUCKETS:
             continue
@@ -1326,6 +1441,19 @@ def main():
         fresh = []
         a.notify = a.track = False
 
+    # Diagnostics, so it goes LAST and its failure is survivable: a separate
+    # transaction after the claim, never before it. If this blocked and took
+    # the claim with it, a review log would be costing real notifications -
+    # exactly the trade this feature must not make. db_write returns False on
+    # a lock rather than raising, and nothing downstream reads `near`.
+    if near:
+        def _near():
+            conn.executemany(
+                "INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                [(j["url"], j["title"], j["company"], j["location"], now)
+                 for j in near])
+        db_write(conn, _near, label="near-miss log")
+
     if a.seed:
         print(f"Seeded {len(hits)} postings into {DB}.\n"
               f"From now on, a plain `python3 job_radar.py` shows only NEW ones.")
@@ -1349,7 +1477,10 @@ def main():
          + (f" · {dropped_geo} dropped once \"N Locations\" resolved"
             if dropped_geo else "")
          + (f" · {dropped_age} dropped once the posting date arrived"
-            if dropped_age else "") + "_", ""]
+            if dropped_age else "")
+         # The title gate finally reporting itself. Not a count of mistakes -
+         # a count of rejects worth a human glance, read with `nearmiss.py`.
+         + (f" · {len(near)} near-miss titles logged" if near else "") + "_", ""]
 
     by_fam = {}
     for j in show:

@@ -1487,5 +1487,241 @@ class TestGoldenMaster(unittest.TestCase):
                          + "".join(drift[:10]))
 
 
+class TestNearMiss(unittest.TestCase):
+    """The near-miss detector decides what a HUMAN reviews, nothing else.
+
+    Its failure modes are asymmetric and both matter. Too loose and the review
+    list fills with payroll and GTM roles and stops being read at all - that is
+    what killed the first version, which flagged 146 of 2,884 rejects. Too
+    tight and it hides the gaps it exists to find. The cases below are real
+    titles from a 2,958-title sample of six live boards.
+    """
+
+    REAL_MISSES = [
+        "Capacity Engineer",
+        "Network Deployment Engineer",
+        "Senior Network Engineer",
+        "Infrastructure Operations Analyst",
+        "Sr Platform Monitoring Engineer",
+        "DCSC Automation Specialist",
+        "Data Center Infrastructure Management (DCIM) Administrator",
+        "Cloud Security Engineer",
+        "Technical Operations Engineer",
+    ]
+
+    # Every one of these is tier 0 in a real sweep and SHOULD stay unflagged.
+    NOT_INFRA = [
+        # "operations" is overwhelmingly a business word
+        "Fraud Operations Analyst",
+        "Marketing Operations Manager",
+        "People Operations Specialist",
+        "GTM Strategy & Operations Analyst",
+        "Legal Operations Manager",
+        "Recruiting Operations Program Manager",
+        "Credit Risk Operations Associate",
+        # ...and so are "systems", "cloud" and "pipeline"
+        "Business Systems Architect (Tax)",
+        "FP&A Analyst, Cloud Finance",
+        "Account Executive, Product Sales (Data Pipeline)",
+        # product engineering: `platform` names the product, not the job
+        "Senior Software Engineer, Backend (Card Loan Platform)",
+        "Frontend Engineer, UI Platform",
+        "Full Stack Engineer, Web Presence and Platform",
+        "Machine Learning Engineer, Growth Platform",
+        "Engineering Manager, Serverless Compute Platform",
+        "Software Engineer II, Backend (Online Storage)",
+    ]
+
+    def test_flags_the_titles_the_rules_actually_miss(self):
+        for t in self.REAL_MISSES:
+            with self.subTest(t):
+                self.assertEqual(jr.title_match(t, "acme")[0], 0,
+                                 "precondition: this title is tier 0 today. If "
+                                 "a rule now covers it, move it out of this list")
+                self.assertTrue(jr.near_miss(t))
+
+    def test_does_not_flag_business_or_product_engineering_roles(self):
+        for t in self.NOT_INFRA:
+            with self.subTest(t):
+                self.assertFalse(jr.near_miss(t))
+
+    def test_needs_both_a_technical_token_and_an_engineering_head(self):
+        # a technical token with no engineering head noun
+        self.assertFalse(jr.near_miss("Director of Cloud"))
+        self.assertFalse(jr.near_miss("Kubernetes"))
+        # an engineering head noun with no technical token
+        self.assertFalse(jr.near_miss("Mechanical Engineer"))
+        self.assertFalse(jr.near_miss("Quality Analyst"))
+        # both
+        self.assertTrue(jr.near_miss("Kubernetes Operations Specialist"))
+
+    def test_empty_and_none_are_safe(self):
+        self.assertFalse(jr.near_miss(""))
+        self.assertFalse(jr.near_miss(None))
+
+    def test_it_is_diagnostics_only_and_changes_no_verdict(self):
+        """near_miss must never be able to alter tier, family or level.
+
+        The whole feature is safe only because it is read nowhere in the
+        decision path. If this ever fails, the review log has started
+        influencing what gets notified.
+        """
+        for t in self.REAL_MISSES + self.NOT_INFRA:
+            before = (jr.title_match(t, "acme"), jr.level_of(t))
+            jr.near_miss(t)
+            self.assertEqual((jr.title_match(t, "acme"), jr.level_of(t)), before)
+
+
+class TestNearMissTable(unittest.TestCase):
+    """The log writes to its own table and dedupes across sweeps."""
+
+    def test_db_creates_the_table_and_insert_or_ignore_dedupes(self):
+        import sqlite3
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.sqlite3")
+            real = jr.DB
+            try:
+                jr.DB = path
+                c = jr.db()
+                names = {r[0] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertIn("nearmiss", names)
+                row = ("u1", "Capacity Engineer", "acme", "Toronto, ON", "t0")
+                for _ in range(3):      # a full sweep re-rejects it every run
+                    c.execute("INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                              row)
+                c.commit()
+                self.assertEqual(
+                    c.execute("SELECT COUNT(*) FROM nearmiss").fetchone()[0], 1)
+                # first_seen keeps the FIRST sighting, not the latest
+                c.execute("INSERT OR IGNORE INTO nearmiss VALUES(?,?,?,?,?)",
+                          ("u1", "Capacity Engineer", "acme", "Toronto, ON", "t9"))
+                c.commit()
+                self.assertEqual(
+                    c.execute("SELECT first_seen FROM nearmiss").fetchone()[0],
+                    "t0")
+                c.close()
+            finally:
+                jr.DB = real
+
+
+
+class TestNearMissSweep(unittest.TestCase):
+    """End-to-end: does a full sweep actually log near-misses, and does it
+    still do everything it did before?
+
+    selftest's one-board sweep cannot cover this. It passes `--targets` a
+    temporary file, so `a.targets == TARGETS` is False and the near-miss path
+    is switched off - correct behaviour, and useless as a test. This runs the
+    real main() in-process, so there is no network and no shared state.
+
+    The fake platform is registered by MUTATING adapters.ADAPTERS, not by
+    replacing job_radar's own reference to it. Two reasons, and the second is
+    the real one: `from adapters import ADAPTERS` binds the same dict object,
+    so an inserted key is visible to job_radar immediately; and ADAPTERS is a
+    declared name on the adapters package, where job_radar does not re-export
+    it. Reaching for jr.ADAPTERS passes the test and fails the module-boundary
+    check, which is the check telling the truth - job_radar re-exporting the
+    adapter registry would let any caller depend on the registry through the
+    wrong module. Same seam TestAgeFromHydrate uses for HYDRATORS.
+    """
+
+    def _run(self, jobs, argv_targets=None, extra=()):
+        import contextlib
+        import io
+        import sqlite3
+        d = tempfile.mkdtemp()
+        tpath = os.path.join(d, "targets.json")
+        with open(tpath, "w") as fh:
+            json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        if argv_targets == "other":
+            argv_targets = os.path.join(d, "fast.json")
+            with open(argv_targets, "w") as fh:
+                json.dump({"fake": ["board"], "devops_vendors": []}, fh)
+        dbp = os.path.join(d, "t.sqlite3")
+        keep = (jr.DB, jr.TARGETS, sys.argv)
+        adapters.ADAPTERS["fake"] = lambda tok: list(jobs)
+        try:
+            jr.DB, jr.TARGETS = dbp, tpath
+            sys.argv = ["job_radar.py", "--targets", argv_targets or tpath,
+                        "--all", "--min-score", "0", *extra]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                jr.main()
+            c = sqlite3.connect(dbp)
+            near = {r[0] for r in c.execute("SELECT url FROM nearmiss")}
+            seen = {r[0] for r in c.execute("SELECT url FROM seen")}
+            c.close()
+            return buf.getvalue(), near, seen
+        finally:
+            adapters.ADAPTERS.pop("fake", None)
+            jr.DB, jr.TARGETS, sys.argv = keep
+
+    def test_logs_the_near_miss_and_nothing_else(self):
+        J = fc.job
+        jobs = [
+            # a real match: must be claimed, must NOT appear in nearmiss
+            J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+              "u-match", age=1),
+            # tier 0, infra-shaped, Canadian, fresh -> the whole point
+            J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+              "u-near", age=1),
+            # tier 0 but a business role -> must stay out of the log
+            J("fake", "Acme", "Fraud Operations Analyst", "Toronto, ON",
+              "u-biz", age=1),
+            # infra-shaped and tier 0, but NOT Canada. Location is tested
+            # before the title gate, so this must never reach the log - that
+            # ordering is what keeps the table small.
+            J("fake", "Acme", "Capacity Engineer", "Austin, TX",
+              "u-us", age=1),
+            # infra-shaped, Canadian, but far past --max-age
+            J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+              "u-stale", age=999),
+            # infra-shaped, Canadian, fresh, but an exec title the sweep
+            # would have excluded anyway via --level
+            J("fake", "Acme", "Director of Capacity Engineering",
+              "Toronto, ON", "u-exec", age=1),
+        ]
+        out, near, seen = self._run(jobs)
+        self.assertEqual(near, {"u-near"},
+                         "the log must hold exactly the eligible infra reject")
+        self.assertIn("u-match", seen, "the real match must still be claimed")
+        self.assertNotIn("u-near", seen,
+                         "a near-miss must never be claimed or notified")
+        self.assertIn("1 near-miss titles logged", out,
+                      "the footer must report the count")
+
+    def test_the_fast_lane_logs_nothing(self):
+        """Any --targets other than the default switches collection off.
+
+        The fast lane runs 156 times a day over the same 100 boards. Letting
+        it log would add 156x the write volume for rows the daily sweep
+        already holds.
+        """
+        J = fc.job
+        jobs = [J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+                  "u-near", age=1)]
+        out, near, seen = self._run(jobs, argv_targets="other")
+        self.assertEqual(near, set())
+        self.assertNotIn("near-miss", out)
+
+    def test_no_claim_still_logs(self):
+        """The weekly fast.json rebuild is a full sweep with --no-claim.
+
+        --no-claim suppresses notify and track, which are decisions. The
+        near-miss log is not a decision, so it still fills - and that run
+        reads every board, which makes it the best sample of the week.
+        """
+        J = fc.job
+        jobs = [J("fake", "Acme", "Capacity Engineer", "Toronto, ON",
+                  "u-near", age=1),
+                J("fake", "Acme", "DevOps Engineer", "Toronto, ON",
+                  "u-match", age=1)]
+        out, near, seen = self._run(jobs, extra=["--no-claim"])
+        self.assertEqual(near, {"u-near"})
+        self.assertEqual(seen, set(), "--no-claim must claim nothing")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

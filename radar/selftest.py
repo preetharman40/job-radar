@@ -434,7 +434,8 @@ def _db():
 @check(3, "expected tables all present")
 def _tables():
     want = {"seen", "live", "sweeps", "dismissed", "tracked_live",
-            "board_health", "mail_seen", "mail_role", "employer_board"}
+            "board_health", "mail_seen", "mail_role", "employer_board",
+            "nearmiss"}
     c = sqlite3.connect(f"file:{os.path.join(HERE, 'seen.sqlite3')}?mode=ro",
                         uri=True)
     have = {r[0] for r in c.execute(
@@ -473,11 +474,11 @@ def _help():
     bad = []
     for f in ("job_radar.py", "inbox.py", "discover.py", "verify_tracked.py",
               "board_health.py", "make_fast.py", "prune_live.py", "logq.py",
-              "ratecheck.py", "rescore.py", "purge_expired.py"):
+              "ratecheck.py", "rescore.py", "purge_expired.py", "nearmiss.py"):
         rc, out = sh(sys.executable, os.path.join(HERE, f), "--help", timeout=30)
         if rc != 0:
             bad.append(f"{f} rc={rc} {out.strip()[:60]}")
-    return not bad, "11 entry points" if not bad else "; ".join(bad)
+    return not bad, "12 entry points" if not bad else "; ".join(bad)
 
 
 @check(4, "one-board sweep runs the real pipeline without touching state")
