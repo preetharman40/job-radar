@@ -1,197 +1,240 @@
 {
- "_doc": [
-  "(regex, tier, family). Tier drives the base score; family drives --family.",
-  "",
-  "A tier-0 title is invisible, not merely ranked low: title_match()",
-  "returns the MAX tier among matching rules, so adding a rule here can",
-  "only ever raise a posting's tier, never lower it. That is what makes",
-  "this list safe to extend - and why every widening below records what",
-  "it cost, measured over a real 56,524-posting snapshot.",
-  "",
-  "`note` is the justification, kept with the rule rather than in a",
-  "commit message. A rule whose reasoning has been lost is a rule",
-  "nobody can safely change."
- ],
- "rules": [
-  {
-   "section": "family: devops",
-   "note": [
-    "Covers \"dev ops\" with a space and the whole devsecops family. Measured",
-    "on 205 distinct titles from a fortnight of real alert mail: 15",
-    "infra-shaped titles scored tier 0, and SIX were caught by widening this",
-    "one rule - \"DevSecOps Engineer\", \"Senior DevSecOps Engineer\", \"Cloud",
-    "Security DevSecOps Engineer\", \"Azure DevSecOps Architect\", \"Dev Ops I\"",
-    "and \"Dev Ops II, Public Cloud\". A tier-0 title never reaches scoring at",
-    "all, so these were invisible rather than ranked low.",
+  "_doc": [
+    "(regex, tier, family). Tier drives the base score; family drives --family.",
     "",
-    "`ops` keeps its word boundary so \"operations\" cannot match, and bare",
-    "\"secops\" is deliberately excluded - that is a SOC analyst title, and",
-    "analyst roles are out by request. Costs 21 extra postings across a",
-    "56,524-posting snapshot, nearly all of them genuine DevSecOps reqs."
-   ],
-   "re": "\\b(dev[\\s-]?sec[\\s-]?ops|dev[\\s-]?ops)\\b",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "re": "\\b(sre|site\\s+reliability)\\b",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "re": "\\bplatform\\s+engineer",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "re": "\\b(cloud|infrastructure|infra)\\s+(engineer|developer|specialist|analyst|administrator)",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "note": [
-    "Adjacency with at most one word between, which is what \"Kubernetes",
-    "(K8S) / HPC Engineer\" needs - four characters of punctuation and one",
-    "token sit between the platform and the role noun. Bounded deliberately:",
-    "the unbounded \"kubernetes anywhere AND engineer anywhere\" form admitted",
-    "19 postings, mostly \"Senior Software Engineer - Python/Golang -",
-    "Kubernetes\" coding roles, while this one admits exactly 1 extra posting",
-    "in 56,524 and still rescues the title it was written for."
-   ],
-   "re": "\\b(kubernetes|k8s)\\b[\\s/()\\[\\],.-]*(?:[a-z0-9]+[\\s/()\\[\\],.-]+)?engineer",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "note": [
-    "\"Platform Administration Lead\", \"Data Platform Operations Engineer\".",
-    "The power-platform lookbehind is load-bearing: \"Power BI & Power",
-    "Platform Administrator\" is an M365 reporting role, and it arrived in the",
-    "same fortnight of mail as the titles above. Requiring the role noun",
-    "(operations ENGINEER, or administrator/administration) rather than a",
-    "bare \"platform operations\" is what keeps out \"Sr Program Manager, GTM",
-    "Platform Operations\" and the support-engineer variants - the loose form",
-    "admitted 32 postings of which 22 were program-manager or support roles.",
-    "\"Manager, AMS/SAP Platform Administration and Support\" still matches but",
-    "is harmless: level_of reads it as exec, which is -10."
-   ],
-   "re": "(?<!power )\\bplatform\\s+(?:operations?\\s+engineer|administrat(?:or|ion))\\b",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "re": "\\b(reliability|observability)\\s+engineer",
-   "tier": 4,
-   "family": "devops"
-  },
-  {
-   "re": "\\bmlops\\b",
-   "tier": 3,
-   "family": "devops"
-  },
-  {
-   "note": [
-    "A gap is allowed between \"cloud\" and \"operations\" because vendors put",
-    "their product name there: \"VMware Cloud Foundation (VCF) Operations",
-    "Engineer\". Admits 0 extra postings in the 56,524-posting snapshot, so",
-    "the widening is free - the title it rescues came through alert mail from",
-    "a board the radar does not poll."
-   ],
-   "re": "\\bcloud\\s+(operations|ops)\\b|\\bcloud\\b[a-z0-9\\s()&./-]{0,26}\\boperations?\\s+engineer",
-   "tier": 3,
-   "family": "devops"
-  },
-  {
-   "section": "family: adjacent (infra work that hires from support)",
-   "re": "\\b(build|release|automation|tooling)\\s+engineer",
-   "tier": 3,
-   "family": "adjacent"
-  },
-  {
-   "re": "\\bdeveloper\\s+(experience|productivity|platform)",
-   "tier": 3,
-   "family": "adjacent"
-  },
-  {
-   "re": "\\b(linux|unix|systems?)\\s+(engineer|administrator|admin|analyst)",
-   "tier": 3,
-   "family": "adjacent"
-  },
-  {
-   "re": "\\b(endpoint|mdm|intune|workspace\\s*one|unified\\s+endpoint|modern\\s+workplace|device\\s+management)",
-   "tier": 4,
-   "family": "adjacent"
-  },
-  {
-   "re": "\\b(noc|network\\s+operations)\\b",
-   "tier": 2,
-   "family": "adjacent"
-  },
-  {
-   "re": "\\bit\\s+(engineer|operations|infrastructure)",
-   "tier": 2,
-   "family": "adjacent"
-  },
-  {
-   "section": "family: vendor (only counts at a DevOps tool vendor)",
-   "re": "\\b(technical|customer|enterprise)\\s+support\\s+engineer",
-   "tier": 4,
-   "family": "vendor"
-  },
-  {
-   "re": "\\bsupport\\s+engineer\\b",
-   "tier": 4,
-   "family": "vendor"
-  },
-  {
-   "re": "\\b(solutions?|field)\\s+engineer\\b",
-   "tier": 3,
-   "family": "vendor",
-   "note": [
-    "`sales` was removed on 2026-10-29, after the only tracked row this entire",
-    "vendor family has ever produced turned out to be one nobody wanted: a",
-    "Fivetran \"Sales Engineer, Enterprise\". Measured against all 80 tracker rows,",
-    "every other vendor rule - support engineer, customer success, escalation,",
-    "implementation, onboarding, deployment, TAM, professional services,",
-    "developer advocate - has produced ZERO. Nine rules and 85 vendor names, and",
-    "the family's lifetime output was that one sales job.",
+    "A tier-0 title is invisible, not merely ranked low: title_match()",
+    "returns the MAX tier among matching rules, so adding a rule here can",
+    "only ever raise a posting's tier, never lower it. That is what makes",
+    "this list safe to extend - and why every widening below records what",
+    "it cost, measured over a real 56,524-posting snapshot.",
     "",
-    "The mechanism is worth keeping in mind for any future vendor rule. A vendor",
-    "title reaches the notify threshold on its title ALONE:",
-    "",
-    "    tier 3 x 3 = 9  +  vendor bonus 4  +  level mid 2  =  15",
-    "",
-    "and 15 is exactly --notify-min-score. The Fivetran req's Terraform and",
-    "Kubernetes mentions took it from 15 to 23 - they made the alert loud, they",
-    "did not cause it. No technical evidence was ever required.",
-    "",
-    "`solutions` and `field` are kept. Both are hands-on pre-sales engineering",
-    "rather than a quota-carrying track, both are the original intent of the",
-    "vendor path (support/solutions work at a DevOps tool vendor converting into",
-    "SRE), and both have produced zero rows so far - so keeping them costs",
-    "nothing measured and removing them would gain nothing measured either.",
-    "Revisit if either one ever produces a surprise of its own."
-   ]
-  },
-  {
-   "re": "\\b(implementation|onboarding|deployment)\\s+engineer",
-   "tier": 3,
-   "family": "vendor"
-  },
-  {
-   "re": "\\b(technical\\s+account\\s+manager|professional\\s+services)",
-   "tier": 3,
-   "family": "vendor"
-  },
-  {
-   "re": "\\b(customer\\s+success\\s+engineer|escalation\\s+engineer)",
-   "tier": 4,
-   "family": "vendor"
-  },
-  {
-   "re": "\\bdeveloper\\s+(advocate|relations)\\b",
-   "tier": 2,
-   "family": "vendor"
+    "`note` is the justification, kept with the rule rather than in a",
+    "commit message. A rule whose reasoning has been lost is a rule",
+    "nobody can safely change."
+  ],
+  "rules": [
+    {
+      "section": "family: devops",
+      "note": [
+        "Covers \"dev ops\" with a space and the whole devsecops family. Measured",
+        "on 205 distinct titles from a fortnight of real alert mail: 15",
+        "infra-shaped titles scored tier 0, and SIX were caught by widening this",
+        "one rule - \"DevSecOps Engineer\", \"Senior DevSecOps Engineer\", \"Cloud",
+        "Security DevSecOps Engineer\", \"Azure DevSecOps Architect\", \"Dev Ops I\"",
+        "and \"Dev Ops II, Public Cloud\". A tier-0 title never reaches scoring at",
+        "all, so these were invisible rather than ranked low.",
+        "",
+        "`ops` keeps its word boundary so \"operations\" cannot match, and bare",
+        "\"secops\" is deliberately excluded - that is a SOC analyst title, and",
+        "analyst roles are out by request. Costs 21 extra postings across a",
+        "56,524-posting snapshot, nearly all of them genuine DevSecOps reqs."
+      ],
+      "re": "\\b(dev[\\s-]?sec[\\s-]?ops|dev[\\s-]?ops)\\b",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "re": "\\b(sre|site\\s+reliability)\\b",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "re": "\\bplatform\\s+engineer",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "re": "\\b(cloud|infrastructure|infra)\\s+(engineer|developer|specialist|analyst|administrator)",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "note": [
+        "Adjacency with at most one word between, which is what \"Kubernetes",
+        "(K8S) / HPC Engineer\" needs - four characters of punctuation and one",
+        "token sit between the platform and the role noun. Bounded deliberately:",
+        "the unbounded \"kubernetes anywhere AND engineer anywhere\" form admitted",
+        "19 postings, mostly \"Senior Software Engineer - Python/Golang -",
+        "Kubernetes\" coding roles, while this one admits exactly 1 extra posting",
+        "in 56,524 and still rescues the title it was written for."
+      ],
+      "re": "\\b(kubernetes|k8s)\\b[\\s/()\\[\\],.-]*(?:[a-z0-9]+[\\s/()\\[\\],.-]+)?engineer",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "note": [
+        "\"Platform Administration Lead\", \"Data Platform Operations Engineer\".",
+        "The power-platform lookbehind is load-bearing: \"Power BI & Power",
+        "Platform Administrator\" is an M365 reporting role, and it arrived in the",
+        "same fortnight of mail as the titles above. Requiring the role noun",
+        "(operations ENGINEER, or administrator/administration) rather than a",
+        "bare \"platform operations\" is what keeps out \"Sr Program Manager, GTM",
+        "Platform Operations\" and the support-engineer variants - the loose form",
+        "admitted 32 postings of which 22 were program-manager or support roles.",
+        "\"Manager, AMS/SAP Platform Administration and Support\" still matches but",
+        "is harmless: level_of reads it as exec, which is -10."
+      ],
+      "re": "(?<!power )\\bplatform\\s+(?:operations?\\s+engineer|administrat(?:or|ion))\\b",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "re": "\\b(reliability|observability)\\s+engineer",
+      "tier": 4,
+      "family": "devops"
+    },
+    {
+      "re": "\\bmlops\\b",
+      "tier": 3,
+      "family": "devops"
+    },
+    {
+      "note": [
+        "A gap is allowed between \"cloud\" and \"operations\" because vendors put",
+        "their product name there: \"VMware Cloud Foundation (VCF) Operations",
+        "Engineer\". Admits 0 extra postings in the 56,524-posting snapshot, so",
+        "the widening is free - the title it rescues came through alert mail from",
+        "a board the radar does not poll."
+      ],
+      "re": "\\bcloud\\s+(operations|ops)\\b|\\bcloud\\b[a-z0-9\\s()&./-]{0,26}\\boperations?\\s+engineer",
+      "tier": 3,
+      "family": "devops"
+    },
+    {
+      "section": "family: adjacent (infra work that hires from support)",
+      "re": "\\b(build|release|automation|tooling)\\s+engineer",
+      "tier": 3,
+      "family": "adjacent"
+    },
+    {
+      "re": "\\bdeveloper\\s+(experience|productivity|platform)",
+      "tier": 3,
+      "family": "adjacent"
+    },
+    {
+      "re": "\\b(linux|unix|systems?)\\s+(engineer|administrator|admin|analyst)",
+      "tier": 3,
+      "family": "adjacent"
+    },
+    {
+      "re": "\\b(endpoint|mdm|intune|workspace\\s*one|unified\\s+endpoint|modern\\s+workplace|device\\s+management)",
+      "tier": 4,
+      "family": "adjacent"
+    },
+    {
+      "re": "\\b(noc|network\\s+operations)\\b",
+      "tier": 2,
+      "family": "adjacent"
+    },
+    {
+      "re": "\\bit\\s+(engineer|operations|infrastructure)",
+      "tier": 2,
+      "family": "adjacent"
+    },
+    {
+      "section": "family: vendor (only counts at a DevOps tool vendor)",
+      "re": "\\b(technical|customer|enterprise)\\s+support\\s+engineer",
+      "tier": 4,
+      "family": "vendor"
+    },
+    {
+      "re": "\\bsupport\\s+engineer\\b",
+      "tier": 4,
+      "family": "vendor"
+    },
+    {
+      "re": "\\b(solutions?|field)\\s+engineer\\b",
+      "tier": 3,
+      "family": "vendor",
+      "note": [
+        "`sales` was removed on 2026-10-29, after the only tracked row this entire",
+        "vendor family has ever produced turned out to be one nobody wanted: a",
+        "Fivetran \"Sales Engineer, Enterprise\". Measured against all 80 tracker rows,",
+        "every other vendor rule - support engineer, customer success, escalation,",
+        "implementation, onboarding, deployment, TAM, professional services,",
+        "developer advocate - has produced ZERO. Nine rules and 85 vendor names, and",
+        "the family's lifetime output was that one sales job.",
+        "",
+        "The mechanism is worth keeping in mind for any future vendor rule. A vendor",
+        "title reaches the notify threshold on its title ALONE:",
+        "",
+        "    tier 3 x 3 = 9  +  vendor bonus 4  +  level mid 2  =  15",
+        "",
+        "and 15 is exactly --notify-min-score. The Fivetran req's Terraform and",
+        "Kubernetes mentions took it from 15 to 23 - they made the alert loud, they",
+        "did not cause it. No technical evidence was ever required.",
+        "",
+        "`solutions` and `field` are kept. Both are hands-on pre-sales engineering",
+        "rather than a quota-carrying track, both are the original intent of the",
+        "vendor path (support/solutions work at a DevOps tool vendor converting into",
+        "SRE), and both have produced zero rows so far - so keeping them costs",
+        "nothing measured and removing them would gain nothing measured either.",
+        "Revisit if either one ever produces a surprise of its own."
+      ]
+    },
+    {
+      "re": "\\b(implementation|onboarding|deployment)\\s+engineer",
+      "tier": 3,
+      "family": "vendor"
+    },
+    {
+      "re": "\\b(technical\\s+account\\s+manager|professional\\s+services)",
+      "tier": 3,
+      "family": "vendor"
+    },
+    {
+      "re": "\\b(customer\\s+success\\s+engineer|escalation\\s+engineer)",
+      "tier": 4,
+      "family": "vendor"
+    },
+    {
+      "re": "\\bdeveloper\\s+(advocate|relations)\\b",
+      "tier": 2,
+      "family": "vendor"
+    }
+  ],
+  "veto": {
+    "note": [
+      "The ONE thing in this file that can LOWER a tier. Everything else is",
+      "additive - title_match returns the max tier among matching rules, so a",
+      "new rule can only promote a posting. That property is what makes the",
+      "list safe to extend without re-testing, and this breaks it, so it is",
+      "deliberately one pattern with one escape hatch rather than a second",
+      "rule system.",
+      "",
+      "Why it exists: on 2026-10-29 a 'Water/Wastewater Infrastructure",
+      "Specialist' at the Government of Alberta alerted at score 16. It is a",
+      "municipal civil-engineering job. The rule it satisfied is",
+      "'(cloud|infrastructure|infra) (engineer|...|specialist)' at tier 4, and",
+      "it is not wrong - 'infrastructure' is core DevOps vocabulary AND core",
+      "civil-engineering vocabulary. 12 from the tier, +2 mid, +2 for the word",
+      "'escalation' somewhere in the JD, and it cleared the notify threshold of",
+      "15 by one point.",
+      "",
+      "`subject` names what the job is ABOUT - water, roads, HVAC, buildings -",
+      "not how it is done. `rescue` keeps anything carrying a real IT token, so",
+      "'Cloud Infrastructure Specialist' at the same employer still matches.",
+      "",
+      "Measured before shipping, against 531 distinct real titles from `seen`",
+      "and both nearmiss tables, of which 395 are admitted by the gate today:",
+      "5 are vetoed and 0 relevant titles are lost. The five are the water",
+      "role, two 'Building Automation' roles at the University of Toronto (that",
+      "is HVAC controls), 'ELECTRICAL SYSTEMS ENGINEER' at the City of Toronto",
+      "and 'Satellite Electrical Systems Engineer' at Scalian.",
+      "",
+      "`rescue` deliberately omits bare 'systems', 'technology' and 'network'.",
+      "An earlier draft included 'systems' and those four building/electrical",
+      "titles survived it - a facilities title uses that word exactly as often",
+      "as an IT one. It also omits 'infrastructure' itself, which would rescue",
+      "the posting that prompted all this.",
+      "",
+      "Note the words NOT here: 'pipeline' (CI/CD), 'platform', 'automation'.",
+      "'pipeline' would veto every data and deployment pipeline title in the",
+      "search, which is the single most expensive mistake available in this",
+      "pattern."
+    ],
+    "subject": "\\b(water|wastewater|waste\\s*water|sewer|sewage|stormwater|drainage|hydraulic|irrigation|dam|dams|road|roads|roadway|highway|bridge|bridges|transit|railway|rail|pavement|traffic|structural|geotechnical|civil|municipal|surveying|hvac|plumbing|mechanical|electrical|construction|building|facilities|forestry|mining|drilling|wellsite|airport|seaport|marine|land|environmental|wildlife|agricultur\\w*)\\b",
+    "rescue": "\\b(cloud|kubernetes|k8s|aws|azure|gcp|devops|devsecops|sre|site\\s+reliability|linux|unix|server|servers|virtuali[sz]\\w*|vmware|container\\w*|docker|terraform|ansible|ci/?cd|gitops|observability|database|cyber\\w*|software|it|ict|information\\s+technology|data\\s*cent(?:er|re)|platform)\\b"
   }
- ]
 }
