@@ -3789,3 +3789,211 @@ One thing the measurement turned up in passing, unrelated to the veto:
 no rule pairs `kubernetes` with `administrator`. A test expectation of mine
 briefly blamed the veto for it. It is a rules gap, not a regression, and it is
 the kind of thing the near-miss log exists to surface.
+
+### a rescue list belongs to its subject, not to the gate
+
+The civil-engineering veto shipped on 2026-10-29 as one `subject` pattern with
+one `rescue` pattern, and the note in `titles.json` said so approvingly:
+"deliberately one pattern with one escape hatch rather than a second rule
+system." Two days later that shape was the bug.
+
+The 2026-10-31 sweep tracked five rows that are the category Harman has ruled
+out in as many words — *"I don't want IT support or analys jobs in my
+tracker"*:
+
+```
+583  24  Fivetran     IT Operations Analyst II
+581  17  Braze        Customer Success Platform Administrator
+584  17  Purolator    IT Operations & CMDB Analyst
+563  16  TD Bank      IT Operations Analyst II
+582  15  1Password    Finance Systems Analyst - Integrations and Automation
+```
+
+The obvious move was to add `customer success`, `finance` and `analyst` to the
+existing subject list. It does not work, and the reason is the interesting
+part. The civil group's rescue carries `it`, `platform`, `software`, `database`
+and `cyber`, because those are exactly the tokens that prove a job titled
+"Water Infrastructure Specialist" is really an IT job. Run the same list
+against the five titles above and **it rescues four of them**: `it` saves both
+IT Operations Analysts, `platform` saves the Braze role.
+
+So a rescue list is not a property of the veto. It is a property of the
+subject it guards. A token that distinguishes IT-at-a-water-utility from
+civil-engineering-at-a-water-utility says nothing at all about
+IT-in-a-finance-department, where `it` and `platform` are the ambient
+vocabulary rather than the signal. `veto` therefore became a list of named
+groups, each carrying its own `subject` and its own `rescue`:
+
+```
+civil-infrastructure   water, roads, HVAC, buildings    rescue: wide   (it, platform, software…)
+business-function      finance, HR, SAP, customer success  rescue: tight  (devops, k8s, cloud… + engineer)
+support-analyst        analyst                           rescue: tight
+```
+
+`TestVetoGroups.test_the_civil_rescue_would_have_saved_these` asserts the
+collision directly, so if the civil rescue is ever narrowed the test fails and
+says the two groups can be collapsed back into one. That is the only honest way
+to record "these are separate for a reason."
+
+#### why `analyst` could not be a rule tightening
+
+The first plan was to narrow the admitting rules instead of vetoing, because
+the veto is the one thing in the system that can *lower* a tier and every
+addition to it costs the max-tier safety property. That plan died on a
+measurement. The 69 admitted analyst titles arrive through **six different
+rules**:
+
+```
+49x  tier 3   (linux|unix|systems?) (engineer|administrator|admin|analyst)
+ 7x  tier 4   (cloud|infrastructure|infra) (engineer|developer|specialist|analyst…)
+ 5x  tier 4   (endpoint|mdm|intune|workspace one|unified endpoint|modern workplace…)
+ 5x  tier 2   it (engineer|operations|infrastructure)
+ 2x  tier 2   (noc|network operations)
+ 1x  tier 4   (reliability|observability) engineer
+```
+
+Six hand-tightened patterns, each needing its own negative lookahead for a word
+that can appear anywhere in the title, is the version of this fix that rots at
+the seventh rule. `analyst` is a disqualifier *independent of whatever admitted
+the posting*, and a subject group is the only mechanism in the file that can say
+that. The architectural preference lost to the measurement, which is the right
+way round.
+
+#### a length floor was the wrong guard
+
+The original loader refused any veto pattern under 40 characters, reasoning
+that an empty pattern compiles to `re.compile("")`, matches every title, and
+takes the whole sweep blind while still exiting 0. The floor caught that. It
+also rejects `\banalyst\b`, which is a legitimate 11-character subject — and a
+40-character floor admits most truncations anyway.
+
+The replacement is behavioural. Every group is proved against canaries:
+
+```python
+VETO_CANARIES = ("DevOps Engineer", "Site Reliability Engineer",
+                 "Cloud Engineer", "Kubernetes Engineer",
+                 "Platform Engineer", "Linux Administrator")
+VETO_NON_IT = "Water Treatment Operator"
+```
+
+A subject that matches any canary is refused, *because that is the search*. A
+rescue that matches `VETO_NON_IT` is refused, because it would rescue anything.
+Both emptied patterns still fail — `""` matches the canaries and it matches the
+non-IT control — so the old cases keep passing while the real failure a floor
+could never catch is now covered: a subject that is not empty but plausible.
+`selftest.py` sabotages a group with `subject = r"\bengineer\b"` and requires
+the loader to refuse it. Bad-data cases went 11 → 16.
+
+#### the test suite defended a decision I had forgotten
+
+`business-function` listed `customer success` as a subject word, which is
+correct for "Customer Success Platform Administrator" and wrong for one other
+title in the corpus. `TestVendorSalesEngineer` failed immediately:
+
+```
+FAIL: test_the_support_path_this_family_exists_for_is_untouched
+      [Customer Success Engineer]
+AssertionError: (0, None) != (4, 'vendor')
+```
+
+"Customer Success Engineer" at a registered vendor is a **deliberately kept
+tier-4 title** — the support path the whole vendor family exists for, and the
+one closest to six years of support work. The veto ran before the vendor check
+and killed it everywhere.
+
+The fix was `engineer` in that group's rescue, not deleting the subject word:
+the group targets business-function *administration* — analysts,
+administrators, consultants — not engineering inside a business domain. It
+costs nothing measured, because all ten titles the group drops are Analyst,
+Administrator or Consultant roles. Worth recording that the test, written for
+an unrelated change two days earlier, is what caught it.
+
+#### two measurement mistakes, for the record
+
+**`clinical` and `pharmaceutical` named an industry, not a function.** Both
+were in the first draft of the business group. `clinical` vetoed "IT
+Infrastructure Services 4 — Clinical Critical Messaging", a real
+infrastructure role, and everything the pair caught legitimately was already
+caught by `support-analyst`. A DevOps job at a hospital is still a DevOps job.
+Removing them moved the drop count from 73 back to the predicted 72. The
+discrepancy between prediction and result is what surfaced it — which is the
+argument for predicting a number before shipping rather than reporting one
+after.
+
+**A standalone drift check reported 53 changed golden rows where the test
+reported 20.** The 33 extra were all `family: vendor`, and the cause was my
+script, not the code: `VENDORS` is empty at import and `test_pure.py:45` fills
+it from `targets.json`. Reproducing the same 33 on `main` proved it predated
+the change. A verification script that does not reproduce the harness is not a
+verification.
+
+#### the suppression is counted
+
+`vetoed()` returns the group *name* rather than a bool, and the sweep
+accumulates per group:
+
+A veto that cannot be counted is a veto that gets blamed for every missing
+posting, and there is no answer to that but a number. Zero groups print
+nothing, so a quiet sweep stays quiet. The counting lives in the sweep loop
+rather than inside `title_match`, which is pure and is called from `inbox.py`
+and `discover.py` as well.
+
+The first version of that counter was wrong, and the way it was wrong is worth
+keeping. It counted every vetoed title, and a 269-board run reported:
+
+```
+468 vetoed: business-function · 123 vetoed: civil-infrastructure · 207 vetoed: support-analyst
+```
+
+798 suppressions on a sweep that withheld a handful. Almost all of those
+titles — "Sales Analyst", "Payroll Analyst", every water-treatment job on
+every municipal board — are tier 0 on the **rules** too, so the veto removed
+nothing by rejecting them. A number like that reads as the veto eating the
+search, and the next person to see it would narrow a group for no reason.
+
+So `title_match` grew a `veto=False` seam, and the counter asks what the rules
+alone would have said before it counts:
+
+```python
+if v and title_match(j["title"], j["company"], veto=False)[0]:
+    veto_hits[v] = veto_hits.get(v, 0) + 1
+```
+
+Now the line reports postings a rule **would** have admitted — the ones the
+veto actually took. The same 269-board run, same corpus:
+
+```
+_… · 6255 scanned · 98 shortlisted · 9 vetoed: business-function · 1 vetoed: civil-infrastructure · 14 vetoed: support-analyst_
+```
+
+798 became **24**. `veto=True` stays the default so `inbox.py`, `discover.py`
+and the sweep itself are untouched, and a test asserts that; nothing but the
+counter should ever pass `veto=False`.
+
+`inbox.py` got the same counter and for a sharper reason. The mail lane drops
+tier 0 at `inbox.py:1149` with a bare `continue`, which was fine while tier 0
+meant "no rule matched" and is not fine now that it can also mean "a group
+decided against it". The digest header carries the count:
+
+```
+_7 roles from 4 new messages · 3 not already found by the ATS poller · 2 new to you · 2 vetoed: support-analyst_
+```
+
+The standing rule is that nothing from the email alerts disappears quietly.
+A relevance decision is still allowed to remove a posting — that is what was
+asked for — but it has to say it did.
+
+Vetoed titles stay *out* of the near-miss log, same as the networking
+exclusion: tier 0 by decision is not a miss, and 72 of them would drown the
+table the log exists to make readable. The footer count is the visibility
+instead.
+
+Measured: **381 → 309 admitted** of 544 distinct real titles, 72 dropped,
+exactly as predicted. Golden master: 20 of 259 rows changed, every one an
+analyst or business-function title, nothing else moved. Four borderline titles
+went with them by explicit choice — `Sr. Analyst, Application Reliability
+Engineering`, `Sr IT Operations Analyst - Cisco UCS & VMware`, `Senior Endpoint
+Security Operations Analyst`, `Application & Infrastructure Analyst` — which is
+why that group's rescue omits `vmware`, `endpoint`, `reliability` and bare
+`infrastructure` on purpose. Widen the rescue if that judgement changes; do not
+touch the subject.

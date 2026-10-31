@@ -1507,9 +1507,13 @@ class TestNearMiss(unittest.TestCase):
     # deliberately NOT wanted - networking was ruled out as a specialism, so
     # they belong in TestNearMissNetworkExcluded instead. Left recorded here
     # rather than silently dropped: they are the reason that class exists.
+    # "Infrastructure Operations Analyst" was here until 2026-10-31. It is
+    # not a miss any more: the support-analyst veto group drops it BY
+    # DECISION, same treatment as the networking titles above. Recorded here
+    # rather than deleted, because if that group is ever narrowed this is a
+    # real near-miss again.
     REAL_MISSES = [
         "Capacity Engineer",
-        "Infrastructure Operations Analyst",
         "Sr Platform Monitoring Engineer",
         "DCSC Automation Specialist",
         "Data Center Infrastructure Management (DCIM) Administrator",
@@ -2475,6 +2479,18 @@ class TestTitleVeto(unittest.TestCase):
     The rule was not wrong - "infrastructure" is core DevOps vocabulary and
     core civil-engineering vocabulary at the same time."""
 
+    def group(self, name):
+        """-> (subject, rescue) for one named veto group.
+
+        Reaching for a group by name rather than by index: the order in
+        titles.json carries no meaning, and a test that depended on it would
+        break the first time a group was inserted above another."""
+        for gname, subject, rescue in jr.TITLE_VETOES:
+            if gname == name:
+                return subject, rescue
+        self.fail(f"no veto group named {name!r} - groups are "
+                  f"{[g[0] for g in jr.TITLE_VETOES]}")
+
     REAL_VETOED = [
         ("Water/Wastewater Infrastructure Specialist", "Government of Alberta"),
         ("Building Automation System Analyst", "University of Toronto"),
@@ -2520,7 +2536,7 @@ class TestTitleVeto(unittest.TestCase):
         for title in ("CI/CD Pipeline Engineer", "Data Pipeline Engineer",
                       "Build Pipeline Specialist"):
             with self.subTest(title=title):
-                self.assertFalse(jr.TITLE_VETO.search(title))
+                self.assertIsNone(jr.vetoed(title))
 
     def test_the_veto_words_hold_their_boundaries(self):
         """`land`, `rail`, `dam` and `marine` are short enough to appear inside
@@ -2528,8 +2544,8 @@ class TestTitleVeto(unittest.TestCase):
         for title in ("Cloud Landing Zone Engineer", "Guardrails Engineer",
                       "Engineer, Amsterdam", "Submariner Platform Engineer"):
             with self.subTest(title=title):
-                self.assertFalse(jr.TITLE_VETO.search(title),
-                                 f"{title} was vetoed by a substring")
+                self.assertIsNone(jr.vetoed(title),
+                                  f"{title} was vetoed by a substring")
 
     def test_bare_systems_does_not_rescue(self):
         """An earlier draft put "systems" in the rescue list and all four
@@ -2539,9 +2555,10 @@ class TestTitleVeto(unittest.TestCase):
                      "automation", "operations"):
             with self.subTest(word=word):
                 title = f"Water {word} Engineer"
-                self.assertTrue(jr.TITLE_VETO.search(title))
+                subject, rescue = self.group("civil-infrastructure")
+                self.assertTrue(subject.search(title))
                 self.assertIsNone(
-                    jr.TITLE_RESCUE.search(title),
+                    rescue.search(title),
                     f"{word!r} rescues a vetoed subject - that is how the "
                     f"four building/electrical titles survived the first draft")
                 self.assertEqual(jr.title_match(title, "x"), (0, None))
@@ -2556,7 +2573,146 @@ class TestTitleVeto(unittest.TestCase):
 
     def test_near_miss_still_flags_a_real_one(self):
         """Control: the exclusion above must not have disabled the log."""
-        self.assertTrue(jr.near_miss("Infrastructure Support Analyst"))
+        # Was "Infrastructure Support Analyst" until the support-analyst
+        # group shipped, which vetoes it BY DECISION - so it stopped being a
+        # valid control for "the near-miss log still works".
+        self.assertTrue(jr.near_miss("Infrastructure Support Specialist"))
+
+
+class TestVetoGroups(unittest.TestCase):
+    """The veto became a LIST of groups on 2026-10-31, because a rescue list is
+    per-subject and not global.
+
+    Two real alerts forced it: "Customer Success Platform Administrator" at
+    Braze (17) and "IT Operations Analyst II" at Fivetran (24). Both would have
+    been RESCUED by the civil group's rescue list, which carries "it",
+    "platform" and "software" - tokens that prove a water job is really IT and
+    prove nothing at all about a finance or customer-success job."""
+
+    BUSINESS = ["Customer Success Platform Administrator",
+                "Finance Systems Analyst - Integrations and Automation",
+                "Senior Financial Systems Administrator (NetSuite & OneStream)",
+                "HR Senior Systems Analyst",
+                "SAP Systems Analyst - OpenText"]
+    ANALYST = ["IT Operations Analyst II",
+               "IT Operations & CMDB Analyst",
+               "Business Systems Analyst",
+               "Senior Endpoint Security Operations Analyst (Global Security)",
+               "Network Operations Analyst"]
+
+    def group(self, name):
+        for gname, subject, rescue in jr.TITLE_VETOES:
+            if gname == name:
+                return subject, rescue
+        self.fail(f"no veto group named {name!r}")
+
+    def test_every_group_is_named(self):
+        """The name is what makes a suppression countable instead of silent."""
+        names = [g[0] for g in jr.TITLE_VETOES]
+        self.assertEqual(len(names), len(set(names)), "duplicate group name")
+        for name in ("civil-infrastructure", "business-function",
+                     "support-analyst"):
+            self.assertIn(name, names)
+
+    def test_the_real_business_titles_are_vetoed(self):
+        for title in self.BUSINESS:
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, "x"), (0, None))
+
+    def test_the_real_analyst_titles_are_vetoed(self):
+        for title in self.ANALYST:
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, "x"), (0, None))
+
+    def test_vetoed_names_the_group_that_did_it(self):
+        """A bool would have been enough to filter and useless to explain."""
+        self.assertEqual(jr.vetoed("Customer Success Platform Administrator"),
+                         "business-function")
+        self.assertEqual(jr.vetoed("IT Operations Analyst II"),
+                         "support-analyst")
+        self.assertEqual(jr.vetoed("Water/Wastewater Infrastructure Specialist"),
+                         "civil-infrastructure")
+        self.assertIsNone(jr.vetoed("DevOps Engineer"))
+
+    def test_the_civil_rescue_would_have_saved_these(self):
+        """The whole argument for per-group rescue lists, asserted directly.
+
+        If this ever fails it means the civil rescue was narrowed, and these
+        two groups could then be collapsed back into one."""
+        _subject, civil_rescue = self.group("civil-infrastructure")
+        for title in ("Customer Success Platform Administrator",
+                      "IT Operations Analyst II"):
+            with self.subTest(title=title):
+                self.assertTrue(
+                    civil_rescue.search(title),
+                    f"{title} is no longer rescued by the civil list, so the "
+                    f"reason these are separate groups has gone away")
+
+    def test_an_infra_token_still_rescues(self):
+        """The groups must not swallow real work that happens to sit in a
+        business domain or carry an analyst title."""
+        for title in ("Salesforce DevOps Engineer",
+                      "SAP Basis Administrator, Azure",
+                      "Cloud Operations Analyst",
+                      "DevOps Engineer / Analyst",
+                      "Linux Systems Analyst"):
+            with self.subTest(title=title):
+                self.assertIsNone(jr.vetoed(title))
+
+    def test_industry_words_are_not_function_words(self):
+        """"clinical" and "pharmaceutical" were in the first draft of the
+        business group and cost "IT Infrastructure Services 4 - Clinical
+        Critical Messaging", a real infrastructure role. A DevOps job at a
+        hospital is still a DevOps job - this list is what a team DOES."""
+        subject, _rescue = self.group("business-function")
+        for word in ("clinical", "pharmaceutical", "healthcare", "banking",
+                     "insurance", "retail", "telecom"):
+            with self.subTest(word=word):
+                self.assertIsNone(subject.search(f"{word} platform engineer"))
+        self.assertIsNone(
+            jr.vetoed("IT Infrastructure Services 4 - Clinical Critical "
+                      "Messaging"))
+
+    def test_the_core_search_survives_every_group(self):
+        """The canaries the loader guards with, asserted end to end."""
+        for title in jr.VETO_CANARIES:
+            with self.subTest(title=title):
+                self.assertIsNone(jr.vetoed(title),
+                                  f"{title} is the search, not a veto target")
+
+    def test_veto_false_asks_what_the_rules_alone_would_say(self):
+        """The seam the footer counter needs. Without it the sweep reported
+        468 suppressions on a run that really withheld a handful, because
+        most vetoed titles are tier 0 on the rules too."""
+        # a rule WOULD have admitted this one - a real suppression
+        self.assertEqual(jr.title_match("IT Operations Analyst II", "x"),
+                         (0, None))
+        self.assertTrue(
+            jr.title_match("IT Operations Analyst II", "x", veto=False)[0],
+            "precondition: a rule admits this, which is why it is a veto")
+        # no rule would have - vetoed, but not a suppression worth counting
+        for title in ("Sales Analyst", "Payroll Analyst",
+                      "Water Treatment Operator"):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    jr.title_match(title, "x", veto=False), (0, None),
+                    f"{title} is tier 0 on the rules alone, so counting it "
+                    f"as a suppression would overstate what the veto took")
+
+    def test_veto_true_is_the_default(self):
+        """Every other caller - inbox.py, discover.py, the sweep itself - must
+        keep getting the vetoed answer without passing anything."""
+        self.assertEqual(jr.title_match("IT Operations Analyst II", "x"),
+                         jr.title_match("IT Operations Analyst II", "x",
+                                        veto=True))
+
+    def test_a_vetoed_title_is_not_a_near_miss(self):
+        """Same treatment the civil group gets: tier 0 by decision is not a
+        miss, and without this the nearmiss table fills with the 72 titles
+        these groups exist to remove."""
+        for title in self.BUSINESS + self.ANALYST:
+            with self.subTest(title=title):
+                self.assertFalse(jr.near_miss(title))
 
 
 # The veto LOADER's refusal cases live in selftest.py, not here. They need

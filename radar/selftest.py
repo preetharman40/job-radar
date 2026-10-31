@@ -173,13 +173,30 @@ def _rule_guards():
         # blind while exiting 0; an empty rescue matches everything, which
         # disables the veto while looking like it works.
         ("title veto subject emptied", "titles.json",
-         lambda d: d["veto"].update(subject="")),
+         lambda d: d["veto"]["groups"][0].update(subject="")),
         ("title veto rescue emptied", "titles.json",
-         lambda d: d["veto"].update(rescue="")),
+         lambda d: d["veto"]["groups"][0].update(rescue="")),
         ("title veto regex broken", "titles.json",
-         lambda d: d["veto"].update(subject="a(b" + "x" * 50)),
+         lambda d: d["veto"]["groups"][0].update(subject="a(b" + "x" * 50)),
         ("title veto section missing", "titles.json",
          lambda d: d.pop("veto")),
+        # The veto became a LIST of groups on 2026-10-31, which added three
+        # ways to break it that a single-group file could not express.
+        ("title veto groups emptied", "titles.json",
+         lambda d: d["veto"].update(groups=[])),
+        ("title veto groups not a list", "titles.json",
+         lambda d: d["veto"].update(groups={"name": "x"})),
+        ("title veto group unnamed", "titles.json",
+         lambda d: d["veto"]["groups"][0].pop("name")),
+        # The failure a length floor could never catch and a canary does: a
+        # subject broad enough to swallow the search itself. This is what an
+        # over-eager hand edit looks like - not an empty pattern, a plausible
+        # one. "engineer" would veto every title the tool exists to find.
+        ("title veto subject swallows the search", "titles.json",
+         lambda d: d["veto"]["groups"][0].update(subject=r"\bengineer\b")),
+        # And the mirror: a rescue so broad it silently disables its group.
+        ("title veto rescue rescues anything", "titles.json",
+         lambda d: d["veto"]["groups"][0].update(rescue=r"\w+")),
     ]
     keep, missed = jr.RULES_DIR, []
     try:
@@ -206,10 +223,26 @@ def _rule_guards():
         jr.RULES_DIR = keep
         if len(jr._title_rules()) < 20 or len(jr._skill_groups()) < 50:
             missed.append("the real rule files no longer load")
-        subject, rescue = jr._title_veto()
-        if not (subject.search("Wastewater Infrastructure Specialist")
-                and rescue.search("Cloud Infrastructure Specialist")):
-            missed.append("the real title veto no longer behaves")
+        groups = {name: (subj, resc) for name, subj, resc in jr._title_veto()}
+        for name, vetoed, spared in (
+                ("civil-infrastructure", "Wastewater Infrastructure Specialist",
+                 "Cloud Infrastructure Specialist"),
+                ("business-function", "Finance Systems Analyst",
+                 "Salesforce DevOps Engineer"),
+                ("support-analyst", "IT Operations Analyst II",
+                 "Cloud Operations Analyst")):
+            if name not in groups:
+                missed.append(f"veto group {name!r} has gone")
+                continue
+            subject, rescue = groups[name]
+            # One title the group must take and one it must leave: a group
+            # that stopped firing and a group that eats everything both look
+            # like "loads fine" from here otherwise.
+            if not (subject.search(vetoed) and not rescue.search(vetoed)):
+                missed.append(f"veto group {name!r} no longer vetoes "
+                              f"{vetoed!r}")
+            if subject.search(spared) and not rescue.search(spared):
+                missed.append(f"veto group {name!r} now vetoes {spared!r}")
     finally:
         jr.RULES_DIR = keep
     return not missed, (f"{len(CASES)} bad-data cases all refused"

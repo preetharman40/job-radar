@@ -1120,6 +1120,7 @@ def main():
                       json.load(open(jr.TARGETS)).get("devops_vendors", []))
 
     rows, links, employers = [], set(), {}
+    veto_hits = {}
     msgs, now = 0, datetime.now(timezone.utc).isoformat(timespec="seconds")
     for i in ids:
         try:
@@ -1147,6 +1148,14 @@ def main():
         for f in found:
             tier, fam = jr.title_match(f["title"], source)
             if not tier:
+                # Count the ones a RULE would have taken, the same way the
+                # sweep footer does. A suppression has to be visible: this
+                # lane drops tier 0 silently, and after the veto groups
+                # shipped that silence covers titles that might be wanted
+                # back. The digest says how many and under which group.
+                v = jr.vetoed(f["title"])
+                if v and jr.title_match(f["title"], source, veto=False)[0]:
+                    veto_hits[v] = veto_hits.get(v, 0) + 1
                 continue
             # The posting's own location when the format gave one, and only
             # then a guess - from this record's blob, never from the whole
@@ -1276,7 +1285,9 @@ def main():
     L = ["# Inbox — job alert emails",
          f"_{len(rows)} roles from {msgs} new messages · "
          f"{len(fresh)} not already found by the ATS poller · "
-         f"{len(sendable)} new to you_", ""]
+         f"{len(sendable)} new to you"
+         + "".join(f" · {n} vetoed: {name}"
+                   for name, n in sorted(veto_hits.items())) + "_", ""]
     sendable_urls = {r["url"] for r in sendable}
     for r in rows:
         if r["url"] not in fresh_urls:

@@ -64,7 +64,7 @@ __all__ = [
     # paths and config
     "DB", "TARGETS", "TRACKER", "NTFY_FILE", "RULES_DIR", "HERE", "VENDORS",
     # title / level / location / score - the pure core
-    "TITLE_RULES", "TITLE_VETO", "TITLE_RESCUE",
+    "TITLE_RULES", "TITLE_VETOES", "vetoed", "VETO_CANARIES",
     "SKILL_GROUPS", "SKILLS", "NOT_CANADA",
     "title_match", "level_of", "classify_location", "provinces_of",
     "near_miss", "near_miss_location",
@@ -171,36 +171,74 @@ def _skill_groups():
 
 
 def _title_veto():
-    """-> (subject_rx, rescue_rx). Subjects that are not an IT job at all.
+    """-> tuple of (name, subject_rx, rescue_rx). Subjects that are not this job.
 
-    The one loader whose FAILURE MODE IS UNBOUNDED IN BOTH DIRECTIONS, so both
-    are refused rather than defaulted. An empty `subject` compiles to
+    The one loader whose FAILURE MODE IS UNBOUNDED IN BOTH DIRECTIONS, so a bad
+    group is refused rather than defaulted. An empty `subject` compiles to
     re.compile(""), which matches every string, so every title would veto and
     the sweep would match nothing while exiting 0 - the same silent blindness a
     truncated titles.json produces. An empty `rescue` matches everything too,
-    which disables the veto instead: harmless, but it would look like it was
-    working. A length floor catches both, and a truncated hand edit besides.
+    which disables that group instead: harmless, but it would look like it was
+    working.
+
+    Both are caught by proving each group against canaries rather than by
+    measuring pattern length. A length floor was the first version of this
+    check and it was wrong: `\\banalyst\\b` is a legitimate 11-character
+    subject, and a floor that admits it admits most truncations too. What
+    actually matters is behavioural - a subject must not swallow the core
+    roles, and a rescue must not rescue a job from another profession - and
+    that is what is asserted here.
     """
     path = os.path.join(RULES_DIR, "titles.json")
     try:
         with open(path) as f:
-            v = json.load(f)["veto"]
-        pats = {k: v[k] for k in ("subject", "rescue")}
+            groups = json.load(f)["veto"]["groups"]
+        if not isinstance(groups, list) or not groups:
+            raise ValueError(f"veto.groups is {type(groups).__name__}, "
+                             f"expected a non-empty list")
+        spec = [(g["name"], g["subject"], g["rescue"]) for g in groups]
     except Exception as e:
         raise RuntimeError(f"cannot read the title veto from {path}: "
                            f"{type(e).__name__}: {e}")
-    for name, pat in pats.items():
-        if not isinstance(pat, str) or len(pat) < 40:
+    out = []
+    for name, subject, rescue in spec:
+        pats = {"subject": subject, "rescue": rescue}
+        for which, pat in pats.items():
+            if not isinstance(pat, str) or not pat:
+                raise RuntimeError(
+                    f"{path}: veto group {name!r} has a "
+                    f"{type(pat).__name__} {which} - refusing, because an "
+                    f"empty pattern matches every title")
+            try:
+                re.compile(pat)
+            except re.error as e:
+                raise RuntimeError(f"{path}: veto group {name!r} {which} "
+                                   f"does not compile: {e}")
+        subj = re.compile(subject, re.I)
+        resc = re.compile(rescue, re.I)
+        # A subject that matches any of these would blind the whole sweep, and
+        # it is the exact shape an emptied or over-broad pattern takes.
+        for canary in VETO_CANARIES:
+            if subj.search(canary):
+                raise RuntimeError(
+                    f"{path}: veto group {name!r} subject matches "
+                    f"{canary!r} - refusing, because that is the search")
+        # And a rescue has to actually discriminate: an emptied one matches
+        # this too, which is how "the veto quietly stopped firing" is caught.
+        if resc.search(VETO_NON_IT):
             raise RuntimeError(
-                f"{path}: veto.{name} is {type(pat).__name__} of length "
-                f"{len(pat) if isinstance(pat, str) else '-'} - refusing, "
-                f"because an empty pattern matches every title")
-        try:
-            re.compile(pat)
-        except re.error as e:
-            raise RuntimeError(f"{path}: veto.{name} does not compile: {e}")
-    return (re.compile(pats["subject"], re.I),
-            re.compile(pats["rescue"], re.I))
+                f"{path}: veto group {name!r} rescue matches {VETO_NON_IT!r} "
+                f"- refusing, because it would rescue anything")
+        out.append((name, subj, resc))
+    return tuple(out)
+
+
+# Held apart from _title_veto so the contract is readable as data, and so a
+# test can assert on the same strings the loader guards with.
+VETO_CANARIES = ("DevOps Engineer", "Site Reliability Engineer",
+                 "Cloud Engineer", "Kubernetes Engineer",
+                 "Platform Engineer", "Linux Administrator")
+VETO_NON_IT = "Water Treatment Operator"
 
 
 TITLE_RULES = _title_rules()
@@ -208,7 +246,22 @@ TITLE_RULES = _title_rules()
 # What a posting is ABOUT, when that makes it not an IT job however well its
 # title fits a rule. The only thing in the rule set that can lower a tier; see
 # `veto.note` in rules/titles.json for the measurement that set it.
-TITLE_VETO, TITLE_RESCUE = _title_veto()
+TITLE_VETOES = _title_veto()
+
+
+def vetoed(title):
+    """-> the name of the veto group that rejects `title`, or None.
+
+    Returns the NAME rather than a bool so a suppression can be counted and
+    printed per group. A veto that cannot be counted is a veto that gets
+    blamed for every missing posting, and the only way to answer that is to
+    have the sweep say how many it dropped and under which heading.
+    """
+    t = (title or "").lower()
+    for name, subject, rescue in TITLE_VETOES:
+        if subject.search(t) and not rescue.search(t):
+            return name
+    return None
 
 # Straight off the resume. Ranks, never filters. The groups, their weights and
 # the measurement that set them are in rules/skills.json - including why
@@ -403,7 +456,7 @@ def near_miss(title):
     # veto was added to remove: "infrastructure" is in NEAR_TECH and
     # "specialist" is a head noun, so every one of them would qualify. Same
     # treatment as networking, and for the same reason.
-    if TITLE_VETO.search(t) and not TITLE_RESCUE.search(t):
+    if vetoed(t):
         return False
     return bool(NEAR_TECH.search(t) and NEAR_HEAD.search(t)
                 and not NEAR_BIZ.search(t) and not NEAR_SWE.search(t))
@@ -651,15 +704,22 @@ def classify_location(loc):
 
 # ----------------------------------------------------------------- scoring ---
 
-def title_match(title, company):
-    """-> (tier, family) or (0, None). Vendor titles only count at vendors."""
+def title_match(title, company, veto=True):
+    """-> (tier, family) or (0, None). Vendor titles only count at vendors.
+
+    `veto=False` asks what the RULES alone would have said. The sweep uses it
+    to count what the veto actually removed: most vetoed titles - "Sales
+    Analyst", "Water Treatment Operator" - are tier 0 on the rules too, and
+    counting those would report 468 suppressions on a sweep that really
+    withheld a handful. Nothing but the counter should pass it.
+    """
     t = (title or "").lower()
     # Before the rules, not after: a civil-engineering job is not a low-tier IT
     # job, it is a different profession, and no rule in the list can tell the
     # difference because "infrastructure" belongs to both vocabularies. This is
     # the one place a tier can be LOWERED - everywhere else the rules are
     # additive - so it is one subject pattern with one rescue, and nothing more.
-    if TITLE_VETO.search(t) and not TITLE_RESCUE.search(t):
+    if veto and vetoed(t):
         return 0, None
     is_vendor = company.lower() in VENDORS
     best = (0, None)
@@ -1470,6 +1530,7 @@ def main():
     near = []
     near_loc = []
     shortlist = []
+    veto_hits = {}
     for j in jobs:
         bucket, keep = classify_location(j["location"])
         if not keep or bucket not in buckets:
@@ -1488,6 +1549,16 @@ def main():
             continue
         tier, fam = title_match(j["title"], j["company"])
         if tier == 0:
+            # Counted here and not inside title_match, which is pure and is
+            # called from three other modules. The veto is the only gate
+            # that removes a posting on a judgement rather than a fact, so
+            # it is the one that has to report its own volume.
+            v = vetoed(j["title"])
+            # Only count it if a RULE would have admitted it. Otherwise the
+            # line reports every "Sales Analyst" on every board and reads as
+            # though the veto is eating the search.
+            if v and title_match(j["title"], j["company"], veto=False)[0]:
+                veto_hits[v] = veto_hits.get(v, 0) + 1
             # Same level and age tests the pipeline would have applied, so the
             # log holds postings that WOULD have been shown but for the title
             # rule - not every stale exec req on a Canadian board.
@@ -1709,7 +1780,12 @@ def main():
          # a count of rejects worth a human glance, read with `nearmiss.py`.
          + (f" · {len(near)} near-miss titles logged" if near else "")
          + (f" · {len(near_loc)} near-miss locations logged"
-            if near_loc else "") + "_", ""]
+            if near_loc else "")
+         # The veto saying what it took. Zero groups print nothing, so a
+         # quiet sweep stays quiet, but a group that suddenly doubles is
+         # visible in the same line that reports everything else.
+         + "".join(f" · {n} vetoed: {name}"
+                   for name, n in sorted(veto_hits.items())) + "_", ""]
 
     by_fam = {}
     for j in show:
