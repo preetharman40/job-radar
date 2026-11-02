@@ -3997,3 +3997,104 @@ Security Operations Analyst`, `Application & Infrastructure Analyst` — which i
 why that group's rescue omits `vmware`, `endpoint`, `reliability` and bare
 `infrastructure` on purpose. Widen the rescue if that judgement changes; do not
 touch the subject.
+
+### a relative guard cannot see a ratchet
+
+On 2026-11-02 the Sunday refresh rebuilt `fast.json` at **71 boards, down from
+100**, and every check in the system stayed green. The shrink guard was:
+
+```python
+if prev and kept < prev * 0.6:      # refuse a drop of more than 40%
+```
+
+71/100 is a 29% drop, so it passed — correctly, by its own terms. The problem
+is what it compares against: the **previous file**. `100 → 71 → 50 → 35 → 25`
+is four consecutive Sundays, each one inside tolerance, ending with a 5-minute
+lane that polls almost nothing. The guard has no memory, so it cannot see the
+trend it exists to prevent. A floor can:
+
+```python
+if a.min and kept < a.min:          # 60, full stop, no history needed
+```
+
+Both guards are kept, because they fail differently: the relative one catches a
+sudden collapse at any size, the absolute one catches the slow bleed.
+
+#### the real bug was the selection, not the guard
+
+The 29% drop was not noise. `make_fast` built the lane from one question —
+*which boards appeared in this sweep's digest?* — and the veto groups that
+shipped two days earlier withheld 55 postings from that sweep, so 33 boards
+stopped looking like producers. Eight demonstrably for that reason (abcellera's
+*Clinical Systems Analyst*, City of Edmonton's *Application & Infrastructure
+Analyst*, OpenText's *SAP Systems Analyst*, Dexterra, SGS, City of Toronto,
+Aritzia, American Iron and Metal).
+
+But even without the veto the criterion was wrong, because **one sweep is one
+sample**. A board that posts a relevant req most weeks and happened to post
+nothing that Sunday was evicted for the following week. The lane is now a
+*fixed size*, ranked over a window:
+
+```
+1. days in the last 30 on which the board produced a posting that passed the gate
+2. how many postings that was
+3. has it EVER produced something the gate still wants
+4. did it produce in the sweep that triggered this rebuild      (the old whole criterion)
+5. peak req volume
+```
+
+Days before postings, deliberately: a board that dumped five reqs on one
+Tuesday is not worth 156 polls a day, and one posting on three separate days
+is. Sorting on raw count ranks them the wrong way round.
+
+Keys 4 and 5 being last is the point. The digest went from being the selection
+to being a tiebreak, which **designs out** the failure the 40% guard was bolted
+on to catch: a truncated or incremental digest can no longer shrink the lane,
+because it is not what the lane is built from. The selftest check that asserted
+"a thin digest makes make_fast refuse" had to be rewritten — and note it would
+now have *overwritten the live fast.json* with a passing run, so every case in
+it writes to `--out` in a temp directory.
+
+#### `seen` records what passed the gate ON THE DAY
+
+The first build of the new ranking promoted abcellera, Dexterra, SGS, City of
+Toronto, Aritzia and the Government of Alberta straight back into the fast
+lane — the exact boards the veto had just demoted. Their rows are still in
+`seen`, written before those groups existed, and the ranking was counting them.
+
+A board earns a slot on what it produces that is wanted **today**, so every
+historical row is re-judged through the live gate before it counts:
+
+```python
+hist = history(conn, a.window, keep=lambda t, c: bool(jr.title_match(t, c)[0]))
+```
+
+That is the difference between a cache of past decisions and a measurement.
+If `job_radar` cannot be imported the ranking still runs, but it says so on
+stderr rather than quietly ranking on stale verdicts.
+
+#### filling the tail on volume alone hands slots to the wrong firms
+
+A fixed-size lane always has a tail of boards with no recent production, and
+ranking that tail on `board_health.best_count` gave slots to **AECOM, Artelia,
+Continental and Collabera** — large civil-engineering and staffing firms that
+post constantly and whose postings this tool now vetoes by design. Hence key 3,
+"has ever produced something the gate still wants", sitting above volume. It is
+a weak signal and it beats *is big*.
+
+The effect, measured:
+
+```
+                              recent   proven   volume-only
+raw history, no gate            100       -          0      ← re-promoted the vetoed boards
+gate-filtered, volume filler     88       -         12      ← AECOM, Artelia, Continental
+gate-filtered, proven filler     88      12          0      ← shipped
+```
+
+All 100 slots now hold a board with real evidence behind it, and `seen` only
+reaches back to 2026-09-18, so key 3 is thin today and gets stronger every week.
+
+One board left the lane against the previous 71: `successfactors/Celestica`.
+Thirty rejoined, including the eight the veto had evicted *on merit* — they are
+back because they produce other things that still pass, not because the history
+was taken at face value.

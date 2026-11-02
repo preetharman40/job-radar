@@ -1,5 +1,5 @@
 {
-  "_comment": "FAST LANE - the boards that actually produce matches, polled every few minutes so a new req reaches your phone quickly. A subset of targets.json, not a replacement. Regenerate with make_fast.py after a full sweep.",
+  "_comment": "FAST LANE - the 100 boards that produce relevant postings most often, ranked by days active in the trailing 30 days then by req volume. Polled every few minutes so a new req reaches your phone quickly. A subset of targets.json, not a replacement. Regenerate with make_fast.py.",
   "devops_vendors": [
     "1password",
     "airbyte",
@@ -88,26 +88,33 @@
     "zscaler"
   ],
   "greenhouse": [
+    "appnovation",
     "aylo",
     "beyondtrust",
+    "braze",
     "capco",
     "catonetworks",
+    "censys",
     "coconutsoftware",
     "contactmonkey",
     "dropbox",
     "elastic",
+    "fivetran",
     "geotab",
     "gitlab",
     "globalrelay",
+    "instacart",
     "later",
     "okta",
     "stackadapt",
     "stay22",
     "tailscale",
+    "tenstorrent",
     "trolley",
     "workleap"
   ],
   "lever": [
+    "crypto",
     "smiledigitalhealth",
     "sophos",
     "telesat"
@@ -115,12 +122,19 @@
   "ashby": [
     "1password",
     "airbyte",
+    "benevity",
+    "cerebras",
+    "clickhouse",
     "coder",
     "cohere",
     "elevenlabs",
+    "facilityos",
     "homebase",
     "influxdata",
+    "lightspeedhq",
     "maintainx",
+    "people-culture-talent",
+    "reflow",
     "resend",
     "supabase",
     "telus-digital"
@@ -135,8 +149,13 @@
     "swtch-energy"
   ],
   "smartrecruiters": [
+    "AccorHotel",
+    "AristaNetworks",
+    "EgisGroup",
     "GDMSI",
-    "Medfar"
+    "Medfar",
+    "Scalian",
+    "Ubisoft2"
   ],
   "breezy": [
     "auctria"
@@ -193,6 +212,13 @@
       "country_facet": "Location_Country"
     },
     {
+      "name": "Enbridge",
+      "tenant": "enbridge",
+      "cluster": "wd3",
+      "site": "enbridge_careers",
+      "country_facet": "locationCountry"
+    },
+    {
       "name": "Canadian Tire",
       "tenant": "canadiantirecorporation",
       "cluster": "wd3",
@@ -205,6 +231,13 @@
       "cluster": "wd1",
       "site": "Suncor_External",
       "country_facet": "locationCountry"
+    },
+    {
+      "name": "UBC",
+      "tenant": "ubc",
+      "cluster": "wd10",
+      "site": "ubcstaffjobs",
+      "country_facet": null
     },
     {
       "name": "Desjardins",
@@ -220,6 +253,20 @@
       "country_facet": null
     },
     {
+      "name": "Workday",
+      "tenant": "workday",
+      "cluster": "wd5",
+      "site": "Workday",
+      "country_facet": null
+    },
+    {
+      "name": "Ledcor",
+      "tenant": "ledcor",
+      "cluster": "wd3",
+      "site": "Ledcor_External",
+      "country_facet": null
+    },
+    {
       "name": "TC Energy",
       "tenant": "tcenergy",
       "cluster": "wd3",
@@ -231,6 +278,19 @@
       "tenant": "tmx",
       "cluster": "wd3",
       "site": "TMX_Careers"
+    },
+    {
+      "name": "PwC Canada",
+      "tenant": "pwc",
+      "cluster": "wd3",
+      "site": "Global_Experienced_Careers",
+      "max_pages": 2
+    },
+    {
+      "name": "Autodesk",
+      "tenant": "autodesk",
+      "cluster": "wd1",
+      "site": "Ext"
     },
     {
       "name": "Broadridge",
@@ -257,6 +317,18 @@
       "site": "WepointCA"
     },
     {
+      "name": "Proofpoint",
+      "tenant": "proofpoint",
+      "cluster": "wd5",
+      "site": "ProofpointCareers"
+    },
+    {
+      "name": "TD SYNNEX",
+      "tenant": "synnex",
+      "cluster": "wd5",
+      "site": "hyvecareers"
+    },
+    {
       "name": "Accenture",
       "tenant": "accenture",
       "cluster": "wd103",
@@ -267,6 +339,14 @@
     {
       "name": "Bell",
       "base": "https://jobs.bell.ca/ca/en"
+    },
+    {
+      "name": "Air Canada",
+      "base": "https://careers.aircanada.com/ca/en"
+    },
+    {
+      "name": "Just Eat Takeaway / SkipTheDishes",
+      "base": "https://careers.justeattakeaway.com/global/en"
     }
   ],
   "successfactors": [
@@ -286,10 +366,6 @@
       "name": "University of Toronto",
       "base": "https://jobs.utoronto.ca",
       "default_location": "Toronto, ON"
-    },
-    {
-      "name": "Celestica",
-      "base": "https://careers.celestica.com"
     },
     {
       "name": "Imperial Oil",
@@ -361,7 +437,12 @@
       "base": "https://jobs.ea.com/en_US/careers"
     }
   ],
-  "teamtailor": [],
+  "teamtailor": [
+    {
+      "name": "commonsku",
+      "base": "https://commonsku.na.teamtailor.com"
+    }
+  ],
   "ultipro": [
     {
       "name": "Haventree Bank",

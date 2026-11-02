@@ -28,6 +28,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1027,6 +1028,133 @@ class TestWorkdayLocationFallback(unittest.TestCase):
         self.assertEqual(self.wd().wd_location(
             {"locationsText": "", "bulletFields": ["R00360485"],
              "externalPath": ""}), "")
+
+
+class TestFastLaneRanking(unittest.TestCase):
+    """How the 5-minute lane picks its boards, rewritten 2026-11-02.
+
+    Before that the lane was "every board that produced in the last full
+    sweep", which made one quiet Sunday enough to evict a board that produces
+    every week - and did: it fell 100 -> 71 in a single rebuild, inside the
+    40% shrink guard, with every check green.
+    """
+
+    def _mf(self):
+        return _mod("make_fast", "make_fast.py")
+
+    def _db(self, rows):
+        """An in-memory `seen` + `board_health` holding exactly `rows`."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE seen(url, title, company, first_seen)")
+        conn.execute("CREATE TABLE board_health(board, best_count)")
+        for i, (co, title, day) in enumerate(rows):
+            conn.execute("INSERT INTO seen VALUES(?,?,?,?)",
+                         (f"u{i}", title, co, day))
+        return conn
+
+    def test_days_outrank_a_single_burst(self):
+        """The whole point of counting days before postings. A board that
+        dumped five reqs on one Tuesday is not a board to poll every five
+        minutes; one posting on three separate days is."""
+        mf = self._mf()
+        rows = ([("burst", "DevOps Engineer", "2026-11-01T10:00:00+00:00")] * 5
+                + [("steady", "DevOps Engineer", f"2026-10-3{d}T10:00:00+00:00")
+                   for d in (0, 1)]
+                + [("steady", "DevOps Engineer", "2026-11-01T10:00:00+00:00")])
+        hist = mf.history(self._db(rows), 30,
+                          now=datetime(2026, 11, 2, tzinfo=timezone.utc))
+        self.assertEqual(hist["steady"][0], 3)
+        self.assertEqual(hist["burst"][0], 1)
+        self.assertGreater(hist["burst"][1], hist["steady"][1],
+                           "precondition: the burst has MORE postings")
+        full = {"greenhouse": ["steady", "burst"]}
+        _fast, ranked = mf.rank(full, hist, {}, set(), target=1)
+        self.assertEqual(ranked[0][5:7], ("greenhouse", "steady"))
+
+    def test_history_is_rejudged_by_the_live_gate(self):
+        """`seen` records what passed the gate ON THE DAY. The first build of
+        this ranking promoted abcellera, Dexterra, City of Toronto and the
+        Government of Alberta straight back into the fast lane, because their
+        rows predate the veto groups that now reject them."""
+        mf = self._mf()
+        rows = [("goodco", "DevOps Engineer", "2026-11-01T10:00:00+00:00"),
+                ("badco", "IT Operations Analyst II",
+                 "2026-11-01T10:00:00+00:00"),
+                ("badco", "Water/Wastewater Infrastructure Specialist",
+                 "2026-11-01T10:00:00+00:00")]
+        conn = self._db(rows)
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        raw = mf.history(conn, 30, now=now)
+        self.assertIn("badco", raw, "precondition: unfiltered history keeps it")
+        gated = mf.history(conn, 30, now=now,
+                           keep=lambda t, c: bool(jr.title_match(t, c)[0]))
+        self.assertIn("goodco", gated)
+        self.assertNotIn("badco", gated,
+                         "a board whose postings are all vetoed must not earn "
+                         "a 5-minute slot on them")
+
+    def test_proven_relevance_outranks_req_volume(self):
+        """The lane is a fixed size, so its tail is always boards with no
+        recent production - and ranking that tail on req count alone handed
+        slots to AECOM, Artelia and Continental, large civil-engineering and
+        staffing firms whose postings this tool vetoes by design."""
+        mf = self._mf()
+        full = {"smartrecruiters": ["aecom", "smallbutreal"]}
+        vol = {"smartrecruiters/aecom": 900,
+               "smartrecruiters/smallbutreal": 3}
+        _fast, ranked = mf.rank(full, {}, vol, set(), target=1,
+                                ever={"smallbutreal"})
+        self.assertEqual(ranked[0][6], "smallbutreal",
+                         "req volume beat proven relevance")
+
+    def test_volume_still_breaks_a_tie_with_no_other_evidence(self):
+        mf = self._mf()
+        full = {"greenhouse": ["big", "small"]}
+        vol = {"greenhouse/big": 500, "greenhouse/small": 1}
+        _fast, ranked = mf.rank(full, {}, vol, set(), target=1, ever=set())
+        self.assertEqual(ranked[0][6], "big")
+
+    def test_never_fast_platforms_cannot_be_ranked_in(self):
+        """jobbank honours a Crawl-delay and insightglobal is Cloudflare-
+        fronted; both are 30-minute-lane only however well they produce."""
+        mf = self._mf()
+        full = {"jobbank": [{"name": "jb"}], "insightglobal": [{"name": "ig"}],
+                "greenhouse": ["ok"]}
+        hist = {"jb": (9, 9), "ig": (9, 9), "ok": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=10)
+        self.assertEqual(fast["jobbank"], [])
+        self.assertEqual(fast["insightglobal"], [])
+        self.assertEqual(fast["greenhouse"], ["ok"])
+
+    def test_feed_boards_are_excluded_by_shape(self):
+        """A successfactors "feed": true target downloads the whole board -
+        Deloitte's is 9.16 MB - which is the wrong trade at 156 sweeps a day."""
+        mf = self._mf()
+        full = {"successfactors": [{"name": "deloitte", "feed": True},
+                                   {"name": "ordinary"}]}
+        hist = {"deloitte": (9, 9), "ordinary": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=10)
+        self.assertEqual([t["name"] for t in fast["successfactors"]],
+                         ["ordinary"])
+
+    def test_the_sort_is_total_so_rebuilds_are_byte_identical(self):
+        """Every tie resolved, so a diff in git means the evidence changed
+        rather than that dict iteration order did."""
+        mf = self._mf()
+        full = {"greenhouse": ["a", "b", "c"], "lever": ["a", "d"]}
+        args = (full, {}, {}, set())
+        first = mf.rank(*args, target=3)[1]
+        for _ in range(5):
+            self.assertEqual(mf.rank(*args, target=3)[1], first)
+
+    def test_targets_order_is_preserved_in_the_output(self):
+        """Emitted in targets.json order, not rank order, so a week-on-week
+        diff shows which boards moved instead of re-ordering all 100."""
+        mf = self._mf()
+        full = {"greenhouse": ["first", "second", "third"]}
+        hist = {"third": (5, 5), "first": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=2)
+        self.assertEqual(fast["greenhouse"], ["first", "third"])
 
 
 class TestMakeFastCoverage(unittest.TestCase):

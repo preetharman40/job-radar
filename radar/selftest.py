@@ -39,6 +39,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sqlite3
 import sys
@@ -664,17 +665,58 @@ def _health_report():
                                  else f"rc={rc} {out.strip()[-120:]}")
 
 
-@check(4, "make_fast refuses to shrink the fast lane")
+@check(4, "make_fast fills the lane and honours its floor")
 def _guard():
-    bad = "/tmp/.selftest-digest.md"
-    open(bad, "w").write("- **onlyone** · nothing\n")
+    """Three things, and the live fast.json must survive all of them.
+
+    The old version of this check wrote a one-producer digest and asserted
+    make_fast REFUSED. That stopped being the contract on 2026-11-02: the
+    digest is now one tiebreak out of five rather than the selection itself,
+    so a thin digest produces a full lane instead of an empty one. The failure
+    mode was designed out, so the check that guarded it had to change - and
+    note it would now have OVERWRITTEN fast.json with a passing run, which is
+    why every case here writes to --out in /tmp.
+    """
+    out_dir = tempfile.mkdtemp(prefix=".selftest-fast-")
+    thin = os.path.join(out_dir, "digest.md")
+    with open(thin, "w") as fh:
+        fh.write("- **onlyone** · nothing\n")
     before = open(os.path.join(HERE, "fast.json")).read()
-    rc, out = sh(sys.executable, os.path.join(HERE, "make_fast.py"), bad, timeout=60)
-    os.remove(bad)
-    unchanged = open(os.path.join(HERE, "fast.json")).read() == before
-    return rc != 0 and unchanged, ("guard held, fast.json untouched"
-                                   if rc != 0 and unchanged
-                                   else f"GUARD FAILED rc={rc}, unchanged={unchanged}")
+    probs = []
+    try:
+        # 1. a thin digest must NOT shrink the lane any more
+        dest = os.path.join(out_dir, "a.json")
+        rc, _o = sh(sys.executable, os.path.join(HERE, "make_fast.py"), thin,
+                    "--out", dest, timeout=120)
+        if rc != 0:
+            probs.append(f"a thin digest still fails the build (rc={rc})")
+        else:
+            got = sum(len(v) for k, v in json.load(open(dest)).items()
+                      if isinstance(v, list) and k != "devops_vendors")
+            if got < 90:
+                probs.append(f"thin digest produced only {got} boards")
+
+        # 2. the ABSOLUTE floor must refuse, and write nothing
+        dest2 = os.path.join(out_dir, "b.json")
+        rc2, _o2 = sh(sys.executable, os.path.join(HERE, "make_fast.py"),
+                      "--target", "5", "--out", dest2, timeout=120)
+        if rc2 == 0 or os.path.exists(dest2):
+            probs.append(f"floor did not hold (rc={rc2}, "
+                         f"wrote={os.path.exists(dest2)})")
+
+        # 3. an unreadable database must refuse rather than rank on nothing
+        dest3 = os.path.join(out_dir, "c.json")
+        rc3, _o3 = sh(sys.executable, os.path.join(HERE, "make_fast.py"),
+                      "--db", os.path.join(out_dir, "no.sqlite3"),
+                      "--out", dest3, timeout=120)
+        if rc3 == 0 or os.path.exists(dest3):
+            probs.append(f"missing db did not refuse (rc={rc3})")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    if open(os.path.join(HERE, "fast.json")).read() != before:
+        probs.append("THE LIVE fast.json WAS MODIFIED by this check")
+    return not probs, ("lane fills, floor holds, db required"
+                       if not probs else "; ".join(probs))
 
 
 @check(4, "watchdog runs and reports a verdict")
