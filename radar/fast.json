@@ -88,28 +88,26 @@
     "zscaler"
   ],
   "greenhouse": [
-    "abcellera",
-    "appnovation",
     "aylo",
     "beyondtrust",
     "capco",
     "catonetworks",
     "coconutsoftware",
+    "contactmonkey",
     "dropbox",
     "elastic",
     "geotab",
     "gitlab",
+    "globalrelay",
     "later",
     "okta",
     "stackadapt",
     "stay22",
     "tailscale",
     "trolley",
-    "workleap",
-    "zscaler"
+    "workleap"
   ],
   "lever": [
-    "crypto",
     "smiledigitalhealth",
     "sophos",
     "telesat"
@@ -117,26 +115,19 @@
   "ashby": [
     "1password",
     "airbyte",
-    "camunda",
-    "cerebras",
     "coder",
     "cohere",
     "elevenlabs",
-    "facilityos",
     "homebase",
     "influxdata",
-    "klue",
-    "lightspeedhq",
     "maintainx",
-    "people-culture-talent",
-    "reflow",
     "resend",
-    "sentry",
     "supabase",
     "telus-digital"
   ],
   "recruitee": [],
   "rippling": [
+    "nesto",
     "rentsync_careers"
   ],
   "workable": [
@@ -144,14 +135,8 @@
     "swtch-energy"
   ],
   "smartrecruiters": [
-    "AccorHotel",
-    "AmericanIronandMetal",
-    "Dexterra",
-    "EgisGroup",
     "GDMSI",
-    "Medfar",
-    "SGS",
-    "Scalian"
+    "Medfar"
   ],
   "breezy": [
     "auctria"
@@ -201,24 +186,10 @@
       "country_facet": "Location_Country"
     },
     {
-      "name": "Telus Health",
-      "tenant": "lifeworks",
-      "cluster": "wd3",
-      "site": "External",
-      "country_facet": "Country"
-    },
-    {
       "name": "Thomson Reuters",
       "tenant": "thomsonreuters",
       "cluster": "wd5",
       "site": "External_Career_Site",
-      "country_facet": "Location_Country"
-    },
-    {
-      "name": "Aritzia",
-      "tenant": "aritzia",
-      "cluster": "wd3",
-      "site": "External",
       "country_facet": "Location_Country"
     },
     {
@@ -236,13 +207,6 @@
       "country_facet": "locationCountry"
     },
     {
-      "name": "UBC",
-      "tenant": "ubc",
-      "cluster": "wd10",
-      "site": "ubcstaffjobs",
-      "country_facet": null
-    },
-    {
       "name": "Desjardins",
       "tenant": "desjardins",
       "cluster": "wd10",
@@ -256,27 +220,6 @@
       "country_facet": null
     },
     {
-      "name": "Moneris",
-      "tenant": "moneris",
-      "cluster": "wd3",
-      "site": "Moneris",
-      "country_facet": null
-    },
-    {
-      "name": "Workday",
-      "tenant": "workday",
-      "cluster": "wd5",
-      "site": "Workday",
-      "country_facet": null
-    },
-    {
-      "name": "Ledcor",
-      "tenant": "ledcor",
-      "cluster": "wd3",
-      "site": "Ledcor_External",
-      "country_facet": null
-    },
-    {
       "name": "TC Energy",
       "tenant": "tcenergy",
       "cluster": "wd3",
@@ -284,22 +227,10 @@
       "country_facet": "Country"
     },
     {
-      "name": "Recurrent Energy",
-      "tenant": "recurrentenergy",
-      "cluster": "wd12",
-      "site": "RecurrentEnergy"
-    },
-    {
       "name": "TMX Group",
       "tenant": "tmx",
       "cluster": "wd3",
       "site": "TMX_Careers"
-    },
-    {
-      "name": "Autodesk",
-      "tenant": "autodesk",
-      "cluster": "wd1",
-      "site": "Ext"
     },
     {
       "name": "Broadridge",
@@ -326,18 +257,6 @@
       "site": "WepointCA"
     },
     {
-      "name": "Proofpoint",
-      "tenant": "proofpoint",
-      "cluster": "wd5",
-      "site": "ProofpointCareers"
-    },
-    {
-      "name": "TD SYNNEX",
-      "tenant": "synnex",
-      "cluster": "wd5",
-      "site": "hyvecareers"
-    },
-    {
       "name": "Accenture",
       "tenant": "accenture",
       "cluster": "wd103",
@@ -348,19 +267,6 @@
     {
       "name": "Bell",
       "base": "https://jobs.bell.ca/ca/en"
-    },
-    {
-      "name": "Air Canada",
-      "base": "https://careers.aircanada.com/ca/en"
-    },
-    {
-      "name": "OpenText",
-      "base": "https://careers.opentext.com/us/en"
-    },
-    {
-      "name": "City of Edmonton",
-      "base": "https://recruitment.edmonton.ca",
-      "default_location": "Edmonton, AB"
     }
   ],
   "successfactors": [
@@ -375,11 +281,6 @@
     {
       "name": "Canada Life",
       "base": "https://jobs.canadalife.com"
-    },
-    {
-      "name": "City of Toronto",
-      "base": "https://jobs.toronto.ca",
-      "default_location": "Toronto, ON"
     },
     {
       "name": "University of Toronto",
@@ -448,19 +349,19 @@
       "type": "matador-job-listings"
     }
   ],
-  "amazon": [],
+  "amazon": [
+    {
+      "name": "Amazon",
+      "country": "CAN"
+    }
+  ],
   "avature": [
     {
       "name": "Electronic Arts",
       "base": "https://jobs.ea.com/en_US/careers"
     }
   ],
-  "teamtailor": [
-    {
-      "name": "commonsku",
-      "base": "https://commonsku.na.teamtailor.com"
-    }
-  ],
+  "teamtailor": [],
   "ultipro": [
     {
       "name": "Haventree Bank",
