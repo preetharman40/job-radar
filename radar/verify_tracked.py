@@ -15,8 +15,9 @@ a few seconds, and it is authoritative rather than inferential.
     python3 verify_tracked.py --dry-run
 
 Writes to the `tracked_live` table in seen.sqlite3, which serve.py reads.
-A job is only called gone after MISSES_BEFORE_GONE consecutive failures, so one
-network blip cannot hide a live posting.
+A job is only called gone after MISSES_BEFORE_GONE consecutive failures that
+also span HOURS_BEFORE_GONE, so neither one network blip nor one afternoon of
+unpublishing can hide a live posting.
 """
 
 import argparse
@@ -39,6 +40,21 @@ import job_radar as jr  # noqa: E402
 
 TRACKER = os.path.abspath(os.path.join(HERE, "..", "applications.md"))
 MISSES_BEFORE_GONE = 3
+# ...and they have to span this much wall-clock time. Three consecutive misses
+# can happen in three hours - the lane runs hourly from 08:25 to 18:25 - so the
+# counter alone cannot tell a posting that CLOSED from one that was unpublished
+# for an afternoon. ElevenLabs' Infrastructure Engineer went 404 for seven
+# consecutive checks on 2026-11-02, was duly called gone, and answered HTTP 200
+# the same evening. That mattered because the label is not cosmetic: serve.py
+# collects state='gone' into its `expired` set and purge_expired.py DELETES on
+# that field, so a posting that was merely paused sat queued for deletion while
+# still hiring.
+#
+# 72h rather than 48h because the two errors are not equally expensive. Keeping
+# a dead row three days longer costs one wasted click; deleting a live posting
+# costs the job, and the tracker row with it. The observed flap resolved inside
+# two days, so 48h would have been close enough to lose the next one.
+HOURS_BEFORE_GONE = 72
 # Transient. A busy board answering 403 or 429 is not evidence a job is gone -
 # RBC and Sun Life both returned 403 under load and 200 moments later.
 TRANSIENT = {403, 408, 429, 500, 502, 503, 504}
@@ -112,7 +128,54 @@ def db():
     c.execute("CREATE TABLE IF NOT EXISTS tracked_live("
               "url TEXT PRIMARY KEY, state TEXT, misses INTEGER DEFAULT 0, "
               "checked TEXT, detail TEXT)")
+    # Added 2026-11-03. `first_miss` is when the current run of misses began,
+    # so HOURS_BEFORE_GONE can be measured; `flaps` counts how many times this
+    # url has come back after being called gone. Both are added in place
+    # because the table is the live state of the apply queue and rebuilding it
+    # would lose every miss counter mid-flight.
+    have = {r[1] for r in c.execute("PRAGMA table_info(tracked_live)")}
+    for col, decl in (("first_miss", "TEXT"), ("flaps", "INTEGER DEFAULT 0")):
+        if col not in have:
+            c.execute(f"ALTER TABLE tracked_live ADD COLUMN {col} {decl}")
     return c
+
+
+def decide(state, prior_state, misses, first_miss, flaps, now,
+           misses_before=None, hours_before=None):
+    """-> (final_state, misses, first_miss, flaps) for one checked posting.
+
+    Pure, so the rule that decides whether a job disappears from the tracker
+    can be tested without a database or a network. `state` is this check's
+    verdict from check(), `prior_state` what the row said before it, and `now`
+    an aware datetime.
+
+    Two conditions must BOTH hold before a posting is called gone: it has to
+    have missed `misses_before` checks in a row, and the first of those misses
+    has to be `hours_before` old. The second is the one that does the work -
+    see the comment on HOURS_BEFORE_GONE.
+
+    An `unknown` verdict changes nothing at all, including the clock: a
+    timeout is not evidence, and letting it start the clock would mean a board
+    having a bad afternoon aged its own postings toward deletion.
+    """
+    mb = MISSES_BEFORE_GONE if misses_before is None else misses_before
+    hb = HOURS_BEFORE_GONE if hours_before is None else hours_before
+    flaps = flaps or 0
+    if state == "open":
+        # Back from the dead. Record it: a url that has flapped once is a url
+        # whose `gone` verdicts should never be trusted silently again.
+        return "open", 0, None, flaps + (1 if prior_state == "gone" else 0)
+    if state != "gone":
+        return "checking", misses, first_miss, flaps
+    misses += 1
+    first_miss = first_miss or now.isoformat(timespec="seconds")
+    try:
+        hours = (now - datetime.fromisoformat(first_miss)).total_seconds() / 3600
+    except (TypeError, ValueError):
+        # An unparseable stamp must not be read as "infinitely old".
+        hours = 0.0
+    return (("gone" if (misses >= mb and hours >= hb) else "checking"),
+            misses, first_miss, flaps)
 
 
 def tracked_urls(path):
@@ -313,15 +376,18 @@ def main():
         if aged:
             def _age():
                 conn.executemany(
-                    "INSERT INTO tracked_live VALUES(?,?,?,?,?) "
+                    "INSERT INTO tracked_live"
+                    "(url,state,misses,checked,detail) VALUES(?,?,?,?,?) "
                     "ON CONFLICT(url) DO UPDATE SET state=excluded.state, "
                     "checked=excluded.checked, detail=excluded.detail", aged)
             if jr.db_write(conn, _age, label="aggregator ageing"):
                 print(f"  marked {len(aged)} aggregator row(s) stale "
                       f"(found over {AGGREGATOR_STALE_DAYS} days ago)")
-    prior = {u: (s, m) for u, s, m in
-             conn.execute("SELECT url, state, misses FROM tracked_live")}
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    prior = {u: (s, m, fm, fl) for u, s, m, fm, fl in
+             conn.execute("SELECT url, state, misses, first_miss, flaps "
+                          "FROM tracked_live")}
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat(timespec="seconds")
 
     # Group by host and walk each host's URLs serially. Firing ten concurrent
     # requests at one Workday tenant earned a 403 from RBC, TD, Sun Life and
@@ -346,20 +412,20 @@ def main():
     results = [results_map[u] for u in urls]
 
     counts = {"open": 0, "gone": 0, "unknown": 0}
-    pending = []
+    pending, flapped = [], []
     for url, (state, detail) in zip(urls, results):
-        _, misses = prior.get(url, ("open", 0))
-        if state == "open":
-            misses = 0
-        elif state == "gone":
-            misses += 1
-        # `unknown` leaves the counter alone - a timeout is not evidence.
-        final = "gone" if (state == "gone" and misses >= MISSES_BEFORE_GONE) else \
-                "open" if state == "open" else "checking"
+        pstate, misses, first_miss, flaps = prior.get(url, ("open", 0, None, 0))
+        was = flaps or 0
+        final, misses, first_miss, flaps = decide(
+            state, pstate, misses, first_miss, flaps, now_dt)
+        if flaps > was:
+            flapped.append((url, detail))
         counts[state] += 1
-        pending.append((url, final, misses, now, detail))
+        pending.append((url, final, misses, now, detail, first_miss, flaps))
         if state != "open":
-            print(f"  {state:8} misses={misses} {detail[:28]:30} {url[:60]}")
+            age = f" since {first_miss[5:16]}" if first_miss else ""
+            print(f"  {state:8} misses={misses}{age} "
+                  f"{detail[:28]:30} {url[:60]}")
     # Collected first, written once, and retried on a lock. This used to write
     # inside the loop and commit at the end, so a blocked write threw away the
     # whole run - every HTTP check included. One of these died that way on
@@ -367,10 +433,13 @@ def main():
     if not a.dry_run and pending:
         def _save():
             conn.executemany(
-                "INSERT INTO tracked_live VALUES(?,?,?,?,?) "
+                "INSERT INTO tracked_live"
+                "(url,state,misses,checked,detail,first_miss,flaps) "
+                "VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(url) DO UPDATE SET state=excluded.state, "
                 "misses=excluded.misses, checked=excluded.checked, "
-                "detail=excluded.detail", pending)
+                "detail=excluded.detail, first_miss=excluded.first_miss, "
+                "flaps=excluded.flaps", pending)
         if not jr.db_write(conn, _save, label="tracked_live"):
             print("  !! could not save results - database stayed locked. The "
                   "checks above are correct but miss counters did not advance.")
@@ -380,7 +449,15 @@ def main():
         hosts = sorted({urlparse(u).netloc for u in skip})
         print(f"  {len(skip)} not checked - aggregator links we don't fetch: "
               f"{', '.join(hosts)}")
-    print(f"  a job is hidden only after {MISSES_BEFORE_GONE} consecutive misses")
+    print(f"  a job is hidden only after {MISSES_BEFORE_GONE} consecutive "
+          f"misses spanning {HOURS_BEFORE_GONE}h")
+    if flapped:
+        # Loud on purpose. A posting that returns after being called gone is
+        # the one case where this lane was wrong about a real job, and a
+        # suppression that corrects itself in silence teaches nothing.
+        print(f"  {len(flapped)} posting(s) came back after being called gone:")
+        for u, d in flapped:
+            print(f"    {d[:28]:30} {u[:70]}")
 
 
 if __name__ == "__main__":
