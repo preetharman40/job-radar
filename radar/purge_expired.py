@@ -39,6 +39,9 @@ import sys
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from verify_tracked import check as recheck  # noqa: E402
+
 DB = os.path.join(HERE, "seen.sqlite3")
 API = "http://127.0.0.1:8737"
 
@@ -89,6 +92,9 @@ def main():
     ap.add_argument("--include-applied", action="store_true",
                     help="also delete jobs you have applied to (you will lose "
                          "the record)")
+    ap.add_argument("--no-recheck", action="store_true",
+                    help="skip the live re-check of rows doomed for being "
+                         "gone, and delete on the database flag alone")
     a = ap.parse_args()
 
     try:
@@ -118,6 +124,34 @@ def main():
     doomed = cand if a.include_applied else [t for t in cand
                                              if t[0]["status"] == "toapply"]
 
+    # Ask the posting again before deleting it. `expired` is a database
+    # reading taken by the verify lane, up to a day old, and a posting can come
+    # back: ElevenLabs' Infrastructure Engineer 404ed for seven consecutive
+    # checks on 2026-11-02, was called gone, and answered HTTP 200 the same
+    # evening. A stale flag is a fine reason to SHOW a row as dead and a bad
+    # reason to delete one, so a second gone verdict - taken now, seconds
+    # before the delete - is what actually authorises it.
+    #
+    # Only rows doomed for being gone are re-checked. A row doomed by
+    # --older-than is the user's explicit instruction and a live old posting is
+    # still meant to go. And `unknown` spares the row: the whole point is that
+    # no evidence is not evidence, so a timeout keeps the job.
+    spared = []
+    if doomed and not a.no_recheck:
+        still = []
+        for t in doomed:
+            j, why, age = t
+            if "gone" not in why.split("+"):
+                still.append(t)
+                continue
+            try:
+                st, detail = recheck(j["url"])
+            except Exception as e:
+                st, detail = "unknown", f"{type(e).__name__}: {e}"[:40]
+            (still if st == "gone" else spared).append(
+                t if st == "gone" else (j, st, detail))
+        doomed = still
+
     older = sum(1 for j, w, g in cand if "d" in w.split("+")[-1])
     print(f"  {d['count']} tracked · {d['expired']} gone"
           + (f" · {older} older than {a.older_than}d" if a.older_than else ""))
@@ -134,6 +168,11 @@ def main():
         for j, why, age in sorted(kept, key=lambda t: -t[0]["score"]):
             print(f"    [{j['score']:>2}] #{j['n']:<4} {j['status']:<13} "
                   f"{why:<9} {j['company'][:20]:22} {j['role'][:38]}")
+    if spared:
+        print(f"\n  {len(spared)} marked gone but ANSWERING NOW - not deleted:")
+        for j, st, detail in spared:
+            print(f"    #{j['n']:<4} {st:<8} {j['company'][:20]:22} "
+                  f"{j['role'][:32]:34} {detail[:28]}")
     print(f"\n  {len(doomed)} to delete:")
     for j, why, age in sorted(doomed, key=lambda t: -(t[2] or 0)):
         print(f"    [{j['score']:>2}] #{j['n']:<4} {why:<9} "

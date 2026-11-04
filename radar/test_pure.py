@@ -2849,5 +2849,101 @@ class TestVetoGroups(unittest.TestCase):
 # an emptied subject, an emptied rescue, a broken regex and a missing section,
 # plus an assertion that the real file still behaves.
 
+class TestGoneDecision(unittest.TestCase):
+    """verify_tracked.decide() - the rule that can delete a live job.
+
+    A `gone` label is not cosmetic. serve.py collects state='gone' into its
+    `expired` set and purge_expired.py deletes on that field, so every case
+    here is a case about whether a real posting survives.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vt = _mod("vt_decide", "verify_tracked.py")
+
+    def at(self, h):
+        return datetime(2026, 11, 2, 8, 25, tzinfo=timezone.utc) + timedelta(hours=h)
+
+    def test_three_misses_in_three_hours_is_not_gone(self):
+        """The ElevenLabs case, which is why this function exists.
+
+        Its Infrastructure Engineer missed seven consecutive checks and came
+        back the same evening. Under the old rule it was `gone` by the third,
+        and purge_expired.py deletes on that.
+        """
+        st, misses, fm, flaps = "open", 0, None, 0
+        for i in range(7):
+            st, misses, fm, flaps = self.vt.decide(
+                "gone", st, misses, fm, flaps, self.at(i))
+        self.assertEqual(misses, 7)
+        self.assertEqual(st, "checking", "seven misses inside 7h must not delete")
+
+    def test_misses_spanning_the_window_are_gone(self):
+        st, misses, fm, flaps = "open", 0, None, 0
+        for h in (0, 24, 48, 72):
+            st, misses, fm, flaps = self.vt.decide(
+                "gone", st, misses, fm, flaps, self.at(h))
+        self.assertEqual(st, "gone")
+
+    def test_the_hour_window_does_not_replace_the_miss_count(self):
+        """One miss, however old, is still one miss."""
+        st, misses, fm, flaps = self.vt.decide(
+            "gone", "open", 0, None, 0, self.at(0))
+        st, misses, fm, flaps = self.vt.decide(
+            "gone", st, misses, fm, flaps, self.at(500))
+        self.assertEqual(misses, 2)
+        self.assertEqual(st, "checking")
+
+    def test_open_resets_the_counter_and_the_clock(self):
+        st, misses, fm, flaps = self.vt.decide(
+            "gone", "open", 2, "2026-11-01T08:25:00+00:00", 0, self.at(0))
+        st, misses, fm, flaps = self.vt.decide("open", st, misses, fm, flaps,
+                                               self.at(1))
+        self.assertEqual((st, misses, fm), ("open", 0, None))
+
+    def test_coming_back_from_gone_counts_as_a_flap(self):
+        _, _, _, flaps = self.vt.decide("open", "gone", 5,
+                                        "2026-10-30T08:25:00+00:00", 0,
+                                        self.at(0))
+        self.assertEqual(flaps, 1, "a resurrection has to be recorded")
+
+    def test_coming_back_from_checking_is_not_a_flap(self):
+        """Only a posting that was actually hidden counts. A row that missed
+        once and recovered is the guard working, not the guard failing."""
+        _, _, _, flaps = self.vt.decide("open", "checking", 1,
+                                        "2026-11-02T08:25:00+00:00", 0,
+                                        self.at(1))
+        self.assertEqual(flaps, 0)
+
+    def test_unknown_changes_nothing_including_the_clock(self):
+        """A board having a bad afternoon must not age its own postings
+        toward deletion."""
+        args = ("unknown", "checking", 2, "2026-11-01T08:25:00+00:00", 3)
+        st, misses, fm, flaps = self.vt.decide(*args, self.at(400))
+        self.assertEqual((st, misses, fm, flaps),
+                         ("checking", 2, "2026-11-01T08:25:00+00:00", 3))
+
+    def test_first_miss_is_the_first_one_not_the_latest(self):
+        st, misses, fm, flaps = self.vt.decide(
+            "gone", "open", 0, None, 0, self.at(0))
+        first = fm
+        for h in (1, 2, 3):
+            st, misses, fm, flaps = self.vt.decide(
+                "gone", st, misses, fm, flaps, self.at(h))
+        self.assertEqual(fm, first, "the clock starts once and keeps running")
+
+    def test_an_unparseable_stamp_is_not_infinitely_old(self):
+        """Garbage in the column must fail toward keeping the job."""
+        st, _, _, _ = self.vt.decide("gone", "checking", 9, "not-a-date", 0,
+                                     self.at(0))
+        self.assertEqual(st, "checking")
+
+    def test_the_shipped_thresholds_are_still_protective(self):
+        """A floor on the tuning itself. Either constant dropping to nothing
+        would quietly restore the bug this function was written for."""
+        self.assertGreaterEqual(self.vt.MISSES_BEFORE_GONE, 3)
+        self.assertGreaterEqual(self.vt.HOURS_BEFORE_GONE, 48)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
