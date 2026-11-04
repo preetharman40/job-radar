@@ -28,6 +28,7 @@ import io
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1029,6 +1030,133 @@ class TestWorkdayLocationFallback(unittest.TestCase):
              "externalPath": ""}), "")
 
 
+class TestFastLaneRanking(unittest.TestCase):
+    """How the 5-minute lane picks its boards, rewritten 2026-11-02.
+
+    Before that the lane was "every board that produced in the last full
+    sweep", which made one quiet Sunday enough to evict a board that produces
+    every week - and did: it fell 100 -> 71 in a single rebuild, inside the
+    40% shrink guard, with every check green.
+    """
+
+    def _mf(self):
+        return _mod("make_fast", "make_fast.py")
+
+    def _db(self, rows):
+        """An in-memory `seen` + `board_health` holding exactly `rows`."""
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE seen(url, title, company, first_seen)")
+        conn.execute("CREATE TABLE board_health(board, best_count)")
+        for i, (co, title, day) in enumerate(rows):
+            conn.execute("INSERT INTO seen VALUES(?,?,?,?)",
+                         (f"u{i}", title, co, day))
+        return conn
+
+    def test_days_outrank_a_single_burst(self):
+        """The whole point of counting days before postings. A board that
+        dumped five reqs on one Tuesday is not a board to poll every five
+        minutes; one posting on three separate days is."""
+        mf = self._mf()
+        rows = ([("burst", "DevOps Engineer", "2026-11-01T10:00:00+00:00")] * 5
+                + [("steady", "DevOps Engineer", f"2026-10-3{d}T10:00:00+00:00")
+                   for d in (0, 1)]
+                + [("steady", "DevOps Engineer", "2026-11-01T10:00:00+00:00")])
+        hist = mf.history(self._db(rows), 30,
+                          now=datetime(2026, 11, 2, tzinfo=timezone.utc))
+        self.assertEqual(hist["steady"][0], 3)
+        self.assertEqual(hist["burst"][0], 1)
+        self.assertGreater(hist["burst"][1], hist["steady"][1],
+                           "precondition: the burst has MORE postings")
+        full = {"greenhouse": ["steady", "burst"]}
+        _fast, ranked = mf.rank(full, hist, {}, set(), target=1)
+        self.assertEqual(ranked[0][5:7], ("greenhouse", "steady"))
+
+    def test_history_is_rejudged_by_the_live_gate(self):
+        """`seen` records what passed the gate ON THE DAY. The first build of
+        this ranking promoted abcellera, Dexterra, City of Toronto and the
+        Government of Alberta straight back into the fast lane, because their
+        rows predate the veto groups that now reject them."""
+        mf = self._mf()
+        rows = [("goodco", "DevOps Engineer", "2026-11-01T10:00:00+00:00"),
+                ("badco", "IT Operations Analyst II",
+                 "2026-11-01T10:00:00+00:00"),
+                ("badco", "Water/Wastewater Infrastructure Specialist",
+                 "2026-11-01T10:00:00+00:00")]
+        conn = self._db(rows)
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        raw = mf.history(conn, 30, now=now)
+        self.assertIn("badco", raw, "precondition: unfiltered history keeps it")
+        gated = mf.history(conn, 30, now=now,
+                           keep=lambda t, c: bool(jr.title_match(t, c)[0]))
+        self.assertIn("goodco", gated)
+        self.assertNotIn("badco", gated,
+                         "a board whose postings are all vetoed must not earn "
+                         "a 5-minute slot on them")
+
+    def test_proven_relevance_outranks_req_volume(self):
+        """The lane is a fixed size, so its tail is always boards with no
+        recent production - and ranking that tail on req count alone handed
+        slots to AECOM, Artelia and Continental, large civil-engineering and
+        staffing firms whose postings this tool vetoes by design."""
+        mf = self._mf()
+        full = {"smartrecruiters": ["aecom", "smallbutreal"]}
+        vol = {"smartrecruiters/aecom": 900,
+               "smartrecruiters/smallbutreal": 3}
+        _fast, ranked = mf.rank(full, {}, vol, set(), target=1,
+                                ever={"smallbutreal"})
+        self.assertEqual(ranked[0][6], "smallbutreal",
+                         "req volume beat proven relevance")
+
+    def test_volume_still_breaks_a_tie_with_no_other_evidence(self):
+        mf = self._mf()
+        full = {"greenhouse": ["big", "small"]}
+        vol = {"greenhouse/big": 500, "greenhouse/small": 1}
+        _fast, ranked = mf.rank(full, {}, vol, set(), target=1, ever=set())
+        self.assertEqual(ranked[0][6], "big")
+
+    def test_never_fast_platforms_cannot_be_ranked_in(self):
+        """jobbank honours a Crawl-delay and insightglobal is Cloudflare-
+        fronted; both are 30-minute-lane only however well they produce."""
+        mf = self._mf()
+        full = {"jobbank": [{"name": "jb"}], "insightglobal": [{"name": "ig"}],
+                "greenhouse": ["ok"]}
+        hist = {"jb": (9, 9), "ig": (9, 9), "ok": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=10)
+        self.assertEqual(fast["jobbank"], [])
+        self.assertEqual(fast["insightglobal"], [])
+        self.assertEqual(fast["greenhouse"], ["ok"])
+
+    def test_feed_boards_are_excluded_by_shape(self):
+        """A successfactors "feed": true target downloads the whole board -
+        Deloitte's is 9.16 MB - which is the wrong trade at 156 sweeps a day."""
+        mf = self._mf()
+        full = {"successfactors": [{"name": "deloitte", "feed": True},
+                                   {"name": "ordinary"}]}
+        hist = {"deloitte": (9, 9), "ordinary": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=10)
+        self.assertEqual([t["name"] for t in fast["successfactors"]],
+                         ["ordinary"])
+
+    def test_the_sort_is_total_so_rebuilds_are_byte_identical(self):
+        """Every tie resolved, so a diff in git means the evidence changed
+        rather than that dict iteration order did."""
+        mf = self._mf()
+        full = {"greenhouse": ["a", "b", "c"], "lever": ["a", "d"]}
+        args = (full, {}, {}, set())
+        first = mf.rank(*args, target=3)[1]
+        for _ in range(5):
+            self.assertEqual(mf.rank(*args, target=3)[1], first)
+
+    def test_targets_order_is_preserved_in_the_output(self):
+        """Emitted in targets.json order, not rank order, so a week-on-week
+        diff shows which boards moved instead of re-ordering all 100."""
+        mf = self._mf()
+        full = {"greenhouse": ["first", "second", "third"]}
+        hist = {"third": (5, 5), "first": (1, 1)}
+        fast, _r = mf.rank(full, hist, {}, set(), target=2)
+        self.assertEqual(fast["greenhouse"], ["first", "third"])
+
+
 class TestMakeFastCoverage(unittest.TestCase):
     """make_fast.py must know every platform in targets.json.
 
@@ -1507,9 +1635,13 @@ class TestNearMiss(unittest.TestCase):
     # deliberately NOT wanted - networking was ruled out as a specialism, so
     # they belong in TestNearMissNetworkExcluded instead. Left recorded here
     # rather than silently dropped: they are the reason that class exists.
+    # "Infrastructure Operations Analyst" was here until 2026-10-31. It is
+    # not a miss any more: the support-analyst veto group drops it BY
+    # DECISION, same treatment as the networking titles above. Recorded here
+    # rather than deleted, because if that group is ever narrowed this is a
+    # real near-miss again.
     REAL_MISSES = [
         "Capacity Engineer",
-        "Infrastructure Operations Analyst",
         "Sr Platform Monitoring Engineer",
         "DCSC Automation Specialist",
         "Data Center Infrastructure Management (DCIM) Administrator",
@@ -2475,6 +2607,18 @@ class TestTitleVeto(unittest.TestCase):
     The rule was not wrong - "infrastructure" is core DevOps vocabulary and
     core civil-engineering vocabulary at the same time."""
 
+    def group(self, name):
+        """-> (subject, rescue) for one named veto group.
+
+        Reaching for a group by name rather than by index: the order in
+        titles.json carries no meaning, and a test that depended on it would
+        break the first time a group was inserted above another."""
+        for gname, subject, rescue in jr.TITLE_VETOES:
+            if gname == name:
+                return subject, rescue
+        self.fail(f"no veto group named {name!r} - groups are "
+                  f"{[g[0] for g in jr.TITLE_VETOES]}")
+
     REAL_VETOED = [
         ("Water/Wastewater Infrastructure Specialist", "Government of Alberta"),
         ("Building Automation System Analyst", "University of Toronto"),
@@ -2520,7 +2664,7 @@ class TestTitleVeto(unittest.TestCase):
         for title in ("CI/CD Pipeline Engineer", "Data Pipeline Engineer",
                       "Build Pipeline Specialist"):
             with self.subTest(title=title):
-                self.assertFalse(jr.TITLE_VETO.search(title))
+                self.assertIsNone(jr.vetoed(title))
 
     def test_the_veto_words_hold_their_boundaries(self):
         """`land`, `rail`, `dam` and `marine` are short enough to appear inside
@@ -2528,8 +2672,8 @@ class TestTitleVeto(unittest.TestCase):
         for title in ("Cloud Landing Zone Engineer", "Guardrails Engineer",
                       "Engineer, Amsterdam", "Submariner Platform Engineer"):
             with self.subTest(title=title):
-                self.assertFalse(jr.TITLE_VETO.search(title),
-                                 f"{title} was vetoed by a substring")
+                self.assertIsNone(jr.vetoed(title),
+                                  f"{title} was vetoed by a substring")
 
     def test_bare_systems_does_not_rescue(self):
         """An earlier draft put "systems" in the rescue list and all four
@@ -2539,9 +2683,10 @@ class TestTitleVeto(unittest.TestCase):
                      "automation", "operations"):
             with self.subTest(word=word):
                 title = f"Water {word} Engineer"
-                self.assertTrue(jr.TITLE_VETO.search(title))
+                subject, rescue = self.group("civil-infrastructure")
+                self.assertTrue(subject.search(title))
                 self.assertIsNone(
-                    jr.TITLE_RESCUE.search(title),
+                    rescue.search(title),
                     f"{word!r} rescues a vetoed subject - that is how the "
                     f"four building/electrical titles survived the first draft")
                 self.assertEqual(jr.title_match(title, "x"), (0, None))
@@ -2556,7 +2701,146 @@ class TestTitleVeto(unittest.TestCase):
 
     def test_near_miss_still_flags_a_real_one(self):
         """Control: the exclusion above must not have disabled the log."""
-        self.assertTrue(jr.near_miss("Infrastructure Support Analyst"))
+        # Was "Infrastructure Support Analyst" until the support-analyst
+        # group shipped, which vetoes it BY DECISION - so it stopped being a
+        # valid control for "the near-miss log still works".
+        self.assertTrue(jr.near_miss("Infrastructure Support Specialist"))
+
+
+class TestVetoGroups(unittest.TestCase):
+    """The veto became a LIST of groups on 2026-10-31, because a rescue list is
+    per-subject and not global.
+
+    Two real alerts forced it: "Customer Success Platform Administrator" at
+    Braze (17) and "IT Operations Analyst II" at Fivetran (24). Both would have
+    been RESCUED by the civil group's rescue list, which carries "it",
+    "platform" and "software" - tokens that prove a water job is really IT and
+    prove nothing at all about a finance or customer-success job."""
+
+    BUSINESS = ["Customer Success Platform Administrator",
+                "Finance Systems Analyst - Integrations and Automation",
+                "Senior Financial Systems Administrator (NetSuite & OneStream)",
+                "HR Senior Systems Analyst",
+                "SAP Systems Analyst - OpenText"]
+    ANALYST = ["IT Operations Analyst II",
+               "IT Operations & CMDB Analyst",
+               "Business Systems Analyst",
+               "Senior Endpoint Security Operations Analyst (Global Security)",
+               "Network Operations Analyst"]
+
+    def group(self, name):
+        for gname, subject, rescue in jr.TITLE_VETOES:
+            if gname == name:
+                return subject, rescue
+        self.fail(f"no veto group named {name!r}")
+
+    def test_every_group_is_named(self):
+        """The name is what makes a suppression countable instead of silent."""
+        names = [g[0] for g in jr.TITLE_VETOES]
+        self.assertEqual(len(names), len(set(names)), "duplicate group name")
+        for name in ("civil-infrastructure", "business-function",
+                     "support-analyst"):
+            self.assertIn(name, names)
+
+    def test_the_real_business_titles_are_vetoed(self):
+        for title in self.BUSINESS:
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, "x"), (0, None))
+
+    def test_the_real_analyst_titles_are_vetoed(self):
+        for title in self.ANALYST:
+            with self.subTest(title=title):
+                self.assertEqual(jr.title_match(title, "x"), (0, None))
+
+    def test_vetoed_names_the_group_that_did_it(self):
+        """A bool would have been enough to filter and useless to explain."""
+        self.assertEqual(jr.vetoed("Customer Success Platform Administrator"),
+                         "business-function")
+        self.assertEqual(jr.vetoed("IT Operations Analyst II"),
+                         "support-analyst")
+        self.assertEqual(jr.vetoed("Water/Wastewater Infrastructure Specialist"),
+                         "civil-infrastructure")
+        self.assertIsNone(jr.vetoed("DevOps Engineer"))
+
+    def test_the_civil_rescue_would_have_saved_these(self):
+        """The whole argument for per-group rescue lists, asserted directly.
+
+        If this ever fails it means the civil rescue was narrowed, and these
+        two groups could then be collapsed back into one."""
+        _subject, civil_rescue = self.group("civil-infrastructure")
+        for title in ("Customer Success Platform Administrator",
+                      "IT Operations Analyst II"):
+            with self.subTest(title=title):
+                self.assertTrue(
+                    civil_rescue.search(title),
+                    f"{title} is no longer rescued by the civil list, so the "
+                    f"reason these are separate groups has gone away")
+
+    def test_an_infra_token_still_rescues(self):
+        """The groups must not swallow real work that happens to sit in a
+        business domain or carry an analyst title."""
+        for title in ("Salesforce DevOps Engineer",
+                      "SAP Basis Administrator, Azure",
+                      "Cloud Operations Analyst",
+                      "DevOps Engineer / Analyst",
+                      "Linux Systems Analyst"):
+            with self.subTest(title=title):
+                self.assertIsNone(jr.vetoed(title))
+
+    def test_industry_words_are_not_function_words(self):
+        """"clinical" and "pharmaceutical" were in the first draft of the
+        business group and cost "IT Infrastructure Services 4 - Clinical
+        Critical Messaging", a real infrastructure role. A DevOps job at a
+        hospital is still a DevOps job - this list is what a team DOES."""
+        subject, _rescue = self.group("business-function")
+        for word in ("clinical", "pharmaceutical", "healthcare", "banking",
+                     "insurance", "retail", "telecom"):
+            with self.subTest(word=word):
+                self.assertIsNone(subject.search(f"{word} platform engineer"))
+        self.assertIsNone(
+            jr.vetoed("IT Infrastructure Services 4 - Clinical Critical "
+                      "Messaging"))
+
+    def test_the_core_search_survives_every_group(self):
+        """The canaries the loader guards with, asserted end to end."""
+        for title in jr.VETO_CANARIES:
+            with self.subTest(title=title):
+                self.assertIsNone(jr.vetoed(title),
+                                  f"{title} is the search, not a veto target")
+
+    def test_veto_false_asks_what_the_rules_alone_would_say(self):
+        """The seam the footer counter needs. Without it the sweep reported
+        468 suppressions on a run that really withheld a handful, because
+        most vetoed titles are tier 0 on the rules too."""
+        # a rule WOULD have admitted this one - a real suppression
+        self.assertEqual(jr.title_match("IT Operations Analyst II", "x"),
+                         (0, None))
+        self.assertTrue(
+            jr.title_match("IT Operations Analyst II", "x", veto=False)[0],
+            "precondition: a rule admits this, which is why it is a veto")
+        # no rule would have - vetoed, but not a suppression worth counting
+        for title in ("Sales Analyst", "Payroll Analyst",
+                      "Water Treatment Operator"):
+            with self.subTest(title=title):
+                self.assertEqual(
+                    jr.title_match(title, "x", veto=False), (0, None),
+                    f"{title} is tier 0 on the rules alone, so counting it "
+                    f"as a suppression would overstate what the veto took")
+
+    def test_veto_true_is_the_default(self):
+        """Every other caller - inbox.py, discover.py, the sweep itself - must
+        keep getting the vetoed answer without passing anything."""
+        self.assertEqual(jr.title_match("IT Operations Analyst II", "x"),
+                         jr.title_match("IT Operations Analyst II", "x",
+                                        veto=True))
+
+    def test_a_vetoed_title_is_not_a_near_miss(self):
+        """Same treatment the civil group gets: tier 0 by decision is not a
+        miss, and without this the nearmiss table fills with the 72 titles
+        these groups exist to remove."""
+        for title in self.BUSINESS + self.ANALYST:
+            with self.subTest(title=title):
+                self.assertFalse(jr.near_miss(title))
 
 
 # The veto LOADER's refusal cases live in selftest.py, not here. They need

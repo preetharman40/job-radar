@@ -39,6 +39,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sqlite3
 import sys
@@ -173,13 +174,30 @@ def _rule_guards():
         # blind while exiting 0; an empty rescue matches everything, which
         # disables the veto while looking like it works.
         ("title veto subject emptied", "titles.json",
-         lambda d: d["veto"].update(subject="")),
+         lambda d: d["veto"]["groups"][0].update(subject="")),
         ("title veto rescue emptied", "titles.json",
-         lambda d: d["veto"].update(rescue="")),
+         lambda d: d["veto"]["groups"][0].update(rescue="")),
         ("title veto regex broken", "titles.json",
-         lambda d: d["veto"].update(subject="a(b" + "x" * 50)),
+         lambda d: d["veto"]["groups"][0].update(subject="a(b" + "x" * 50)),
         ("title veto section missing", "titles.json",
          lambda d: d.pop("veto")),
+        # The veto became a LIST of groups on 2026-10-31, which added three
+        # ways to break it that a single-group file could not express.
+        ("title veto groups emptied", "titles.json",
+         lambda d: d["veto"].update(groups=[])),
+        ("title veto groups not a list", "titles.json",
+         lambda d: d["veto"].update(groups={"name": "x"})),
+        ("title veto group unnamed", "titles.json",
+         lambda d: d["veto"]["groups"][0].pop("name")),
+        # The failure a length floor could never catch and a canary does: a
+        # subject broad enough to swallow the search itself. This is what an
+        # over-eager hand edit looks like - not an empty pattern, a plausible
+        # one. "engineer" would veto every title the tool exists to find.
+        ("title veto subject swallows the search", "titles.json",
+         lambda d: d["veto"]["groups"][0].update(subject=r"\bengineer\b")),
+        # And the mirror: a rescue so broad it silently disables its group.
+        ("title veto rescue rescues anything", "titles.json",
+         lambda d: d["veto"]["groups"][0].update(rescue=r"\w+")),
     ]
     keep, missed = jr.RULES_DIR, []
     try:
@@ -206,10 +224,26 @@ def _rule_guards():
         jr.RULES_DIR = keep
         if len(jr._title_rules()) < 20 or len(jr._skill_groups()) < 50:
             missed.append("the real rule files no longer load")
-        subject, rescue = jr._title_veto()
-        if not (subject.search("Wastewater Infrastructure Specialist")
-                and rescue.search("Cloud Infrastructure Specialist")):
-            missed.append("the real title veto no longer behaves")
+        groups = {name: (subj, resc) for name, subj, resc in jr._title_veto()}
+        for name, vetoed, spared in (
+                ("civil-infrastructure", "Wastewater Infrastructure Specialist",
+                 "Cloud Infrastructure Specialist"),
+                ("business-function", "Finance Systems Analyst",
+                 "Salesforce DevOps Engineer"),
+                ("support-analyst", "IT Operations Analyst II",
+                 "Cloud Operations Analyst")):
+            if name not in groups:
+                missed.append(f"veto group {name!r} has gone")
+                continue
+            subject, rescue = groups[name]
+            # One title the group must take and one it must leave: a group
+            # that stopped firing and a group that eats everything both look
+            # like "loads fine" from here otherwise.
+            if not (subject.search(vetoed) and not rescue.search(vetoed)):
+                missed.append(f"veto group {name!r} no longer vetoes "
+                              f"{vetoed!r}")
+            if subject.search(spared) and not rescue.search(spared):
+                missed.append(f"veto group {name!r} now vetoes {spared!r}")
     finally:
         jr.RULES_DIR = keep
     return not missed, (f"{len(CASES)} bad-data cases all refused"
@@ -631,17 +665,58 @@ def _health_report():
                                  else f"rc={rc} {out.strip()[-120:]}")
 
 
-@check(4, "make_fast refuses to shrink the fast lane")
+@check(4, "make_fast fills the lane and honours its floor")
 def _guard():
-    bad = "/tmp/.selftest-digest.md"
-    open(bad, "w").write("- **onlyone** · nothing\n")
+    """Three things, and the live fast.json must survive all of them.
+
+    The old version of this check wrote a one-producer digest and asserted
+    make_fast REFUSED. That stopped being the contract on 2026-11-02: the
+    digest is now one tiebreak out of five rather than the selection itself,
+    so a thin digest produces a full lane instead of an empty one. The failure
+    mode was designed out, so the check that guarded it had to change - and
+    note it would now have OVERWRITTEN fast.json with a passing run, which is
+    why every case here writes to --out in /tmp.
+    """
+    out_dir = tempfile.mkdtemp(prefix=".selftest-fast-")
+    thin = os.path.join(out_dir, "digest.md")
+    with open(thin, "w") as fh:
+        fh.write("- **onlyone** · nothing\n")
     before = open(os.path.join(HERE, "fast.json")).read()
-    rc, out = sh(sys.executable, os.path.join(HERE, "make_fast.py"), bad, timeout=60)
-    os.remove(bad)
-    unchanged = open(os.path.join(HERE, "fast.json")).read() == before
-    return rc != 0 and unchanged, ("guard held, fast.json untouched"
-                                   if rc != 0 and unchanged
-                                   else f"GUARD FAILED rc={rc}, unchanged={unchanged}")
+    probs = []
+    try:
+        # 1. a thin digest must NOT shrink the lane any more
+        dest = os.path.join(out_dir, "a.json")
+        rc, _o = sh(sys.executable, os.path.join(HERE, "make_fast.py"), thin,
+                    "--out", dest, timeout=120)
+        if rc != 0:
+            probs.append(f"a thin digest still fails the build (rc={rc})")
+        else:
+            got = sum(len(v) for k, v in json.load(open(dest)).items()
+                      if isinstance(v, list) and k != "devops_vendors")
+            if got < 90:
+                probs.append(f"thin digest produced only {got} boards")
+
+        # 2. the ABSOLUTE floor must refuse, and write nothing
+        dest2 = os.path.join(out_dir, "b.json")
+        rc2, _o2 = sh(sys.executable, os.path.join(HERE, "make_fast.py"),
+                      "--target", "5", "--out", dest2, timeout=120)
+        if rc2 == 0 or os.path.exists(dest2):
+            probs.append(f"floor did not hold (rc={rc2}, "
+                         f"wrote={os.path.exists(dest2)})")
+
+        # 3. an unreadable database must refuse rather than rank on nothing
+        dest3 = os.path.join(out_dir, "c.json")
+        rc3, _o3 = sh(sys.executable, os.path.join(HERE, "make_fast.py"),
+                      "--db", os.path.join(out_dir, "no.sqlite3"),
+                      "--out", dest3, timeout=120)
+        if rc3 == 0 or os.path.exists(dest3):
+            probs.append(f"missing db did not refuse (rc={rc3})")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+    if open(os.path.join(HERE, "fast.json")).read() != before:
+        probs.append("THE LIVE fast.json WAS MODIFIED by this check")
+    return not probs, ("lane fills, floor holds, db required"
+                       if not probs else "; ".join(probs))
 
 
 @check(4, "watchdog runs and reports a verdict")

@@ -1,5 +1,5 @@
 {
-  "_comment": "FAST LANE - the boards that actually produce matches, polled every few minutes so a new req reaches your phone quickly. A subset of targets.json, not a replacement. Regenerate with make_fast.py after a full sweep.",
+  "_comment": "FAST LANE - the 100 boards that produce relevant postings most often, ranked by days active in the trailing 30 days then by req volume. Polled every few minutes so a new req reaches your phone quickly. A subset of targets.json, not a replacement. Regenerate with make_fast.py.",
   "devops_vendors": [
     "1password",
     "airbyte",
@@ -88,25 +88,30 @@
     "zscaler"
   ],
   "greenhouse": [
-    "abcellera",
     "appnovation",
     "aylo",
     "beyondtrust",
+    "braze",
     "capco",
     "catonetworks",
+    "censys",
     "coconutsoftware",
+    "contactmonkey",
     "dropbox",
     "elastic",
+    "fivetran",
     "geotab",
     "gitlab",
+    "globalrelay",
+    "instacart",
     "later",
     "okta",
     "stackadapt",
     "stay22",
     "tailscale",
+    "tenstorrent",
     "trolley",
-    "workleap",
-    "zscaler"
+    "workleap"
   ],
   "lever": [
     "crypto",
@@ -117,26 +122,26 @@
   "ashby": [
     "1password",
     "airbyte",
-    "camunda",
+    "benevity",
     "cerebras",
+    "clickhouse",
     "coder",
     "cohere",
     "elevenlabs",
     "facilityos",
     "homebase",
     "influxdata",
-    "klue",
     "lightspeedhq",
     "maintainx",
     "people-culture-talent",
     "reflow",
     "resend",
-    "sentry",
     "supabase",
     "telus-digital"
   ],
   "recruitee": [],
   "rippling": [
+    "nesto",
     "rentsync_careers"
   ],
   "workable": [
@@ -145,13 +150,12 @@
   ],
   "smartrecruiters": [
     "AccorHotel",
-    "AmericanIronandMetal",
-    "Dexterra",
+    "AristaNetworks",
     "EgisGroup",
     "GDMSI",
     "Medfar",
-    "SGS",
-    "Scalian"
+    "Scalian",
+    "Ubisoft2"
   ],
   "breezy": [
     "auctria"
@@ -201,13 +205,6 @@
       "country_facet": "Location_Country"
     },
     {
-      "name": "Telus Health",
-      "tenant": "lifeworks",
-      "cluster": "wd3",
-      "site": "External",
-      "country_facet": "Country"
-    },
-    {
       "name": "Thomson Reuters",
       "tenant": "thomsonreuters",
       "cluster": "wd5",
@@ -215,11 +212,11 @@
       "country_facet": "Location_Country"
     },
     {
-      "name": "Aritzia",
-      "tenant": "aritzia",
+      "name": "Enbridge",
+      "tenant": "enbridge",
       "cluster": "wd3",
-      "site": "External",
-      "country_facet": "Location_Country"
+      "site": "enbridge_careers",
+      "country_facet": "locationCountry"
     },
     {
       "name": "Canadian Tire",
@@ -256,13 +253,6 @@
       "country_facet": null
     },
     {
-      "name": "Moneris",
-      "tenant": "moneris",
-      "cluster": "wd3",
-      "site": "Moneris",
-      "country_facet": null
-    },
-    {
       "name": "Workday",
       "tenant": "workday",
       "cluster": "wd5",
@@ -284,16 +274,17 @@
       "country_facet": "Country"
     },
     {
-      "name": "Recurrent Energy",
-      "tenant": "recurrentenergy",
-      "cluster": "wd12",
-      "site": "RecurrentEnergy"
-    },
-    {
       "name": "TMX Group",
       "tenant": "tmx",
       "cluster": "wd3",
       "site": "TMX_Careers"
+    },
+    {
+      "name": "PwC Canada",
+      "tenant": "pwc",
+      "cluster": "wd3",
+      "site": "Global_Experienced_Careers",
+      "max_pages": 2
     },
     {
       "name": "Autodesk",
@@ -354,13 +345,8 @@
       "base": "https://careers.aircanada.com/ca/en"
     },
     {
-      "name": "OpenText",
-      "base": "https://careers.opentext.com/us/en"
-    },
-    {
-      "name": "City of Edmonton",
-      "base": "https://recruitment.edmonton.ca",
-      "default_location": "Edmonton, AB"
+      "name": "Just Eat Takeaway / SkipTheDishes",
+      "base": "https://careers.justeattakeaway.com/global/en"
     }
   ],
   "successfactors": [
@@ -377,18 +363,9 @@
       "base": "https://jobs.canadalife.com"
     },
     {
-      "name": "City of Toronto",
-      "base": "https://jobs.toronto.ca",
-      "default_location": "Toronto, ON"
-    },
-    {
       "name": "University of Toronto",
       "base": "https://jobs.utoronto.ca",
       "default_location": "Toronto, ON"
-    },
-    {
-      "name": "Celestica",
-      "base": "https://careers.celestica.com"
     },
     {
       "name": "Imperial Oil",
@@ -448,7 +425,12 @@
       "type": "matador-job-listings"
     }
   ],
-  "amazon": [],
+  "amazon": [
+    {
+      "name": "Amazon",
+      "country": "CAN"
+    }
+  ],
   "avature": [
     {
       "name": "Electronic Arts",

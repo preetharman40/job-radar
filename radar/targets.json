@@ -128,6 +128,7 @@
     "kaseya",
     "keepersecurity",
     "kentik",
+    "kevgroup",
     "koboldmetals",
     "korea",
     "lastpass",
@@ -177,6 +178,7 @@
     "revel",
     "rise8",
     "ritual",
+    "robinhood",
     "shakepay",
     "sidlee",
     "smartbear",
@@ -287,6 +289,7 @@
     "astronomer",
     "atomic",
     "automat",
+    "baseten",
     "bastion",
     "bayesianhealth",
     "benevity",
@@ -615,7 +618,7 @@
     {
       "name": "Alberta Energy Regulator",
       "tenant": "aer",
-      "cluster": "wd3",
+      "cluster": "wd10",
       "site": "aer"
     },
     {
@@ -696,6 +699,48 @@
       "tenant": "accenture",
       "cluster": "wd103",
       "site": "AccentureCareers"
+    },
+    {
+      "name": "SOTI",
+      "tenant": "soti",
+      "cluster": "wd3",
+      "site": "Careers"
+    },
+    {
+      "name": "CI Financial",
+      "tenant": "ci",
+      "cluster": "wd3",
+      "site": "CI_FINANCIAL_EXTERNAL_CAREER-SITE"
+    },
+    {
+      "name": "SimCorp",
+      "tenant": "simcorp",
+      "cluster": "wd3",
+      "site": "SimCorp_Jobs"
+    },
+    {
+      "name": "HOOPP",
+      "tenant": "hoopp",
+      "cluster": "wd10",
+      "site": "HOOPP"
+    },
+    {
+      "name": "Motorola Solutions",
+      "tenant": "motorolasolutions",
+      "cluster": "wd5",
+      "site": "Careers"
+    },
+    {
+      "name": "Cloud Imperium Games",
+      "tenant": "cloudimperiumgames",
+      "cluster": "wd503",
+      "site": "CIG_Global_Careers"
+    },
+    {
+      "name": "State Street",
+      "tenant": "statestreet",
+      "cluster": "wd1",
+      "site": "Global"
     }
   ],
   "phenom": [
